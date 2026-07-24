@@ -1,7 +1,9 @@
 import { createClient } from '@supabase/supabase-js'
 
-const url = import.meta.env.VITE_SUPABASE_URL || ''
-const anon = import.meta.env.VITE_SUPABASE_ANON_KEY || ''
+const url = import.meta.env.VITE_SUPABASE_URL || 'https://rovetvwdtpsdghnnepoe.supabase.co'
+const anon =
+	import.meta.env.VITE_SUPABASE_ANON_KEY ||
+	'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJvdmV0dndkdHBzZGdobm5lcG9lIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5NjU5MTMsImV4cCI6MjA5NTU0MTkxM30.rUOZr81twmOlXqivO_ovcWi2P8_4MK1K_2kFbR7feDs'
 
 export const isSupabaseConfigured = Boolean(url && anon)
 
