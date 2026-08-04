@@ -9,7 +9,7 @@ export const isSupabaseConfigured = Boolean(url && anon)
 
 export const supabaseConfigError = isSupabaseConfigured
 	? null
-	: 'Supabase env vars are missing. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to .env.local in the project root, then restart npm run dev.'
+	: 'Supabase env vars are missing. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to .env in the project root, then restart npm run dev.'
 
 if (!isSupabaseConfigured) {
 	// eslint-disable-next-line no-console
