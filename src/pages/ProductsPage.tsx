@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import { type Reservation } from '../lib/types'
@@ -62,14 +62,23 @@ export default function ProductsPage() {
     if (pRes.error) {
       console.error(pRes.error)
     } else {
-      setProducts(pRes.data || [])
+      setProducts(pRes.data || []);
+      console.log('Products loaded:', pRes.data);
     }
     if (rRes.error) {
       console.error(rRes.error)
     } else {
-      setReservations(rRes.data || [])
+      setReservations(rRes.data || []);
+      console.log('Reservations loaded:', rRes.data);
     }
-  }
+
+}
+
+  // Load products and reservations on component mount
+  useEffect(() => {
+    loadProducts();
+  }, []);
+
 
   const reservationMap = useMemo(() => {
     const map = new Map<number, Reservation[]>()
@@ -152,6 +161,7 @@ export default function ProductsPage() {
             </article>
           )
         })}
+
       </div>
     </section>
   )
