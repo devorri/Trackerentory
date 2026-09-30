@@ -5,6 +5,8 @@ import { useAuth } from '../context/Auth'
 import { type Reservation } from '../lib/types'
 import { cancelExpiredReservations } from '../lib/maintenance'
 
+import { SkeletonTable } from '../components/Skeleton'
+
 export default function ReservationsPage() {
   const { user } = useAuth()
   const [rows, setRows] = useState<Reservation[]>([])
@@ -67,9 +69,10 @@ export default function ReservationsPage() {
         </div>
       </div>
 
-      {loading && <p className="muted">Loading…</p>}
-
-      <div className="table-wrap">
+      {loading ? (
+        <SkeletonTable rows={4} cols={5} />
+      ) : (
+        <div className="table-wrap">
         <table className="table">
           <thead>
             <tr>
@@ -108,6 +111,7 @@ export default function ReservationsPage() {
           </tbody>
         </table>
       </div>
+      )}
       {!loading && rows.length === 0 && <div className="empty" style={{ marginTop: '1rem' }}>No reservations yet.</div>}
     </section>
   )

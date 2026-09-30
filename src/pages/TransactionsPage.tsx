@@ -5,6 +5,7 @@ import { useAuth } from '../context/Auth'
 import { peso, type Product, type Transaction } from '../lib/types'
 import { uploadPublicImage } from '../lib/storage'
 import { BUCKET_DOCUMENTS } from '../lib/supabase'
+import { SkeletonTable } from '../components/Skeleton'
 
 type FormState = {
   product_id: string
@@ -33,9 +34,11 @@ export default function TransactionsPage() {
   const [form, setForm] = useState<FormState>(emptyForm)
   const [filter, setFilter] = useState<'All' | 'Display' | 'Pick-up'>('All')
   const [busy, setBusy] = useState(false)
+  const [loading, setLoading] = useState(false)
   const [editId, setEditId] = useState<number | null>(null)
 
   async function load() {
+    setLoading(true)
     const [tRes, pRes] = await Promise.all([
       supabase
         .from('transactions')
@@ -43,6 +46,7 @@ export default function TransactionsPage() {
         .order('transaction_date', { ascending: false }),
       supabase.from('products').select('*, cubes(cube_number, type)').order('product_name'),
     ])
+    setLoading(false)
     if (!tRes.error) setRows((tRes.data || []) as Transaction[])
     if (!pRes.error) setProducts((pRes.data || []) as Product[])
   }
@@ -195,7 +199,10 @@ export default function TransactionsPage() {
         <button className="btn" type="button" disabled={busy} onClick={saveNew}>Save transaction</button>
       </div>
 
-      <div className="table-wrap">
+      {loading ? (
+        <SkeletonTable rows={5} cols={7} />
+      ) : (
+        <div className="table-wrap">
       <table className="table">
         <thead>
           <tr>
@@ -266,6 +273,7 @@ export default function TransactionsPage() {
         </tbody>
       </table>
       </div>
+      )}
       {visible.length === 0 && <div className="empty" style={{ marginTop: '1rem' }}>No transactions yet.</div>}
     </section>
   )

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import { daysUntil, peso, type Contract, type Cube } from '../lib/types'
+import { SkeletonTable } from '../components/Skeleton'
 
 const DEFAULT_TERMS = `1. Renter may place products in the assigned Display or Pick-up cube only.
 2. Monthly rental is due as agreed; Owner may withhold renter payouts until sales records match.
@@ -13,6 +14,7 @@ const DEFAULT_TERMS = `1. Renter may place products in the assigned Display or P
 export default function ContractsPage() {
   const { user } = useAuth()
   const [contracts, setContracts] = useState<Contract[]>([])
+  const [loading, setLoading] = useState(false)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [cubes, setCubes] = useState<Cube[]>([])
   const [renters, setRenters] = useState<{ user_id: number; full_name: string }[]>([])
@@ -36,6 +38,7 @@ export default function ContractsPage() {
   const [saving, setSaving] = useState(false)
 
   async function load() {
+    setLoading(true)
     let q = supabase.from('contracts').select('*, cubes(*), users!renter_id(full_name)').order('end_date', { ascending: false })
     if (user?.role === 'Renter') q = q.eq('renter_id', user.user_id)
     const [cRes, cubeRes, renterRes] = await Promise.all([
@@ -43,6 +46,7 @@ export default function ContractsPage() {
       supabase.from('cubes').select('*'),
       supabase.from('users').select('user_id, full_name').eq('role', 'Renter'),
     ])
+    setLoading(false)
     if (!cRes.error) {
       const list = (cRes.data || []) as Contract[]
       setContracts(list)
@@ -144,7 +148,10 @@ export default function ContractsPage() {
         </div>
       </div>
 
-      <div className="split">
+      {loading ? (
+        <SkeletonTable rows={5} cols={5} />
+      ) : (
+        <div className="split">
         <div className="no-print">
           <h2>List</h2>
           <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
@@ -293,6 +300,7 @@ export default function ContractsPage() {
           )}
         </div>
       </div>
+      )}
     </section>
   )
 }

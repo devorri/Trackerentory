@@ -14,12 +14,14 @@ import {
 import { expireContracts } from '../lib/maintenance'
 import { uploadPublicImage } from '../lib/storage'
 import { BUCKET_PRODUCT_IMAGES } from '../lib/supabase'
+import { SkeletonCard, SkeletonTable } from '../components/Skeleton'
 
 export default function RenterDashboard() {
   const { user } = useAuth()
   const [cubes, setCubes] = useState<Cube[]>([])
   const [contracts, setContracts] = useState<Contract[]>([])
   const [products, setProducts] = useState<Product[]>([])
+  const [loading, setLoading] = useState(false)
   const [months, setMonths] = useState(1)
   const [busy, setBusy] = useState(false)
   const [productForm, setProductForm] = useState({
@@ -42,12 +44,14 @@ export default function RenterDashboard() {
 
   async function load() {
     if (!user) return
+    setLoading(true)
     await expireContracts()
     const [cRes, conRes, pRes] = await Promise.all([
       supabase.from('cubes').select('*').order('cube_number'),
       supabase.from('contracts').select('*, cubes(*)').eq('renter_id', user.user_id).order('end_date'),
       supabase.from('products').select('*, cubes(cube_number, type)').eq('renter_id', user.user_id),
     ])
+    setLoading(false)
     if (!cRes.error) setCubes((cRes.data || []) as Cube[])
     if (!conRes.error) setContracts((conRes.data || []) as Contract[])
     if (!pRes.error) setProducts((pRes.data || []) as Product[])
@@ -207,27 +211,38 @@ export default function RenterDashboard() {
           {[1, 2, 3, 6, 12].map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
       </div>
-      <div className="grid">
-        {available.map((c) => (
-          <div className="card" key={c.cube_id}>
-            <div className="card-body">
-              <h3>{c.cube_number}</h3>
-              <div className="meta-line">
-                <span>{c.type}</span>
-                <span className="badge ok">{c.status}</span>
+      {loading ? (
+        <div className="grid">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <SkeletonCard key={i} />
+          ))}
+        </div>
+      ) : (
+        <div className="grid">
+          {available.map((c) => (
+            <div className="card" key={c.cube_id}>
+              <div className="card-body">
+                <h3>{c.cube_number}</h3>
+                <div className="meta-line">
+                  <span>{c.type}</span>
+                  <span className="badge ok">{c.status}</span>
+                </div>
+                <div className="price">{peso(c.price_per_month)}<span className="muted" style={{ fontSize: '0.85rem', fontFamily: 'var(--font-body)' }}> / month</span></div>
+                <button className="btn" type="button" disabled={busy} onClick={() => reserveCube(c)} style={{ marginTop: '0.5rem' }}>
+                  Reserve cube
+                </button>
               </div>
-              <div className="price">{peso(c.price_per_month)}<span className="muted" style={{ fontSize: '0.85rem', fontFamily: 'var(--font-body)' }}> / month</span></div>
-              <button className="btn" type="button" disabled={busy} onClick={() => reserveCube(c)} style={{ marginTop: '0.5rem' }}>
-                Reserve cube
-              </button>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
       {available.length === 0 && <div className="empty">No available cubes right now.</div>}
 
       <h2>Your contracts</h2>
-      <div className="table-wrap">
+      {loading ? (
+        <SkeletonTable rows={3} cols={6} />
+      ) : (
+        <div className="table-wrap">
       <table className="table">
         <thead>
           <tr>
@@ -272,6 +287,7 @@ export default function RenterDashboard() {
         </tbody>
       </table>
       </div>
+      )}
 
       <h2>Your products in cubes</h2>
       <div className="panel">
@@ -337,7 +353,7 @@ export default function RenterDashboard() {
         {products.map((p) => (
           <div className="card" key={p.product_id}>
             <div className="card-media">
-              <img src={p.image_url || 'https://placehold.co/600x600/dfe6e1/3d4a42?text=No+Image'} alt={p.product_name} />
+              <img src={p.image_url || 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=800&q=80'} alt={p.product_name} />
             </div>
             <div className="card-body">
               <h3>{p.product_name}</h3>

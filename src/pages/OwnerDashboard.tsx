@@ -3,18 +3,22 @@ import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import { peso, type Contract, type Transaction } from '../lib/types'
+import { SkeletonStat, SkeletonTable } from '../components/Skeleton'
 
 export default function OwnerDashboard() {
   const { user } = useAuth()
   const [contracts, setContracts] = useState<Contract[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
+  const [loading, setLoading] = useState(false)
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7))
 
   useEffect(() => {
+    setLoading(true)
     void Promise.all([
       supabase.from('contracts').select('*, cubes(*), users!renter_id(full_name)'),
       supabase.from('transactions').select('*, products(*, cubes(cube_number, type)), users!processed_by(full_name, role)'),
     ]).then(([c, t]) => {
+      setLoading(false)
       if (!c.error) setContracts((c.data || []) as Contract[])
       if (!t.error) setTransactions((t.data || []) as Transaction[])
     })
@@ -80,24 +84,35 @@ export default function OwnerDashboard() {
         <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
       </div>
 
-      <div className="stat-grid">
-        <div className="stat">
-          <div className="label">Monthly rental</div>
-          <div className="value">{peso(rentalTotal)}</div>
-        </div>
-        <div className="stat">
-          <div className="label">Display sales</div>
-          <div className="value">{peso(byType.display)}</div>
-        </div>
-        <div className="stat">
-          <div className="label">Pick-up sales</div>
-          <div className="value">{peso(byType.pickup)}</div>
-        </div>
-        <div className="stat">
-          <div className="label">Product total</div>
-          <div className="value">{peso(byType.total)}</div>
-        </div>
-      </div>
+      {loading ? (
+        <>
+          <div className="stat-grid">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <SkeletonStat key={i} />
+            ))}
+          </div>
+          <SkeletonTable rows={4} cols={5} />
+        </>
+      ) : (
+        <>
+          <div className="stat-grid">
+            <div className="stat">
+              <div className="label">Monthly rental</div>
+              <div className="value">{peso(rentalTotal)}</div>
+            </div>
+            <div className="stat">
+              <div className="label">Display sales</div>
+              <div className="value">{peso(byType.display)}</div>
+            </div>
+            <div className="stat">
+              <div className="label">Pick-up sales</div>
+              <div className="value">{peso(byType.pickup)}</div>
+            </div>
+            <div className="stat">
+              <div className="label">Product total</div>
+              <div className="value">{peso(byType.total)}</div>
+            </div>
+          </div>
 
       <h2>Monthly rental payments</h2>
       <div className="table-wrap">
@@ -170,6 +185,8 @@ export default function OwnerDashboard() {
       </table>
       </div>
       {monthTx.length === 0 && <div className="empty">No transactions this month.</div>}
+        </>
+      )}
     </section>
   )
 }

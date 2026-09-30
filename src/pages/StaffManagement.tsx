@@ -4,12 +4,14 @@ import { supabase } from '../lib/supabase'
 import { useAuth, type AppUser } from '../context/Auth'
 import { peso } from '../lib/types'
 import PasswordInput from '../components/PasswordInput'
+import { SkeletonTable } from '../components/Skeleton'
 
 type StaffRow = AppUser & { password?: string }
 
 export default function StaffManagement() {
   const { user } = useAuth()
   const [staff, setStaff] = useState<StaffRow[]>([])
+  const [loading, setLoading] = useState(false)
   const [form, setForm] = useState({
     full_name: '',
     username: '',
@@ -18,11 +20,13 @@ export default function StaffManagement() {
   })
 
   async function refresh() {
+    setLoading(true)
     const { data } = await supabase
       .from('users')
       .select('user_id, full_name, role, status, salary, username')
       .eq('role', 'Staff')
       .order('full_name')
+    setLoading(false)
     setStaff((data || []) as StaffRow[])
   }
 
@@ -99,7 +103,10 @@ export default function StaffManagement() {
         <button className="btn" type="button" onClick={createStaff}>Create staff</button>
       </div>
 
-      <div className="table-wrap">
+      {loading ? (
+        <SkeletonTable rows={4} cols={5} />
+      ) : (
+        <div className="table-wrap">
       <table className="table">
         <thead>
           <tr>
@@ -134,6 +141,7 @@ export default function StaffManagement() {
         </tbody>
       </table>
       </div>
+      )}
       {staff.length === 0 && <div className="empty" style={{ marginTop: '1rem' }}>No staff accounts yet.</div>}
     </section>
   )

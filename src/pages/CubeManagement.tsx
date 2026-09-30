@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import { type Cube, peso } from '../lib/types'
+import { SkeletonTable } from '../components/Skeleton'
 
 const initialForm = {
   cube_number: '',
@@ -174,7 +175,7 @@ export default function CubeManagement() {
 
       <h2>Existing cubes</h2>
       {loading ? (
-        <p className="muted">Loading cubes…</p>
+        <SkeletonTable rows={4} cols={5} />
       ) : cubes.length === 0 ? (
         <div className="empty">No cubes found yet. Add one above.</div>
       ) : (
