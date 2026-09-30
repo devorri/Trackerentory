@@ -11,6 +11,7 @@ import LoginPage from './pages/LoginPage'
 import StaffManagement from './pages/StaffManagement'
 import AboutPage from './pages/AboutPage'
 import ServicesPage from './pages/ServicesPage'
+import OwnerProductsPage from './pages/OwnerProductsPage'
 import { AuthProvider, useAuth } from './context/Auth'
 import { useEffect, useState } from 'react'
 import { supabase } from './lib/supabase'
@@ -85,6 +86,11 @@ function InnerApp() {
                 Pickup Tracking
               </NavLink>
             )}
+            {(role === 'Owner' || role === 'Staff') && (
+              <NavLink to="/owner-products" className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}>
+                Products Management
+              </NavLink>
+            )}
             {role === 'Owner' && (
               <NavLink to="/cubes" className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}>
                 Cube Management
@@ -125,6 +131,7 @@ function InnerApp() {
 
           <Routes>
             <Route path="/owner" element={<OwnerDashboard />} />
+            <Route path="/owner-products" element={<OwnerProductsPage />} />
             <Route path="/cubes" element={<CubeManagement />} />
             <Route path="/contracts" element={<ContractsPage />} />
             <Route path="/pickup" element={<TransactionsPage />} />

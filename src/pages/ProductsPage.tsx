@@ -13,16 +13,6 @@ type Product = {
   image_url?: string
 }
 
-const SAMPLE_IMAGES = [
-  'https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=800&q=80',
-  'https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=800&q=80',
-  'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=800&q=80',
-  'https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=800&q=80',
-  'https://images.unsplash.com/photo-1572635196237-14b3f281503f?auto=format&fit=crop&w=800&q=80',
-  'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?auto=format&fit=crop&w=800&q=80',
-  'https://images.unsplash.com/photo-1560343090-f0409e92791a?auto=format&fit=crop&w=800&q=80',
-  'https://images.unsplash.com/photo-1583394838336-acd977736f90?auto=format&fit=crop&w=800&q=80',
-]
 
 const DEMO_PRODUCTS: Product[] = [
   {
@@ -32,7 +22,6 @@ const DEMO_PRODUCTS: Product[] = [
     price: 3499,
     stock_quantity: 4,
     variant: 'Matte Black',
-    image_url: SAMPLE_IMAGES[0],
   },
   {
     product_id: 102,
@@ -41,7 +30,6 @@ const DEMO_PRODUCTS: Product[] = [
     price: 4899,
     stock_quantity: 2,
     variant: 'Size 42 / Red',
-    image_url: SAMPLE_IMAGES[1],
   },
   {
     product_id: 103,
@@ -50,7 +38,6 @@ const DEMO_PRODUCTS: Product[] = [
     price: 6200,
     stock_quantity: 5,
     variant: 'Midnight Blue',
-    image_url: SAMPLE_IMAGES[2],
   },
   {
     product_id: 104,
@@ -59,7 +46,6 @@ const DEMO_PRODUCTS: Product[] = [
     price: 5299,
     stock_quantity: 3,
     variant: 'Tan Brown',
-    image_url: SAMPLE_IMAGES[3],
   },
   {
     product_id: 105,
@@ -68,7 +54,6 @@ const DEMO_PRODUCTS: Product[] = [
     price: 1850,
     stock_quantity: 6,
     variant: 'Gold / Black',
-    image_url: SAMPLE_IMAGES[4],
   },
   {
     product_id: 106,
@@ -77,7 +62,6 @@ const DEMO_PRODUCTS: Product[] = [
     price: 8900,
     stock_quantity: 1,
     variant: 'Silver Edition',
-    image_url: SAMPLE_IMAGES[5],
   },
 ]
 
@@ -174,19 +158,35 @@ export default function ProductsPage() {
         </div>
       ) : (
         <div className="grid products-grid">
-        {products.map((p, idx) => {
+        {products.map((p) => {
           const reservedCount = reservationMap.get(p.product_id)?.length || 0
           const availableCount = Math.max((p.stock_quantity || 0) - reservedCount, 0)
-          const nextExpiry = (reservationMap.get(p.product_id) || [])
-            .map((r) => new Date(r.expiry_time).getTime())
-            .sort((a, b) => a - b)[0]
-
-          const displayImg = p.image_url || SAMPLE_IMAGES[idx % SAMPLE_IMAGES.length]
 
           return (
             <article key={p.product_id} className="card product-card">
-              <div className="card-media">
-                <img src={displayImg} alt={p.product_name} />
+              <div
+                className="card-media"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: '#f4f5f7',
+                }}
+              >
+                {p.image_url ? (
+                  <img src={p.image_url} alt={p.product_name} />
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.4rem', color: '#888' }}>
+                    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+                      <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+                      <line x1="12" y1="22.08" x2="12" y2="12" />
+                    </svg>
+                    <span style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      No Image Uploaded
+                    </span>
+                  </div>
+                )}
               </div>
               <div className="card-body">
                 <div className="product-meta">
@@ -229,11 +229,6 @@ export default function ProductsPage() {
                   )}
                 </div>
 
-                {nextExpiry && (
-                  <p className="muted text-note">
-                    Expires {new Date(nextExpiry).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </p>
-                )}
 
                 {reservingFor === p.product_id && (
                   <div className="card-actions" style={{ flexDirection: 'column', gap: '0.5rem', background: '#f4f5f7', padding: '0.85rem', borderRadius: 14, marginTop: '0.5rem' }}>

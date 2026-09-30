@@ -333,14 +333,6 @@ export default function RenterDashboard() {
               />
             )}
           </div>
-          <div className="field">
-            <label>Or image URL (optional)</label>
-            <input
-              value={productForm.image_url}
-              onChange={(e) => setProductForm({ ...productForm, image_url: e.target.value })}
-              placeholder="https://…"
-            />
-          </div>
         </div>
         <div className="field">
           <label>Description</label>
@@ -352,8 +344,29 @@ export default function RenterDashboard() {
       <div className="grid">
         {products.map((p) => (
           <div className="card" key={p.product_id}>
-            <div className="card-media">
-              <img src={p.image_url || 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=800&q=80'} alt={p.product_name} />
+            <div
+              className="card-media"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: '#f4f5f7',
+              }}
+            >
+              {p.image_url ? (
+                <img src={p.image_url} alt={p.product_name} />
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.4rem', color: '#888' }}>
+                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+                    <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+                    <line x1="12" y1="22.08" x2="12" y2="12" />
+                  </svg>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    No Image Uploaded
+                  </span>
+                </div>
+              )}
             </div>
             <div className="card-body">
               <h3>{p.product_name}</h3>

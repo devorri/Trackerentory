@@ -11,11 +11,14 @@ export async function uploadPublicImage(
 
   const { error } = await supabase.storage.from(bucket).upload(path, file, {
     cacheControl: '3600',
-    upsert: false,
+    upsert: true,
     contentType: file.type || 'image/jpeg',
   })
 
-  if (error) return { url: null, error: error.message }
+  if (error) {
+    console.error('Supabase Storage upload error:', error)
+    return { url: null, error: error.message }
+  }
 
   const { data } = supabase.storage.from(bucket).getPublicUrl(path)
   return { url: data.publicUrl, error: null }
