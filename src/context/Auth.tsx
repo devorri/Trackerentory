@@ -8,6 +8,7 @@ export type AppUser = {
   status: string | null
   salary: number | null
   username: string
+  email: string | null
 }
 
 type AuthContextValue = {
@@ -20,9 +21,12 @@ type AuthContextValue = {
     full_name: string
     username: string
     password: string
+    email: string
     role: AppUser['role']
   }) => Promise<{ error: string | null }>
   signOut: () => void
+  resetPassword: (username: string, newPassword: string) => Promise<{ error: string | null }>
+  updateUser: (patch: Partial<AppUser>) => void
 }
 
 const SESSION_KEY = 'trackerentory_user'
@@ -52,7 +56,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const signIn = async (username: string, password: string) => {
     const { data, error } = await supabase
       .from('users')
-      .select('user_id, full_name, role, status, salary, username')
+      .select('user_id, full_name, role, status, salary, username, email')
       .eq('username', username)
       .eq('password', password)
       .maybeSingle()
@@ -69,6 +73,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     full_name: string
     username: string
     password: string
+    email: string
     role: AppUser['role']
   }) => {
     const { data, error } = await supabase
@@ -77,10 +82,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         full_name: input.full_name,
         username: input.username,
         password: input.password,
+        email: input.email,
         role: input.role,
         status: 'Active',
       }])
-      .select('user_id, full_name, role, status, salary, username')
+      .select('user_id, full_name, role, status, salary, username, email')
       .maybeSingle()
 
     if (error) return { error: error.message }
@@ -94,8 +100,23 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     persist(null)
   }
 
+  const resetPassword = async (username: string, newPassword: string) => {
+    const { error } = await supabase
+      .from('users')
+      .update({ password: newPassword })
+      .eq('username', username)
+    if (error) return { error: error.message }
+    return { error: null }
+  }
+
+  const updateUser = (patch: Partial<AppUser>) => {
+    if (!user) return
+    const updated = { ...user, ...patch }
+    persist(updated)
+  }
+
   return (
-    <AuthContext.Provider value={{ user, appUser: user, loading, signIn, signUp, signOut }}>
+    <AuthContext.Provider value={{ user, appUser: user, loading, signIn, signUp, signOut, resetPassword, updateUser }}>
       {children}
     </AuthContext.Provider>
   )

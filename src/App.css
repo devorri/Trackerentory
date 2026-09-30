@@ -852,3 +852,104 @@ textarea {
     box-shadow: none;
   }
 }
+
+/* Password toggle */
+.password-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.password-input-wrap input {
+  flex: 1;
+}
+
+.password-toggle {
+  position: absolute;
+  right: 0.55rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  padding: 0.3rem;
+  cursor: pointer;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: color 0.2s ease, background 0.2s ease;
+}
+
+.password-toggle:hover {
+  color: var(--ink);
+  background: rgba(16, 22, 18, 0.06);
+}
+
+/* OTP input */
+.otp-input {
+  letter-spacing: 0.35em;
+  font-size: 1.35rem;
+  font-weight: 700;
+  text-align: center;
+  font-family: var(--font-display);
+}
+
+/* Inline edit panel for contracts */
+.contract-edit-panel {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.contract-edit-panel .field {
+  margin-bottom: 0.85rem;
+}
+
+.contract-edit-panel textarea {
+  min-height: 200px;
+}
+
+/* Badge for pickup status */
+.badge.info {
+  background: rgba(37, 99, 235, 0.12);
+  color: #2563eb;
+}
+
+/* Auth step indicator */
+.auth-steps {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.auth-step {
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--line);
+  transition: background 0.3s ease;
+}
+
+.auth-step.active {
+  background: var(--accent);
+}
+
+.auth-step.done {
+  background: var(--ok);
+}
+
+/* Forgot password link */
+.forgot-link {
+  font-size: 0.85rem;
+  color: var(--accent);
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.forgot-link:hover {
+  color: var(--ink);
+}

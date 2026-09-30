@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth, type AppUser } from '../context/Auth'
 import { peso } from '../lib/types'
+import PasswordInput from '../components/PasswordInput'
 
 type StaffRow = AppUser & { password?: string }
 
@@ -89,10 +90,7 @@ export default function StaffManagement() {
             <label>Username</label>
             <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
           </div>
-          <div className="field">
-            <label>Password</label>
-            <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
-          </div>
+          <PasswordInput label="Password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
           <div className="field">
             <label>Salary</label>
             <input type="number" value={form.salary} onChange={(e) => setForm({ ...form, salary: e.target.value })} />

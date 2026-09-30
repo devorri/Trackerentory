@@ -7,6 +7,7 @@ export type UserRow = {
   status: string | null
   salary: number | null
   username: string
+  email: string | null
 }
 
 export type Cube = {
@@ -35,7 +36,7 @@ export type Reservation = {
   product_id: number | null
   customer_id: number | null
   expiry_time: string
-  hours_valid: number
+  hours_valid: number | null
   status: 'Pending' | 'Confirmed' | 'Cancelled'
   products?: Product | null
 }
@@ -47,6 +48,7 @@ export type Contract = {
   start_date: string
   end_date: string
   status: 'Active' | 'Expired' | 'Pending'
+  contract_text: string | null
   cubes?: Cube | null
   users?: { full_name: string } | null
 }
@@ -57,12 +59,23 @@ export type Transaction = {
   buyer_name: string | null
   authorized_pickup_name: string | null
   payment_status: 'Pending' | 'Paid'
+  pickup_status: 'Waiting' | 'Picked-up'
   receipt_image_url: string | null
   notes: string | null
   transaction_date: string
   processed_by: number | null
   products?: (Product & { cubes?: Cube | null }) | null
   users?: { full_name: string; role: Role } | null
+}
+
+export type OtpCode = {
+  id: number
+  user_id: number | null
+  email: string
+  code: string
+  purpose: 'verify' | 'forgot_password' | 'create_account'
+  expires_at: string
+  used: boolean
 }
 
 export function daysUntil(dateStr: string): number {

@@ -11,6 +11,7 @@ type FormState = {
   buyer_name: string
   authorized_pickup_name: string
   payment_status: 'Pending' | 'Paid'
+  pickup_status: 'Waiting' | 'Picked-up'
   notes: string
   receipt_image_url: string
 }
@@ -20,6 +21,7 @@ const emptyForm: FormState = {
   buyer_name: '',
   authorized_pickup_name: '',
   payment_status: 'Pending',
+  pickup_status: 'Waiting',
   notes: '',
   receipt_image_url: '',
 }
@@ -70,6 +72,7 @@ export default function TransactionsPage() {
       buyer_name: form.buyer_name,
       authorized_pickup_name: form.authorized_pickup_name || null,
       payment_status: form.payment_status,
+      pickup_status: form.pickup_status,
       notes: form.notes || null,
       receipt_image_url: form.receipt_image_url || null,
       processed_by: me.user_id,
@@ -122,7 +125,7 @@ export default function TransactionsPage() {
         <div>
           <h1>Pickup / Display</h1>
           <p className="lede">
-            Track pickups: payment, who will pick up, authorized alternate, notes, receipt proof, and who processed each record.
+            Track pickups: payment, pickup status, who will pick up, authorized alternate, notes, receipt proof, and who processed each record.
           </p>
         </div>
       </div>
@@ -170,6 +173,13 @@ export default function TransactionsPage() {
             </select>
           </div>
           <div className="field">
+            <label>Pickup status</label>
+            <select value={form.pickup_status} onChange={(e) => setForm({ ...form, pickup_status: e.target.value as 'Waiting' | 'Picked-up' })}>
+              <option value="Waiting">Waiting</option>
+              <option value="Picked-up">Picked-up</option>
+            </select>
+          </div>
+          <div className="field">
             <label>Receipt image URL</label>
             <input value={form.receipt_image_url} onChange={(e) => setForm({ ...form, receipt_image_url: e.target.value })} />
           </div>
@@ -193,6 +203,7 @@ export default function TransactionsPage() {
             <th>Pickup</th>
             <th>Authorized</th>
             <th>Payment</th>
+            <th>Pickup Status</th>
             <th>Notes / Receipt</th>
             <th>Processed by</th>
             <th className="no-print">Update</th>
@@ -210,6 +221,11 @@ export default function TransactionsPage() {
               <td>{t.authorized_pickup_name || '—'}</td>
               <td>
                 <span className={`badge ${t.payment_status === 'Paid' ? 'ok' : 'warn'}`}>{t.payment_status}</span>
+              </td>
+              <td>
+                <span className={`badge ${t.pickup_status === 'Picked-up' ? 'ok' : 'info'}`}>
+                  {t.pickup_status || 'Waiting'}
+                </span>
               </td>
               <td>
                 <div>{t.notes || '—'}</div>
@@ -236,6 +252,11 @@ export default function TransactionsPage() {
                     <button className="btn-ghost" type="button" onClick={() => setEditId(t.transaction_id)}>Edit</button>
                     {t.payment_status !== 'Paid' && (
                       <button className="btn" type="button" onClick={() => updateRow(t, { payment_status: 'Paid' })}>Mark paid</button>
+                    )}
+                    {(t.pickup_status || 'Waiting') !== 'Picked-up' && (
+                      <button className="btn-ghost" type="button" onClick={() => updateRow(t, { pickup_status: 'Picked-up' })}>
+                        Mark picked up
+                      </button>
                     )}
                   </div>
                 )}
@@ -266,6 +287,7 @@ function EditInline({
   const [buyer_name, setBuyer] = useState(t.buyer_name || '')
   const [authorized_pickup_name, setAuth] = useState(t.authorized_pickup_name || '')
   const [payment_status, setPay] = useState<'Pending' | 'Paid'>(t.payment_status)
+  const [pickup_status, setPickup] = useState<'Waiting' | 'Picked-up'>(t.pickup_status || 'Waiting')
   const [notes, setNotes] = useState(t.notes || '')
   const [receipt_image_url, setReceipt] = useState(t.receipt_image_url || '')
 
@@ -277,6 +299,10 @@ function EditInline({
         <option value="Pending">Pending</option>
         <option value="Paid">Paid</option>
       </select>
+      <select value={pickup_status} onChange={(e) => setPickup(e.target.value as 'Waiting' | 'Picked-up')}>
+        <option value="Waiting">Waiting</option>
+        <option value="Picked-up">Picked-up</option>
+      </select>
       <textarea placeholder="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
       <input placeholder="Receipt URL" value={receipt_image_url} onChange={(e) => setReceipt(e.target.value)} />
       <input type="file" accept="image/*" onChange={(e) => onFile(e.target.files?.[0] || null, setReceipt)} />
@@ -285,7 +311,7 @@ function EditInline({
           className="btn"
           type="button"
           disabled={busy}
-          onClick={() => onSave({ buyer_name, authorized_pickup_name, payment_status, notes, receipt_image_url })}
+          onClick={() => onSave({ buyer_name, authorized_pickup_name, payment_status, pickup_status, notes, receipt_image_url })}
         >
           Save
         </button>

@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
-import { type Reservation } from '../lib/types'
+import { type Reservation, peso } from '../lib/types'
 
 type Product = {
   product_id: number
@@ -107,7 +107,7 @@ export default function ProductsPage() {
           return (
             <article key={p.product_id} className="card product-card">
               <div className="card-media">
-                <img src={p.image_url || '/placeholder.png'} alt={p.product_name} />
+                <img src={p.image_url || 'https://placehold.co/600x600/dfe6e1/3d4a42?text=No+Image'} alt={p.product_name} />
               </div>
               <div className="card-body">
                 <div className="product-meta">
@@ -123,7 +123,7 @@ export default function ProductsPage() {
                   <p className="muted">{p.description || 'A premium inventory item ready for reservation.'}</p>
                 </div>
                 <div className="product-meta">
-                  <span className="product-price">₱{p.price}</span>
+                  <span className="product-price">{peso(p.price)}</span>
                   {reservedCount > 0 && <span>{reservedCount} reservation(s) pending</span>}
                 </div>
                 <div className="card-actions">
