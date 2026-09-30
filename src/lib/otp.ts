@@ -26,7 +26,7 @@ export async function sendOtpEmail(email: string, code: string, purpose: string)
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer re_e9xbJ2JC_LAgUffvZU7GcN9e9LxNGEBbT`,
+        Authorization: `Bearer ${import.meta.env.VITE_RESEND_API_KEY || ''}`,
       },
       body: JSON.stringify({
         from: 'TrackErentory <onboarding@resend.dev>',

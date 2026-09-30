@@ -9,7 +9,7 @@ declare const Deno: {
   serve(handler: (req: Request) => Promise<Response>): void
 }
 
-const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') || 're_e9xbJ2JC_LAgUffvZU7GcN9e9LxNGEBbT'
+const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
