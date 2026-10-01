@@ -1241,6 +1241,8 @@ main section {
   body {
     background: #fff !important;
     color: #000 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
 
   .top-nav,
@@ -1317,10 +1319,14 @@ main section {
   .print-table td {
     border: 1px solid #222;
     padding: 0.6rem 0.75rem;
+    background-color: #fff !important;
+    color: #000 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
 
   .print-table th {
-    background: #f0f0f0 !important;
+    background-color: #e5e7eb !important;
     font-weight: 800;
     text-transform: uppercase;
     font-size: 0.8rem;

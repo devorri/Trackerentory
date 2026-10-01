@@ -1,5 +1,11 @@
 # React + TypeScript + Vite
 
+## Supabase Updates
+
+Apply `supabase/migrations/006_cube_location.sql` through `011_atomic_product_reservations.sql` in order before using the updated cube, pickup, staff, and transaction workflows. `db/schema.sql` includes the corresponding columns for new database setups.
+
+Login now requires an OTP delivered to the account email. Configure one of the supported email delivery services (EmailJS, the `send-otp` Edge Function, or Resend), and make sure existing Owner and Staff accounts have an email address in `public.users` before they sign in.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

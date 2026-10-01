@@ -42,7 +42,6 @@ export default function LoginPage() {
   const [signinStep, setSigninStep] = useState<SigninStep>('credentials')
   const [signinOtp, setSigninOtp] = useState('')
   const [signinEmail, setSigninEmail] = useState('')
-  const [signinTestOtp, setSigninTestOtp] = useState<string | null>(null)
 
   // Sign up state
   const [signupStep, setSignupStep] = useState<SignupStep>('form')
@@ -80,7 +79,6 @@ export default function LoginPage() {
     setSigninOtp('')
     setForgotOtp('')
     setSignupTestOtp(null)
-    setSigninTestOtp(null)
     setForgotTestOtp(null)
     setSignupConfirmPw('')
     setNewPasswordConfirm('')
@@ -106,7 +104,7 @@ export default function LoginPage() {
     // Validate credentials first
     const { data, error: dbError } = await supabase
       .from('users')
-      .select('user_id, full_name, role, status, salary, username, email')
+      .select('user_id, full_name, role, status, salary, username, email, deleted_at')
       .eq('username', username)
       .eq('password', password)
       .maybeSingle()
@@ -119,6 +117,10 @@ export default function LoginPage() {
       setLoading(false)
       return setError('Invalid username or password.')
     }
+    if (data.deleted_at) {
+      setLoading(false)
+      return setError('This account has been moved to Trash.')
+    }
     if (data.status === 'Resigned') {
       setLoading(false)
       return setError('This account is resigned.')
@@ -128,14 +130,8 @@ export default function LoginPage() {
 
     // Check if user has email for 2FA
     if (!appUser.email) {
-      // No email — skip 2FA, sign in directly
-      const result = await signIn(username, password)
       setLoading(false)
-      if (result.error) return setError(result.error)
-      const raw = localStorage.getItem('trackerentory_user')
-      const u = raw ? JSON.parse(raw) as AppUser : null
-      navigateAfterAuth(u)
-      return
+        return setError('This account needs a registered email address before it can sign in. Ask the owner to update the account email.')
     }
 
     // Send OTP for 2FA
@@ -147,11 +143,8 @@ export default function LoginPage() {
 
     if (otpResult.emailSent) {
       setInfo(`A verification code has been sent to ${maskEmail(appUser.email)}.`)
-      setSigninTestOtp(null)
-    } else if (otpResult.code) {
-      setSigninTestOtp(otpResult.code)
-      setSigninOtp(otpResult.code)
-      setInfo(`Demo/Test Mode: Your verification code is ${otpResult.code} (auto-filled below).`)
+    } else {
+      return setError('The OTP email could not be sent. Sign-in is blocked until email delivery is configured.')
     }
     setSigninStep('otp')
   }
@@ -333,7 +326,24 @@ export default function LoginPage() {
   // ── RENDER ──
   return (
     <div className="auth-layout">
-      <div className="auth-card">
+      <div
+        className="auth-card"
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' || loading || !(event.target instanceof HTMLInputElement)) return
+          event.preventDefault()
+          if (mode === 'signin') {
+            if (signinStep === 'credentials') void handleSignInCredentials()
+            else void handleSignInVerifyOtp()
+          } else if (mode === 'signup') {
+            if (signupStep === 'form') void handleSignupSubmitForm()
+            else if (signupStep === 'otp') void handleSignupVerifyOtp()
+          } else if (mode === 'forgot') {
+            if (forgotStep === 'email') void handleForgotSendOtp()
+            else if (forgotStep === 'otp') void handleForgotVerifyOtp()
+            else void handleForgotResetPassword()
+          }
+        }}
+      >
         <span className="brand">Track<span>Erentory</span></span>
 
         {mode === 'signin' && signinStep === 'credentials' && (
@@ -412,19 +422,6 @@ export default function LoginPage() {
                 onChange={(e) => setSigninOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
                 placeholder="000000"
               />
-              {signinTestOtp && (
-                <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.4rem 0.75rem', background: 'rgba(99, 102, 241, 0.1)', border: '1px solid rgba(99, 102, 241, 0.25)', borderRadius: '6px', fontSize: '0.85rem' }}>
-                  <span>Test Code: <strong style={{ letterSpacing: '1px' }}>{signinTestOtp}</strong></span>
-                  <button
-                    type="button"
-                    className="btn-ghost"
-                    style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem', height: 'auto' }}
-                    onClick={() => setSigninOtp(signinTestOtp)}
-                  >
-                    Auto-Fill
-                  </button>
-                </div>
-              )}
             </div>
             <div className="row" style={{ marginTop: '0.35rem' }}>
               <button className="btn" type="button" onClick={handleSignInVerifyOtp} disabled={loading}>

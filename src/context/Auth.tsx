@@ -9,6 +9,7 @@ export type AppUser = {
   salary: number | null
   username: string
   email: string | null
+  deleted_at?: string | null
 }
 
 type AuthContextValue = {
@@ -56,13 +57,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const signIn = async (username: string, password: string) => {
     const { data, error } = await supabase
       .from('users')
-      .select('user_id, full_name, role, status, salary, username, email')
+      .select('user_id, full_name, role, status, salary, username, email, deleted_at')
       .eq('username', username)
       .eq('password', password)
       .maybeSingle()
 
     if (error) return { error: error.message }
     if (!data) return { error: 'Invalid username or password' }
+    if (data.deleted_at) return { error: 'This account has been moved to Trash.' }
     if (data.status === 'Resigned') return { error: 'This account is resigned.' }
 
     persist(data as AppUser)

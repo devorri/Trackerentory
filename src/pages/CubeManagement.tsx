@@ -11,6 +11,7 @@ type Tab = 'Display' | 'Pick-up' | 'Trash'
 
 const initialForm = {
   cube_number: '',
+  location: '',
   type: 'Display' as 'Display' | 'Pick-up',
   price_per_month: '0',
   status: 'Available' as 'Available' | 'Occupied',
@@ -73,6 +74,7 @@ export default function CubeManagement() {
 
     const { error } = await supabase.from('cubes').insert([{
       cube_number: form.cube_number.trim(),
+      location: form.location.trim() || null,
       type: form.type,
       price_per_month: Number(form.price_per_month),
       status: form.status,
@@ -93,6 +95,7 @@ export default function CubeManagement() {
     setEditId(cube.cube_id)
     setEditForm({
       cube_number: cube.cube_number,
+      location: cube.location || '',
       type: cube.type,
       price_per_month: String(cube.price_per_month),
       status: cube.status,
@@ -122,6 +125,7 @@ export default function CubeManagement() {
 
     const { error } = await supabase.from('cubes').update({
       cube_number: editForm.cube_number.trim(),
+      location: editForm.location.trim() || null,
       type: editForm.type,
       price_per_month: Number(editForm.price_per_month),
       status: editForm.status,
@@ -218,6 +222,15 @@ export default function CubeManagement() {
               <option value="Display">Display</option>
               <option value="Pick-up">Pick-up</option>
             </select>
+          </div>
+
+          <div className="field">
+            <label>Location</label>
+            <input
+              placeholder="e.g. Front display area"
+              value={form.location}
+              onChange={(e) => setForm({ ...form, location: e.target.value })}
+            />
           </div>
 
           <div className="field">
@@ -325,6 +338,7 @@ export default function CubeManagement() {
               <tr>
                 <th style={{ width: 70 }}>Image</th>
                 <th>Cube No.</th>
+                <th>Location</th>
                 <th>Type</th>
                 <th>Dimensions</th>
                 <th>Monthly Rent</th>
@@ -349,6 +363,7 @@ export default function CubeManagement() {
                     )}
                   </td>
                   <td><strong>{c.cube_number}</strong></td>
+                  <td>{c.location || '—'}</td>
                   <td>{c.type}</td>
                   <td>
                     {c.width_cm && c.height_cm ? `${c.width_cm} × ${c.height_cm} cm` : '—'}
@@ -429,6 +444,15 @@ export default function CubeManagement() {
                   <option value="Display">Display</option>
                   <option value="Pick-up">Pick-up</option>
                 </select>
+              </div>
+
+              <div className="field">
+                <label>Location</label>
+                <input
+                  placeholder="e.g. Front display area"
+                  value={editForm.location}
+                  onChange={(e) => setEditForm({ ...editForm, location: e.target.value })}
+                />
               </div>
 
               <div className="field">

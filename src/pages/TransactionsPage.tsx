@@ -11,10 +11,13 @@ type FormState = {
   renter_id: string
   cube_id: string
   product_id: string
+  product_name: string
   buyer_name: string
   authorized_pickup_name: string
   payment_status: 'Pending' | 'Paid'
+  payment_method: 'Cash' | 'Online'
   pickup_status: 'Waiting' | 'Picked-up'
+  quantity: string
   notes: string
   receipt_image_url: string
 }
@@ -23,10 +26,13 @@ const emptyForm: FormState = {
   renter_id: '',
   cube_id: '',
   product_id: '',
+  product_name: '',
   buyer_name: '',
   authorized_pickup_name: '',
   payment_status: 'Pending',
+  payment_method: 'Cash',
   pickup_status: 'Waiting',
+  quantity: '1',
   notes: '',
   receipt_image_url: '',
 }
@@ -59,7 +65,7 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
     const [tRes, pRes, cRes, rRes] = await Promise.all([
       supabase
         .from('transactions')
-        .select('*, products(*, cubes(cube_number, type)), users!processed_by(full_name, role)')
+        .select('*, products(*, cubes(cube_number, type)), cubes(cube_number, type), users!processed_by(full_name, role)')
         .order('transaction_date', { ascending: false }),
       supabase.from('products').select('*, cubes(cube_number, type)').order('product_name'),
       supabase.from('cubes').select('*').order('cube_number'),
@@ -102,41 +108,57 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
     return true
   })
 
-  // When a product is selected, auto-fill renter and cube if available
-  function handleProductChange(productId: string) {
-    if (!productId) {
-      setForm((prev) => ({ ...prev, product_id: '' }))
-      return
-    }
-    const prod = products.find((p) => p.product_id === Number(productId))
+  function handleProductNameChange(productName: string) {
+    const prod = availableFormProducts.find((candidate) =>
+      `${candidate.product_name}${candidate.variant ? ` (${candidate.variant})` : ''}`.toLowerCase() === productName.trim().toLowerCase()
+    )
     setForm((prev) => ({
       ...prev,
-      product_id: productId,
+      product_name: productName,
+      product_id: prod ? String(prod.product_id) : '',
       renter_id: prod?.renter_id ? String(prod.renter_id) : prev.renter_id,
       cube_id: prod?.cube_id ? String(prod.cube_id) : prev.cube_id,
     }))
   }
 
   async function saveNew() {
-    if (!form.product_id || !form.buyer_name) return alert('Product and pickup name are required.')
+    if (!form.product_name.trim() || !form.buyer_name.trim()) return alert('Product and pickup name are required.')
     setBusy(true)
+    const matchedProduct = products.find((product) => product.product_id === Number(form.product_id))
+    const selectedCube = cubes.find((cube) => cube.cube_id === Number(form.cube_id || matchedProduct?.cube_id))
+    if (selectedCube?.type === 'Pick-up') {
+      setBusy(false)
+      return alert('Pickup details must be submitted by the renter from their Pick-up dashboard.')
+    }
+    const quantity = Math.max(1, Number(form.quantity) || 1)
+    if (matchedProduct && quantity > matchedProduct.stock_quantity) {
+      setBusy(false)
+      return alert(`Only ${matchedProduct.stock_quantity} unit(s) are available.`)
+    }
     const { error } = await supabase.from('transactions').insert([{
-      product_id: Number(form.product_id),
+      product_id: matchedProduct?.product_id || null,
+      product_name: form.product_name.trim(),
+      cube_id: Number(form.cube_id) || matchedProduct?.cube_id || null,
+      renter_id: Number(form.renter_id) || matchedProduct?.renter_id || null,
       buyer_name: form.buyer_name.trim(),
       authorized_pickup_name: form.authorized_pickup_name.trim() || null,
       payment_status: form.payment_status,
+      payment_method: form.payment_method,
       pickup_status: form.pickup_status,
+      quantity,
+      listed_quantity: matchedProduct?.stock_quantity ?? null,
       notes: form.notes.trim() || null,
       receipt_image_url: form.receipt_image_url.trim() || null,
       processed_by: me.user_id,
+      updated_at: new Date().toISOString(),
     }])
     setBusy(false)
     if (error) return alert(error.message)
 
-    if (form.payment_status === 'Paid') {
-      const prod = products.find((p) => p.product_id === Number(form.product_id))
+    if (form.payment_status === 'Paid' && matchedProduct) {
+      const prod = matchedProduct
       if (prod && prod.stock_quantity > 0) {
-        await supabase.from('products').update({ stock_quantity: prod.stock_quantity - 1 }).eq('product_id', prod.product_id)
+        await supabase.from('products').update({ stock_quantity: Math.max(0, prod.stock_quantity - quantity) }).eq('product_id', prod.product_id)
       }
     }
     setForm(emptyForm)
@@ -150,6 +172,7 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
       .update({
         ...patch,
         processed_by: me.user_id,
+        updated_at: new Date().toISOString(),
       })
       .eq('transaction_id', t.transaction_id)
     setBusy(false)
@@ -170,7 +193,7 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
 
   const visible = rows.filter((t) => {
     if (filter === 'All') return true
-    return t.products?.cubes?.type === filter
+    return (t.products?.cubes?.type || t.cubes?.type) === filter
   })
 
   const computedTitle = pageTitle || (filter === 'Pick-up' ? 'Pickup Tracking' : filter === 'Display' ? 'Display Tracking' : 'Pickup & Display Tracking')
@@ -236,20 +259,24 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
             </select>
           </div>
 
-          {/* Product selector */}
           <div className="field">
             <label>Product Left *</label>
-            <select value={form.product_id} onChange={(e) => handleProductChange(e.target.value)}>
-              <option value="">Select product…</option>
+            <input
+              list="tracking-products"
+              value={form.product_name}
+              onChange={(e) => handleProductNameChange(e.target.value)}
+              placeholder="Type product name"
+            />
+            <datalist id="tracking-products">
               {availableFormProducts.map((p) => {
                 const rName = p.renter_id ? renterMap.get(p.renter_id) : null
                 return (
-                  <option key={p.product_id} value={p.product_id}>
-                    {p.product_name} {p.variant ? `(${p.variant})` : ''} — {peso(p.price)} {rName ? `[${rName}]` : ''}
+                  <option key={p.product_id} value={`${p.product_name}${p.variant ? ` (${p.variant})` : ''}`}>
+                    {peso(p.price)} {rName ? `[${rName}]` : ''}
                   </option>
                 )
               })}
-            </select>
+            </datalist>
           </div>
 
           <div className="field">
@@ -276,6 +303,19 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
               <option value="Pending">Pending</option>
               <option value="Paid">Paid</option>
             </select>
+          </div>
+
+          <div className="field">
+            <label>Payment Process</label>
+            <select value={form.payment_method} onChange={(e) => setForm({ ...form, payment_method: e.target.value as 'Cash' | 'Online' })}>
+              <option value="Cash">Cash</option>
+              <option value="Online">Online</option>
+            </select>
+          </div>
+
+          <div className="field">
+            <label>Quantity Purchased</label>
+            <input type="number" min="1" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
           </div>
 
           <div className="field">
@@ -329,6 +369,7 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                 <th>Renter</th>
                 <th>Buyer / Alternate</th>
                 <th>Payment</th>
+                <th>Process / Qty</th>
                 <th>Pickup Status</th>
                 <th>Proof / Notes</th>
                 <th>Processed by</th>
@@ -338,15 +379,18 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
             <tbody>
               {visible.map((t) => {
                 const prod = t.products
-                const rName = prod?.renter_id ? renterMap.get(prod.renter_id) : '—'
+                const renterId = prod?.renter_id || t.renter_id
+                const rName = renterId ? renterMap.get(renterId) : '—'
                 return (
                   <tr key={t.transaction_id}>
                     <td>
-                      <strong>{prod?.product_name || '—'}</strong>
+                      <strong>{prod?.product_name || t.product_name || '—'}</strong>
                       {prod?.variant && <div className="muted" style={{ fontSize: '0.8rem' }}>Variant: {prod.variant}</div>}
                       <div className="muted" style={{ fontSize: '0.8rem' }}>
-                        Cube: {prod?.cubes?.cube_number || '—'} ({prod?.cubes?.type || '—'}) · {peso(prod?.price)}
+                        Cube: {prod?.cubes?.cube_number || t.cubes?.cube_number || '—'} ({prod?.cubes?.type || t.cubes?.type || '—'}) · {peso(prod?.price)}
                       </div>
+                      {prod?.description && <div className="muted" style={{ fontSize: '0.78rem' }}>{prod.description}</div>}
+                      {(t.listed_quantity ?? prod?.stock_quantity) != null && <div className="muted" style={{ fontSize: '0.78rem' }}>Quantity left in cube: {t.listed_quantity ?? prod?.stock_quantity}</div>}
                       <div className="muted" style={{ fontSize: '0.75rem' }}>
                         {new Date(t.transaction_date).toLocaleString('en-PH')}
                       </div>
@@ -365,6 +409,7 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                         {t.payment_status}
                       </span>
                     </td>
+                    <td>{t.payment_method || 'Cash'} · {t.quantity || 1}</td>
                     <td>
                       <span className={`status-pill ${t.pickup_status === 'Picked-up' ? 'confirmed' : 'pending'}`}>
                         {t.pickup_status || 'Waiting'}
@@ -390,6 +435,22 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                     <td className="no-print" style={{ textAlign: 'right' }}>
                       {editId === t.transaction_id ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 140 }}>
+                          <input
+                            aria-label="Buyer name"
+                            placeholder="Buyer name"
+                            defaultValue={t.buyer_name || ''}
+                            onBlur={(e) => {
+                              if (e.target.value !== (t.buyer_name || '')) void updateRow(t, { buyer_name: e.target.value || null })
+                            }}
+                          />
+                          <input
+                            aria-label="Authorized pickup person"
+                            placeholder="Authorized pickup person"
+                            defaultValue={t.authorized_pickup_name || ''}
+                            onBlur={(e) => {
+                              if (e.target.value !== (t.authorized_pickup_name || '')) void updateRow(t, { authorized_pickup_name: e.target.value || null })
+                            }}
+                          />
                           <select
                             defaultValue={t.payment_status}
                             onChange={(e) => void updateRow(t, { payment_status: e.target.value as 'Pending' | 'Paid' })}
@@ -397,6 +458,19 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                             <option value="Pending">Payment: Pending</option>
                             <option value="Paid">Payment: Paid</option>
                           </select>
+                          <select
+                            defaultValue={t.payment_method || 'Cash'}
+                            onChange={(e) => void updateRow(t, { payment_method: e.target.value as 'Cash' | 'Online' })}
+                          >
+                            <option value="Cash">Process: Cash</option>
+                            <option value="Online">Process: Online</option>
+                          </select>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            aria-label="Attach online payment receipt"
+                            onChange={(e) => void onReceiptFile(e.target.files?.[0] || null, (url) => void updateRow(t, { receipt_image_url: url, payment_method: 'Online' }))}
+                          />
                           <select
                             defaultValue={t.pickup_status}
                             onChange={(e) => void updateRow(t, { pickup_status: e.target.value as 'Waiting' | 'Picked-up' })}

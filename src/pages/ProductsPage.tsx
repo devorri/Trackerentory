@@ -58,19 +58,20 @@ export default function ProductsPage() {
         return
       }
 
-      const expiry = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString()
-      const { error } = await supabase.from('reservations').insert([
-        { product_id, customer_id: user.user_id, expiry_time: expiry, hours_valid: hours, status: 'Pending' },
-      ])
+      const { error } = await supabase.rpc('reserve_product_for_customer', {
+        p_product_id: product_id,
+        p_customer_id: user.user_id,
+        p_hours: hours,
+      })
       setLoading(false)
       if (error) return alert('Reservation failed: ' + error.message)
       alert('Reserved successfully')
       setReservingFor(null)
       await loadProducts()
-    } catch (err: any) {
+    } catch (err) {
       setLoading(false)
       console.error(err)
-      alert(err.message)
+      alert(err instanceof Error ? err.message : 'Reservation failed.')
     }
   }
 
@@ -97,10 +98,10 @@ export default function ProductsPage() {
       alert('Cube reserved successfully! The owner will review your reservation.')
       setReservingCube(null)
       await loadProducts()
-    } catch (err: any) {
+    } catch (err) {
       setLoading(false)
       console.error(err)
-      alert(err.message)
+      alert(err instanceof Error ? err.message : 'Cube reservation failed.')
     }
   }
 
@@ -109,7 +110,7 @@ export default function ProductsPage() {
     await supabase.from('reservations').update({ status: 'Cancelled' }).eq('status', 'Pending').lt('expiry_time', new Date().toISOString())
     const [pRes, rRes, cRes] = await Promise.all([
       supabase.from('products').select('*').is('deleted_at', null),
-      supabase.from('reservations').select('*, cubes(*)').eq('status', 'Pending'),
+      supabase.from('reservations').select('*, cubes(*)').in('status', ['Pending', 'Confirmed']),
       supabase.from('cubes').select('*').is('deleted_at', null).order('cube_number'),
     ])
     setLoading(false)
@@ -258,7 +259,7 @@ export default function ProductsPage() {
 
                       <div className="product-meta" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
                         <span className="product-price">{peso(p.price)}</span>
-                        {reservedCount > 0 && <span className="muted" style={{ fontSize: '0.78rem' }}>{reservedCount} pending</span>}
+                        {reservedCount > 0 && <span className="muted" style={{ fontSize: '0.78rem' }}>{reservedCount} reserved</span>}
                       </div>
 
                       <div className="card-actions" style={{ marginTop: '0.5rem' }}>

@@ -15,6 +15,7 @@ export type UserRow = {
 export type Cube = {
   cube_id: number
   cube_number: string
+  location: string | null
   type: 'Display' | 'Pick-up'
   price_per_month: number
   status: 'Available' | 'Occupied'
@@ -48,6 +49,7 @@ export type Reservation = {
   status: 'Pending' | 'Confirmed' | 'Cancelled'
   products?: Product | null
   cubes?: Cube | null
+  customer?: Pick<UserRow, 'full_name' | 'email' | 'phone_number'> | null
 }
 
 export type Contract = {
@@ -65,15 +67,23 @@ export type Contract = {
 export type Transaction = {
   transaction_id: number
   product_id: number | null
+  product_name: string | null
+  cube_id: number | null
+  renter_id: number | null
   buyer_name: string | null
   authorized_pickup_name: string | null
   payment_status: 'Pending' | 'Paid'
+  payment_method: 'Cash' | 'Online'
+  quantity: number
+  listed_quantity: number | null
   pickup_status: 'Waiting' | 'Picked-up'
   receipt_image_url: string | null
   notes: string | null
   transaction_date: string
+  updated_at: string | null
   processed_by: number | null
   products?: (Product & { cubes?: Cube | null }) | null
+  cubes?: Pick<Cube, 'cube_number' | 'type'> | null
   users?: { full_name: string; role: Role } | null
 }
 

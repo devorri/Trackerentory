@@ -14,7 +14,7 @@ import {
 } from '../lib/types'
 import { expireContracts } from '../lib/maintenance'
 import { uploadPublicImage } from '../lib/storage'
-import { BUCKET_PRODUCT_IMAGES } from '../lib/supabase'
+import { BUCKET_DOCUMENTS, BUCKET_PRODUCT_IMAGES } from '../lib/supabase'
 
 type ViewMode = 'display' | 'pickup' | 'cubes_contracts'
 
@@ -43,20 +43,20 @@ export default function RenterDashboard() {
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
 
-  async function load() {
+  async function load(silent = false) {
     if (!user) return
-    setLoading(true)
-    await expireContracts()
+    if (!silent) setLoading(true)
+    if (!silent) await expireContracts()
     const [cRes, conRes, pRes, tRes] = await Promise.all([
       supabase.from('cubes').select('*').order('cube_number'),
       supabase.from('contracts').select('*, cubes(*)').eq('renter_id', user.user_id).order('end_date'),
       supabase.from('products').select('*, cubes(cube_number, type)').eq('renter_id', user.user_id),
       supabase
         .from('transactions')
-        .select('*, products(*, cubes(cube_number, type))')
+        .select('*, products(*, cubes(cube_number, type)), users!processed_by(full_name, role)')
         .order('transaction_date', { ascending: false }),
     ])
-    setLoading(false)
+      if (!silent) setLoading(false)
     if (!cRes.error) setCubes((cRes.data || []) as Cube[])
     if (!conRes.error) setContracts((conRes.data || []) as Contract[])
     if (!pRes.error) setProducts((pRes.data || []) as Product[])
@@ -69,7 +69,11 @@ export default function RenterDashboard() {
     }
   }
 
-  useEffect(() => { void load() }, [user])
+  useEffect(() => {
+    void load()
+    const refreshTimer = window.setInterval(() => void load(true), 15000)
+    return () => window.clearInterval(refreshTimer)
+  }, [user])
 
   const myActiveCubeIds = useMemo(
     () => new Set(contracts.filter((c) => c.status === 'Active' || c.status === 'Pending').map((c) => c.cube_id)),
@@ -90,6 +94,14 @@ export default function RenterDashboard() {
     () => products.filter((p) => p.cubes?.type === 'Pick-up'),
     [products]
   )
+
+  const hasDisplayCube = myCubes.some((cube) => cube.type === 'Display')
+  const hasPickupCube = myCubes.some((cube) => cube.type === 'Pick-up')
+  const visibleTab = activeTab === 'display' && !hasDisplayCube && hasPickupCube
+    ? 'pickup'
+    : activeTab === 'pickup' && !hasPickupCube && hasDisplayCube
+      ? 'display'
+      : activeTab
 
   const displayTransactions = useMemo(
     () => transactions.filter((t) => t.products?.cubes?.type === 'Display'),
@@ -171,7 +183,7 @@ export default function RenterDashboard() {
       imageUrl = up.url
     }
 
-    const { error } = await supabase.from('products').insert([{
+    const { data: createdProduct, error } = await supabase.from('products').insert([{
       renter_id: user!.user_id,
       cube_id: Number(productForm.cube_id),
       product_name: productForm.product_name.trim(),
@@ -180,9 +192,29 @@ export default function RenterDashboard() {
       stock_quantity: Number(productForm.stock_quantity || 1),
       variant: productForm.variant ? productForm.variant.trim() : null,
       image_url: imageUrl,
-    }])
+    }]).select('product_id').single()
     setBusy(false)
     if (error) return alert(error.message)
+
+    const selectedCube = myCubes.find((cube) => cube.cube_id === Number(productForm.cube_id))
+    if (selectedCube?.type === 'Pick-up' && createdProduct) {
+      const { error: trackingError } = await supabase.from('transactions').insert([{
+        product_id: createdProduct.product_id,
+        product_name: productForm.product_name.trim(),
+        cube_id: selectedCube.cube_id,
+        renter_id: user!.user_id,
+        buyer_name: null,
+        payment_status: 'Pending',
+        payment_method: 'Cash',
+        pickup_status: 'Waiting',
+        quantity: 1,
+        listed_quantity: Number(productForm.stock_quantity || 1),
+        notes: productForm.description.trim() || null,
+        processed_by: user!.user_id,
+        updated_at: new Date().toISOString(),
+      }])
+      if (trackingError) alert(`Product saved, but pickup tracking could not be created: ${trackingError.message}`)
+    }
     setProductForm({
       product_name: '',
       description: '',
@@ -206,6 +238,18 @@ export default function RenterDashboard() {
     const reader = new FileReader()
     reader.onload = () => setImagePreview(String(reader.result || ''))
     reader.readAsDataURL(file)
+  }
+
+  async function uploadPickupReceipt(transaction: Transaction, file: File | null) {
+    if (!file) return
+    const upload = await uploadPublicImage(BUCKET_DOCUMENTS, file, 'receipts')
+    if (!upload.url) return alert('Receipt upload failed: ' + (upload.error || 'unknown error'))
+    const { error } = await supabase
+      .from('transactions')
+      .update({ receipt_image_url: upload.url, payment_method: 'Online', processed_by: user!.user_id, updated_at: new Date().toISOString() })
+      .eq('transaction_id', transaction.transaction_id)
+    if (error) return alert(error.message)
+    void load()
   }
 
   const available = cubes.filter((c) => c.status === 'Available' && !c.deleted_at)
@@ -235,23 +279,23 @@ export default function RenterDashboard() {
 
       {/* DASHBOARD NAVIGATION TABS */}
       <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.75rem', borderBottom: '2px solid #efefef', paddingBottom: '0.5rem', flexWrap: 'wrap' }}>
-        <button
+        {hasDisplayCube && <button
           type="button"
-          className={activeTab === 'display' ? 'btn' : 'btn-ghost'}
+          className={visibleTab === 'display' ? 'btn' : 'btn-ghost'}
           onClick={() => setActiveTab('display')}
         >
           🏬 Display Products & Sales ({displayProducts.length})
-        </button>
-        <button
+        </button>}
+        {hasPickupCube && <button
           type="button"
-          className={activeTab === 'pickup' ? 'btn' : 'btn-ghost'}
+          className={visibleTab === 'pickup' ? 'btn' : 'btn-ghost'}
           onClick={() => setActiveTab('pickup')}
         >
           📦 Pick-up Items & Handovers ({pickupProducts.length})
-        </button>
+        </button>}
         <button
           type="button"
-          className={activeTab === 'cubes_contracts' ? 'btn' : 'btn-ghost'}
+          className={visibleTab === 'cubes_contracts' ? 'btn' : 'btn-ghost'}
           onClick={() => setActiveTab('cubes_contracts')}
         >
           🔑 My Cubes & Contracts ({contracts.length})
@@ -263,7 +307,7 @@ export default function RenterDashboard() {
       ) : (
         <>
       {/* ════════════ TAB 1: DISPLAY PRODUCTS & SALES ════════════ */}
-      {activeTab === 'display' && (
+      {visibleTab === 'display' && (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '1rem' }}>
             <div>
@@ -322,6 +366,8 @@ export default function RenterDashboard() {
                   <th>Date</th>
                   <th>Price</th>
                   <th>Payment Status</th>
+                  <th>Payment Process</th>
+                  <th>Quantity</th>
                   <th>Receipt Proof</th>
                   <th>Processed By</th>
                 </tr>
@@ -338,6 +384,8 @@ export default function RenterDashboard() {
                         {t.payment_status}
                       </span>
                     </td>
+                    <td>{t.payment_method || 'Cash'}</td>
+                    <td>{t.quantity || 1}</td>
                     <td>
                       {t.receipt_image_url ? (
                         <img
@@ -364,7 +412,7 @@ export default function RenterDashboard() {
       )}
 
       {/* ════════════ TAB 2: PICK-UP ITEMS & HANDOVERS ════════════ */}
-      {activeTab === 'pickup' && (
+      {visibleTab === 'pickup' && (
         <div>
           <div style={{ marginBottom: '1rem' }}>
             <h2 style={{ margin: 0 }}>My Pick-up Products</h2>
@@ -411,6 +459,7 @@ export default function RenterDashboard() {
                   <th>Product</th>
                   <th>Buyer Name</th>
                   <th>Authorized Alternate</th>
+                  <th>Quantity left</th>
                   <th>Pickup Status</th>
                   <th>Payment Status</th>
                   <th>Receipt Proof</th>
@@ -422,11 +471,12 @@ export default function RenterDashboard() {
                 {pickupTransactions.map((t) => (
                   <tr key={t.transaction_id}>
                     <td>
-                      <strong>{t.products?.product_name || '—'}</strong>
+                      <strong>{t.products?.product_name || t.product_name || '—'}</strong>
                       {t.products?.variant && <div className="muted" style={{ fontSize: '0.75rem' }}>{t.products.variant}</div>}
                     </td>
                     <td><strong>{t.buyer_name || '—'}</strong></td>
                     <td>{t.authorized_pickup_name || <span className="muted">—</span>}</td>
+                    <td>{t.listed_quantity ?? t.products?.stock_quantity ?? '—'}</td>
                     <td>
                       <span className={`status-pill ${t.pickup_status === 'Picked-up' ? 'confirmed' : 'pending'}`}>
                         {t.pickup_status || 'Waiting'}
@@ -449,11 +499,19 @@ export default function RenterDashboard() {
                       ) : (
                         <span className="muted">—</span>
                       )}
+                      <input
+                        className="no-print"
+                        type="file"
+                        accept="image/*"
+                        aria-label="Upload payment receipt"
+                        onChange={(event) => void uploadPickupReceipt(t, event.target.files?.[0] || null)}
+                        style={{ display: 'block', maxWidth: 150, marginTop: 6, fontSize: '0.75rem' }}
+                      />
                     </td>
                     <td><div style={{ fontSize: '0.8rem', color: '#555' }}>{t.notes || '—'}</div></td>
                     <td>
-                      <div style={{ fontSize: '0.8rem' }}>{new Date(t.transaction_date).toLocaleDateString('en-PH')}</div>
-                      <div className="muted" style={{ fontSize: '0.75rem' }}>{t.users?.full_name || 'Staff'}</div>
+                      <div style={{ fontSize: '0.8rem' }}>Updated {new Date(t.updated_at || t.transaction_date).toLocaleString('en-PH')}</div>
+                      <div className="muted" style={{ fontSize: '0.75rem' }}>{t.users?.full_name || 'Renter'}</div>
                     </td>
                   </tr>
                 ))}
@@ -467,7 +525,7 @@ export default function RenterDashboard() {
       )}
 
       {/* ════════════ ADD PRODUCT FORM (Visible on both display and pickup tabs) ════════════ */}
-      {activeTab !== 'cubes_contracts' && (
+      {visibleTab !== 'cubes_contracts' && (
         <div className="panel" style={{ marginBottom: '2.5rem' }}>
           <h2 style={{ marginTop: 0 }}>Add Product to Your Cubes</h2>
           <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem' }}>
@@ -524,7 +582,7 @@ export default function RenterDashboard() {
       )}
 
       {/* ════════════ TAB 3: CUBES & CONTRACTS ════════════ */}
-      {activeTab === 'cubes_contracts' && (
+      {visibleTab === 'cubes_contracts' && (
         <div>
           <h2>Available Cubes For Rent</h2>
           <div className="field" style={{ maxWidth: 220, marginBottom: '1rem' }}>

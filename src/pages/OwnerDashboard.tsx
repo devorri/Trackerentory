@@ -25,7 +25,7 @@ export default function OwnerDashboard() {
     setLoading(true)
     void Promise.all([
       supabase.from('contracts').select('*, cubes(*), users!renter_id(user_id, full_name)'),
-      supabase.from('transactions').select('*, products(*, cubes(cube_number, type)), users!processed_by(full_name, role)'),
+      supabase.from('transactions').select('*, products(*, cubes(cube_number, type)), cubes(cube_number, type), users!processed_by(full_name, role)'),
       supabase.from('users').select('user_id, full_name').eq('role', 'Renter').order('full_name'),
     ]).then(([c, t, r]) => {
       setLoading(false)
@@ -83,9 +83,10 @@ export default function OwnerDashboard() {
     let pickup = 0
     for (const t of monthTx) {
       if (t.payment_status !== 'Paid') continue
-      const amount = Number(t.products?.price || 0)
-      if (t.products?.cubes?.type === 'Display') display += amount
-      else if (t.products?.cubes?.type === 'Pick-up') pickup += amount
+      const amount = Number(t.products?.price || 0) * Number(t.quantity || 1)
+      const type = t.products?.cubes?.type || t.cubes?.type
+      if (type === 'Display') display += amount
+      else if (type === 'Pick-up') pickup += amount
     }
     return { display, pickup, total: display + pickup }
   }, [monthTx])
@@ -93,6 +94,9 @@ export default function OwnerDashboard() {
   // Helper to resolve transaction renter
   const getTxRenter = (t: Transaction) => {
     const p = t.products as (Product & { cubes?: { cube_number?: string; type?: string } | null; renter_id?: number | null; cube_id?: number | null }) | null
+    if (t.renter_id && renterMap.has(t.renter_id)) {
+      return { id: t.renter_id, name: renterMap.get(t.renter_id)! }
+    }
     if (p?.renter_id && renterMap.has(p.renter_id)) {
       return { id: p.renter_id, name: renterMap.get(p.renter_id)! }
     }
@@ -119,7 +123,7 @@ export default function OwnerDashboard() {
     const targetType = printReportType === 'display' ? 'Display' : 'Pick-up'
     let list = transactions.filter((t) => {
       const dateMatch = String(t.transaction_date || '').startsWith(printMonth)
-      const typeMatch = t.products?.cubes?.type === targetType
+      const typeMatch = (t.products?.cubes?.type || t.cubes?.type) === targetType
       return dateMatch && typeMatch
     })
 
@@ -133,7 +137,7 @@ export default function OwnerDashboard() {
 
     const total = list.reduce((acc, t) => {
       if (t.payment_status === 'Paid') {
-        return acc + Number(t.products?.price || 0)
+        return acc + Number(t.products?.price || 0) * Number(t.quantity || 1)
       }
       return acc
     }, 0)
@@ -426,7 +430,9 @@ export default function OwnerDashboard() {
                 <th>Renter</th>
                 <th>Date</th>
                 <th>Payment</th>
-                <th style={{ textAlign: 'right' }}>Price</th>
+                <th>Process</th>
+                <th>Qty</th>
+                <th style={{ textAlign: 'right' }}>Total</th>
               </tr>
             </thead>
             <tbody>
@@ -435,21 +441,23 @@ export default function OwnerDashboard() {
                 return (
                   <tr key={t.transaction_id}>
                     <td>
-                      <strong>{t.products?.product_name || '—'}</strong>
+                      <strong>{t.products?.product_name || t.product_name || '—'}</strong>
                       {t.products?.variant && <div style={{ fontSize: '0.75rem', color: '#555' }}>Variant: {t.products.variant}</div>}
                     </td>
-                    <td>{t.products?.cubes?.cube_number || '—'}</td>
+                    <td>{t.products?.cubes?.cube_number || t.cubes?.cube_number || '—'}</td>
                     <td>{r.name}</td>
                     <td>{new Date(t.transaction_date).toLocaleDateString('en-PH')}</td>
                     <td>{t.payment_status}</td>
-                    <td style={{ textAlign: 'right' }}>{peso(t.products?.price)}</td>
+                    <td>{t.payment_method || 'Cash'}</td>
+                    <td>{t.quantity || 1}</td>
+                    <td style={{ textAlign: 'right' }}>{peso(Number(t.products?.price || 0) * Number(t.quantity || 1))}</td>
                   </tr>
                 )
               })}
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={5}><strong>Overall Total ({printMonth})</strong></td>
+                <td colSpan={7}><strong>Overall Total ({printMonth})</strong></td>
                 <td style={{ textAlign: 'right' }}><strong>{peso(printFilteredData.total)}</strong></td>
               </tr>
             </tfoot>

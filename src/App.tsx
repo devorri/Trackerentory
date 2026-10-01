@@ -66,6 +66,9 @@ function InnerApp() {
 
   const role = user?.role
   const isAdmin = role === 'Owner' || role === 'Staff'
+  const confirmSignOut = () => {
+    if (window.confirm('Are you sure you want to sign out?')) signOut()
+  }
 
   // ════════════ ADMIN / OWNER / STAFF LEFT SIDEBAR LAYOUT ════════════
   if (isAdmin) {
@@ -132,6 +135,13 @@ function InnerApp() {
               🏬 Display Tracking
             </NavLink>
             <NavLink
+              to="/reservations"
+              className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
+              onClick={() => setAdminSidebarOpen(false)}
+            >
+              📋 Reservations
+            </NavLink>
+            <NavLink
               to="/owner-products"
               className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
               onClick={() => setAdminSidebarOpen(false)}
@@ -174,7 +184,7 @@ function InnerApp() {
               className="btn-ghost"
               style={{ width: '100%', justifyContent: 'center' }}
               type="button"
-              onClick={() => signOut()}
+              onClick={confirmSignOut}
             >
               Sign Out
             </button>
@@ -198,6 +208,7 @@ function InnerApp() {
             <Route path="/contracts" element={<ContractsPage />} />
             <Route path="/pickup" element={<TransactionsPage defaultFilter="Pick-up" pageTitle="Pickup Tracking" />} />
             <Route path="/display-tracking" element={<TransactionsPage defaultFilter="Display" pageTitle="Display Tracking" />} />
+            <Route path="/reservations" element={<ReservationsPage />} />
             <Route path="/staff" element={<StaffManagement />} />
             <Route path="*" element={<Navigate to={role === 'Owner' ? '/owner' : '/pickup'} replace />} />
           </Routes>
@@ -231,6 +242,7 @@ function InnerApp() {
           <NavLink to="/about" onClick={() => setMobileMenuOpen(false)}>About</NavLink>
           {role === 'Customer' && <NavLink to="/reservations" onClick={() => setMobileMenuOpen(false)}>Reservations</NavLink>}
           {role === 'Renter' && <NavLink to="/renter" onClick={() => setMobileMenuOpen(false)}>Renter</NavLink>}
+          {role === 'Renter' && <NavLink to="/reservations" onClick={() => setMobileMenuOpen(false)}>Reservations</NavLink>}
           {role === 'Renter' && <NavLink to="/contracts" onClick={() => setMobileMenuOpen(false)}>Contracts</NavLink>}
         </div>
 
@@ -241,7 +253,7 @@ function InnerApp() {
                 <strong>{user.full_name}</strong>
                 <span>{user.role}</span>
               </div>
-              <button className="btn-ghost" type="button" onClick={() => signOut()}>Sign out</button>
+              <button className="btn-ghost" type="button" onClick={confirmSignOut}>Sign out</button>
             </>
           ) : (
             <Link className="btn" to="/login">Sign in</Link>
