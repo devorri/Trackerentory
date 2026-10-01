@@ -8,6 +8,8 @@ export type UserRow = {
   salary: number | null
   username: string
   email: string | null
+  phone_number: string | null
+  social_link: string | null
 }
 
 export type Cube = {
@@ -16,6 +18,10 @@ export type Cube = {
   type: 'Display' | 'Pick-up'
   price_per_month: number
   status: 'Available' | 'Occupied'
+  image_url: string | null
+  width_cm: number | null
+  height_cm: number | null
+  deleted_at: string | null
 }
 
 export type Product = {
@@ -28,17 +34,20 @@ export type Product = {
   stock_quantity: number
   variant: string | null
   image_url: string | null
+  deleted_at: string | null
   cubes?: Pick<Cube, 'cube_number' | 'type'> | null
 }
 
 export type Reservation = {
   reservation_id: number
   product_id: number | null
+  cube_id: number | null
   customer_id: number | null
   expiry_time: string
   hours_valid: number | null
   status: 'Pending' | 'Confirmed' | 'Cancelled'
   products?: Product | null
+  cubes?: Cube | null
 }
 
 export type Contract = {
@@ -73,7 +82,7 @@ export type OtpCode = {
   user_id: number | null
   email: string
   code: string
-  purpose: 'verify' | 'forgot_password' | 'create_account'
+  purpose: 'verify' | 'forgot_password' | 'create_account' | 'login'
   expires_at: string
   used: boolean
 }

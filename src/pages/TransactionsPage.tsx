@@ -1,13 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
-import { peso, type Product, type Transaction } from '../lib/types'
+import { peso, type Product, type Transaction, type Cube, type UserRow } from '../lib/types'
 import { uploadPublicImage } from '../lib/storage'
 import { BUCKET_DOCUMENTS } from '../lib/supabase'
 import { SkeletonTable } from '../components/Skeleton'
 
 type FormState = {
+  renter_id: string
+  cube_id: string
   product_id: string
   buyer_name: string
   authorized_pickup_name: string
@@ -18,6 +20,8 @@ type FormState = {
 }
 
 const emptyForm: FormState = {
+  renter_id: '',
+  cube_id: '',
   product_id: '',
   buyer_name: '',
   authorized_pickup_name: '',
@@ -27,31 +31,54 @@ const emptyForm: FormState = {
   receipt_image_url: '',
 }
 
-export default function TransactionsPage() {
+type Props = {
+  defaultFilter?: 'All' | 'Display' | 'Pick-up'
+  pageTitle?: string
+}
+
+export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: Props) {
   const { user } = useAuth()
   const [rows, setRows] = useState<Transaction[]>([])
   const [products, setProducts] = useState<Product[]>([])
+  const [cubes, setCubes] = useState<Cube[]>([])
+  const [renters, setRenters] = useState<UserRow[]>([])
   const [form, setForm] = useState<FormState>(emptyForm)
-  const [filter, setFilter] = useState<'All' | 'Display' | 'Pick-up'>('All')
+  const [filter, setFilter] = useState<'All' | 'Display' | 'Pick-up'>(defaultFilter)
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(false)
   const [editId, setEditId] = useState<number | null>(null)
+  const [previewReceipt, setPreviewReceipt] = useState<string | null>(null)
+
+  // Update filter when prop changes
+  useEffect(() => {
+    setFilter(defaultFilter)
+  }, [defaultFilter])
 
   async function load() {
     setLoading(true)
-    const [tRes, pRes] = await Promise.all([
+    const [tRes, pRes, cRes, rRes] = await Promise.all([
       supabase
         .from('transactions')
         .select('*, products(*, cubes(cube_number, type)), users!processed_by(full_name, role)')
         .order('transaction_date', { ascending: false }),
       supabase.from('products').select('*, cubes(cube_number, type)').order('product_name'),
+      supabase.from('cubes').select('*').order('cube_number'),
+      supabase.from('users').select('*').eq('role', 'Renter').order('full_name'),
     ])
     setLoading(false)
     if (!tRes.error) setRows((tRes.data || []) as Transaction[])
     if (!pRes.error) setProducts((pRes.data || []) as Product[])
+    if (!cRes.error) setCubes((cRes.data || []) as Cube[])
+    if (!rRes.error) setRenters((rRes.data || []) as UserRow[])
   }
 
   useEffect(() => { void load() }, [])
+
+  const renterMap = useMemo(() => {
+    const map = new Map<number, string>()
+    renters.forEach((r) => map.set(r.user_id, r.full_name))
+    return map
+  }, [renters])
 
   if (!user || (user.role !== 'Owner' && user.role !== 'Staff' && user.role !== 'Renter')) {
     return (
@@ -68,21 +95,44 @@ export default function TransactionsPage() {
 
   const me = user
 
+  // Filter products for the form based on selected renter or cube
+  const availableFormProducts = products.filter((p) => {
+    if (form.renter_id && p.renter_id !== Number(form.renter_id)) return false
+    if (form.cube_id && p.cube_id !== Number(form.cube_id)) return false
+    return true
+  })
+
+  // When a product is selected, auto-fill renter and cube if available
+  function handleProductChange(productId: string) {
+    if (!productId) {
+      setForm((prev) => ({ ...prev, product_id: '' }))
+      return
+    }
+    const prod = products.find((p) => p.product_id === Number(productId))
+    setForm((prev) => ({
+      ...prev,
+      product_id: productId,
+      renter_id: prod?.renter_id ? String(prod.renter_id) : prev.renter_id,
+      cube_id: prod?.cube_id ? String(prod.cube_id) : prev.cube_id,
+    }))
+  }
+
   async function saveNew() {
     if (!form.product_id || !form.buyer_name) return alert('Product and pickup name are required.')
     setBusy(true)
     const { error } = await supabase.from('transactions').insert([{
       product_id: Number(form.product_id),
-      buyer_name: form.buyer_name,
-      authorized_pickup_name: form.authorized_pickup_name || null,
+      buyer_name: form.buyer_name.trim(),
+      authorized_pickup_name: form.authorized_pickup_name.trim() || null,
       payment_status: form.payment_status,
       pickup_status: form.pickup_status,
-      notes: form.notes || null,
-      receipt_image_url: form.receipt_image_url || null,
+      notes: form.notes.trim() || null,
+      receipt_image_url: form.receipt_image_url.trim() || null,
       processed_by: me.user_id,
     }])
     setBusy(false)
     if (error) return alert(error.message)
+
     if (form.payment_status === 'Paid') {
       const prod = products.find((p) => p.product_id === Number(form.product_id))
       if (prod && prod.stock_quantity > 0) {
@@ -110,12 +160,12 @@ export default function TransactionsPage() {
 
   async function onReceiptFile(file: File | null, onUrl: (url: string) => void) {
     if (!file) return
-    const up = await uploadPublicImage(BUCKET_DOCUMENTS, file)
-    if (up.url) {
-      onUrl(up.url)
-      return
+    const res = await uploadPublicImage(BUCKET_DOCUMENTS, file, 'receipts')
+    if (res.url) {
+      onUrl(res.url)
+    } else {
+      alert('Receipt upload failed: ' + (res.error || 'unknown') + '. You can paste a URL instead.')
     }
-    alert('Receipt upload failed: ' + (up.error || 'unknown') + '. You can paste a URL instead.')
   }
 
   const visible = rows.filter((t) => {
@@ -123,18 +173,20 @@ export default function TransactionsPage() {
     return t.products?.cubes?.type === filter
   })
 
+  const computedTitle = pageTitle || (filter === 'Pick-up' ? 'Pickup Tracking' : filter === 'Display' ? 'Display Tracking' : 'Pickup & Display Tracking')
+
   return (
     <section>
       <div className="page-header">
         <div>
-          <h1>Pickup / Display</h1>
+          <h1>{computedTitle}</h1>
           <p className="lede">
-            Track pickups: payment, pickup status, who will pick up, authorized alternate, notes, receipt proof, and who processed each record.
+            Track product handovers: product being left, renter, assigned cube, buyer name, authorized alternate, payments, and pickup verification.
           </p>
         </div>
       </div>
 
-      <div className="row no-print" style={{ marginBottom: 12 }}>
+      <div className="row no-print" style={{ marginBottom: 16 }}>
         {(['All', 'Pick-up', 'Display'] as const).map((f) => (
           <button
             key={f}
@@ -142,189 +194,245 @@ export default function TransactionsPage() {
             className={filter === f ? 'btn' : 'btn-ghost'}
             onClick={() => setFilter(f)}
           >
-            {f}
+            {f === 'All' ? 'All Transactions' : f === 'Pick-up' ? 'Pick-up Tracking' : 'Display Tracking'}
           </button>
         ))}
       </div>
 
-      <div className="panel no-print">
-        <h2 style={{ marginTop: 0 }}>New pickup record</h2>
-        <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))' }}>
+      {/* NEW TRANSACTION FORM */}
+      <div className="panel no-print" style={{ marginBottom: '2rem' }}>
+        <h2 style={{ marginTop: 0 }}>Record New Transaction / Hand-over</h2>
+        <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+          
+          {/* Renter selector */}
           <div className="field">
-            <label>Product</label>
-            <select value={form.product_id} onChange={(e) => setForm({ ...form, product_id: e.target.value })}>
-              <option value="">Select…</option>
-              {products.map((p) => (
-                <option key={p.product_id} value={p.product_id}>
-                  {p.product_name} ({p.cubes?.type || 'no cube'}) — {peso(p.price)}
+            <label>Renter Who Left It</label>
+            <select
+              value={form.renter_id}
+              onChange={(e) => setForm({ ...form, renter_id: e.target.value })}
+            >
+              <option value="">Any / Filter by Renter…</option>
+              {renters.map((r) => (
+                <option key={r.user_id} value={r.user_id}>
+                  {r.full_name}
                 </option>
               ))}
             </select>
           </div>
+
+          {/* Cube number selector */}
           <div className="field">
-            <label>Pickup name</label>
-            <input value={form.buyer_name} onChange={(e) => setForm({ ...form, buyer_name: e.target.value })} />
+            <label>Cube Number</label>
+            <select
+              value={form.cube_id}
+              onChange={(e) => setForm({ ...form, cube_id: e.target.value })}
+            >
+              <option value="">Any / Filter by Cube…</option>
+              {cubes.map((c) => (
+                <option key={c.cube_id} value={c.cube_id}>
+                  {c.cube_number} ({c.type})
+                </option>
+              ))}
+            </select>
           </div>
+
+          {/* Product selector */}
           <div className="field">
-            <label>Authorized alternate</label>
-            <input value={form.authorized_pickup_name} onChange={(e) => setForm({ ...form, authorized_pickup_name: e.target.value })} />
+            <label>Product Left *</label>
+            <select value={form.product_id} onChange={(e) => handleProductChange(e.target.value)}>
+              <option value="">Select product…</option>
+              {availableFormProducts.map((p) => {
+                const rName = p.renter_id ? renterMap.get(p.renter_id) : null
+                return (
+                  <option key={p.product_id} value={p.product_id}>
+                    {p.product_name} {p.variant ? `(${p.variant})` : ''} — {peso(p.price)} {rName ? `[${rName}]` : ''}
+                  </option>
+                )
+              })}
+            </select>
           </div>
+
           <div className="field">
-            <label>Payment</label>
+            <label>Buyer Name *</label>
+            <input
+              placeholder="e.g. Maria Santos"
+              value={form.buyer_name}
+              onChange={(e) => setForm({ ...form, buyer_name: e.target.value })}
+            />
+          </div>
+
+          <div className="field">
+            <label>Authorized Alternate</label>
+            <input
+              placeholder="Person authorized to claim"
+              value={form.authorized_pickup_name}
+              onChange={(e) => setForm({ ...form, authorized_pickup_name: e.target.value })}
+            />
+          </div>
+
+          <div className="field">
+            <label>Payment Status</label>
             <select value={form.payment_status} onChange={(e) => setForm({ ...form, payment_status: e.target.value as 'Pending' | 'Paid' })}>
               <option value="Pending">Pending</option>
               <option value="Paid">Paid</option>
             </select>
           </div>
+
           <div className="field">
-            <label>Pickup status</label>
+            <label>Pickup Status</label>
             <select value={form.pickup_status} onChange={(e) => setForm({ ...form, pickup_status: e.target.value as 'Waiting' | 'Picked-up' })}>
               <option value="Waiting">Waiting</option>
               <option value="Picked-up">Picked-up</option>
             </select>
           </div>
+
           <div className="field">
-            <label>Receipt image URL</label>
-            <input value={form.receipt_image_url} onChange={(e) => setForm({ ...form, receipt_image_url: e.target.value })} />
-          </div>
-          <div className="field">
-            <label>Or upload receipt</label>
-            <input type="file" accept="image/*" onChange={(e) => void onReceiptFile(e.target.files?.[0] || null, (url) => setForm({ ...form, receipt_image_url: url }))} />
+            <label>Receipt Proof (Online Payment)</label>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => void onReceiptFile(e.target.files?.[0] || null, (url) => setForm({ ...form, receipt_image_url: url }))}
+            />
           </div>
         </div>
-        <div className="field">
-          <label>Notes (pickup / display)</label>
-          <textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+
+        {form.receipt_image_url && (
+          <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <img src={form.receipt_image_url} alt="Receipt Preview" style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 6, border: '1px solid #ddd' }} />
+            <span style={{ fontSize: '0.8rem', color: '#666' }}>Receipt attached</span>
+          </div>
+        )}
+
+        <div className="field" style={{ marginTop: '1rem' }}>
+          <label>Notes (e.g. special handling, time left, condition)</label>
+          <textarea
+            rows={2}
+            value={form.notes}
+            onChange={(e) => setForm({ ...form, notes: e.target.value })}
+          />
         </div>
-        <button className="btn" type="button" disabled={busy} onClick={saveNew}>Save transaction</button>
+
+        <button className="btn" type="button" disabled={busy} onClick={saveNew} style={{ marginTop: '0.5rem' }}>
+          {busy ? 'Saving…' : 'Save Record'}
+        </button>
       </div>
 
+      {/* TRANSACTIONS TABLE */}
       {loading ? (
-        <SkeletonTable rows={5} cols={7} />
+        <SkeletonTable rows={5} cols={8} />
       ) : (
         <div className="table-wrap">
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Product / Cube</th>
-            <th>Pickup</th>
-            <th>Authorized</th>
-            <th>Payment</th>
-            <th>Pickup Status</th>
-            <th>Notes / Receipt</th>
-            <th>Processed by</th>
-            <th className="no-print">Update</th>
-          </tr>
-        </thead>
-        <tbody>
-          {visible.map((t) => (
-            <tr key={t.transaction_id}>
-              <td>
-                <strong>{t.products?.product_name}</strong>
-                <div className="muted">{t.products?.cubes?.cube_number} · {t.products?.cubes?.type || '—'}</div>
-                <div className="muted">{new Date(t.transaction_date).toLocaleString()}</div>
-              </td>
-              <td>{t.buyer_name || '—'}</td>
-              <td>{t.authorized_pickup_name || '—'}</td>
-              <td>
-                <span className={`badge ${t.payment_status === 'Paid' ? 'ok' : 'warn'}`}>{t.payment_status}</span>
-              </td>
-              <td>
-                <span className={`badge ${t.pickup_status === 'Picked-up' ? 'ok' : 'info'}`}>
-                  {t.pickup_status || 'Waiting'}
-                </span>
-              </td>
-              <td>
-                <div>{t.notes || '—'}</div>
-                {t.receipt_image_url && (
-                  <a href={t.receipt_image_url} target="_blank" rel="noreferrer">
-                    <img className="thumb" style={{ maxWidth: 120, marginTop: 6 }} src={t.receipt_image_url} alt="receipt" />
-                  </a>
-                )}
-              </td>
-              <td>
-                {t.users ? `${t.users.full_name} (${t.users.role})` : '—'}
-              </td>
-              <td className="no-print">
-                {editId === t.transaction_id ? (
-                  <EditInline
-                    t={t}
-                    busy={busy}
-                    onCancel={() => setEditId(null)}
-                    onSave={(patch) => updateRow(t, patch)}
-                    onFile={(file, cb) => void onReceiptFile(file, cb)}
-                  />
-                ) : (
-                  <div className="row">
-                    <button className="btn-ghost" type="button" onClick={() => setEditId(t.transaction_id)}>Edit</button>
-                    {t.payment_status !== 'Paid' && (
-                      <button className="btn" type="button" onClick={() => updateRow(t, { payment_status: 'Paid' })}>Mark paid</button>
-                    )}
-                    {(t.pickup_status || 'Waiting') !== 'Picked-up' && (
-                      <button className="btn-ghost" type="button" onClick={() => updateRow(t, { pickup_status: 'Picked-up' })}>
-                        Mark picked up
-                      </button>
-                    )}
-                  </div>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      </div>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Product & Details</th>
+                <th>Renter</th>
+                <th>Buyer / Alternate</th>
+                <th>Payment</th>
+                <th>Pickup Status</th>
+                <th>Proof / Notes</th>
+                <th>Processed by</th>
+                <th className="no-print" style={{ textAlign: 'right' }}>Update</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((t) => {
+                const prod = t.products
+                const rName = prod?.renter_id ? renterMap.get(prod.renter_id) : '—'
+                return (
+                  <tr key={t.transaction_id}>
+                    <td>
+                      <strong>{prod?.product_name || '—'}</strong>
+                      {prod?.variant && <div className="muted" style={{ fontSize: '0.8rem' }}>Variant: {prod.variant}</div>}
+                      <div className="muted" style={{ fontSize: '0.8rem' }}>
+                        Cube: {prod?.cubes?.cube_number || '—'} ({prod?.cubes?.type || '—'}) · {peso(prod?.price)}
+                      </div>
+                      <div className="muted" style={{ fontSize: '0.75rem' }}>
+                        {new Date(t.transaction_date).toLocaleString('en-PH')}
+                      </div>
+                    </td>
+                    <td><strong>{rName}</strong></td>
+                    <td>
+                      <div><strong>Buyer:</strong> {t.buyer_name || '—'}</div>
+                      {t.authorized_pickup_name && (
+                        <div className="muted" style={{ fontSize: '0.8rem' }}>
+                          Alt: {t.authorized_pickup_name}
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      <span className={`status-pill ${t.payment_status === 'Paid' ? 'confirmed' : 'pending'}`}>
+                        {t.payment_status}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={`status-pill ${t.pickup_status === 'Picked-up' ? 'confirmed' : 'pending'}`}>
+                        {t.pickup_status || 'Waiting'}
+                      </span>
+                    </td>
+                    <td>
+                      {t.receipt_image_url && (
+                        <div style={{ marginBottom: 4 }}>
+                          <img
+                            src={t.receipt_image_url}
+                            alt="Receipt"
+                            style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid #ddd' }}
+                            onClick={() => setPreviewReceipt(t.receipt_image_url)}
+                            title="Click to view receipt"
+                          />
+                        </div>
+                      )}
+                      <div style={{ fontSize: '0.82rem', color: '#444' }}>{t.notes || '—'}</div>
+                    </td>
+                    <td>
+                      {t.users ? `${t.users.full_name} (${t.users.role})` : '—'}
+                    </td>
+                    <td className="no-print" style={{ textAlign: 'right' }}>
+                      {editId === t.transaction_id ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 140 }}>
+                          <select
+                            defaultValue={t.payment_status}
+                            onChange={(e) => void updateRow(t, { payment_status: e.target.value as 'Pending' | 'Paid' })}
+                          >
+                            <option value="Pending">Payment: Pending</option>
+                            <option value="Paid">Payment: Paid</option>
+                          </select>
+                          <select
+                            defaultValue={t.pickup_status}
+                            onChange={(e) => void updateRow(t, { pickup_status: e.target.value as 'Waiting' | 'Picked-up' })}
+                          >
+                            <option value="Waiting">Pickup: Waiting</option>
+                            <option value="Picked-up">Pickup: Picked-up</option>
+                          </select>
+                          <button className="btn-ghost" type="button" onClick={() => setEditId(null)}>Done</button>
+                        </div>
+                      ) : (
+                        <button className="btn-ghost" type="button" onClick={() => setEditId(t.transaction_id)}>
+                          Edit Status
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          {visible.length === 0 && <div className="empty" style={{ padding: '2rem' }}>No records found.</div>}
+        </div>
       )}
-      {visible.length === 0 && <div className="empty" style={{ marginTop: '1rem' }}>No transactions yet.</div>}
+
+      {/* RECEIPT ZOOM MODAL */}
+      {previewReceipt && (
+        <div className="modal-overlay" onClick={() => setPreviewReceipt(null)}>
+          <div className="modal-card" style={{ maxWidth: 600, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Payment Receipt Proof</h3>
+              <button className="modal-close" onClick={() => setPreviewReceipt(null)}>✕</button>
+            </div>
+            <img src={previewReceipt} alt="Receipt proof" style={{ maxWidth: '100%', maxHeight: '75vh', objectFit: 'contain', marginTop: 12 }} />
+          </div>
+        </div>
+      )}
     </section>
-  )
-}
-
-function EditInline({
-  t,
-  busy,
-  onCancel,
-  onSave,
-  onFile,
-}: {
-  t: Transaction
-  busy: boolean
-  onCancel: () => void
-  onSave: (patch: Partial<Transaction>) => void
-  onFile: (file: File | null, cb: (url: string) => void) => void
-}) {
-  const [buyer_name, setBuyer] = useState(t.buyer_name || '')
-  const [authorized_pickup_name, setAuth] = useState(t.authorized_pickup_name || '')
-  const [payment_status, setPay] = useState<'Pending' | 'Paid'>(t.payment_status)
-  const [pickup_status, setPickup] = useState<'Waiting' | 'Picked-up'>(t.pickup_status || 'Waiting')
-  const [notes, setNotes] = useState(t.notes || '')
-  const [receipt_image_url, setReceipt] = useState(t.receipt_image_url || '')
-
-  return (
-    <div className="stack">
-      <input placeholder="Pickup name" value={buyer_name} onChange={(e) => setBuyer(e.target.value)} />
-      <input placeholder="Authorized alternate" value={authorized_pickup_name} onChange={(e) => setAuth(e.target.value)} />
-      <select value={payment_status} onChange={(e) => setPay(e.target.value as 'Pending' | 'Paid')}>
-        <option value="Pending">Pending</option>
-        <option value="Paid">Paid</option>
-      </select>
-      <select value={pickup_status} onChange={(e) => setPickup(e.target.value as 'Waiting' | 'Picked-up')}>
-        <option value="Waiting">Waiting</option>
-        <option value="Picked-up">Picked-up</option>
-      </select>
-      <textarea placeholder="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
-      <input placeholder="Receipt URL" value={receipt_image_url} onChange={(e) => setReceipt(e.target.value)} />
-      <input type="file" accept="image/*" onChange={(e) => onFile(e.target.files?.[0] || null, setReceipt)} />
-      <div className="row">
-        <button
-          className="btn"
-          type="button"
-          disabled={busy}
-          onClick={() => onSave({ buyer_name, authorized_pickup_name, payment_status, pickup_status, notes, receipt_image_url })}
-        >
-          Save
-        </button>
-        <button className="btn-ghost" type="button" onClick={onCancel}>Cancel</button>
-      </div>
-    </div>
   )
 }

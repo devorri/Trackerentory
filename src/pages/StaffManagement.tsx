@@ -6,7 +6,11 @@ import { peso } from '../lib/types'
 import PasswordInput from '../components/PasswordInput'
 import { SkeletonTable } from '../components/Skeleton'
 
-type StaffRow = AppUser & { password?: string }
+type StaffRow = AppUser & {
+  password?: string
+  phone_number?: string | null
+  social_link?: string | null
+}
 
 export default function StaffManagement() {
   const { user } = useAuth()
@@ -17,13 +21,15 @@ export default function StaffManagement() {
     username: '',
     password: '',
     salary: '0',
+    phone_number: '',
+    social_link: '',
   })
 
   async function refresh() {
     setLoading(true)
     const { data } = await supabase
       .from('users')
-      .select('user_id, full_name, role, status, salary, username')
+      .select('user_id, full_name, role, status, salary, username, phone_number, social_link')
       .eq('role', 'Staff')
       .order('full_name')
     setLoading(false)
@@ -60,17 +66,19 @@ export default function StaffManagement() {
   }
 
   async function createStaff() {
-    if (!form.full_name || !form.username || !form.password) return alert('All fields required.')
+    if (!form.full_name || !form.username || !form.password) return alert('Full name, username, and password required.')
     const { error } = await supabase.from('users').insert([{
-      full_name: form.full_name,
-      username: form.username,
+      full_name: form.full_name.trim(),
+      username: form.username.trim(),
       password: form.password,
       role: 'Staff',
       status: 'Active',
       salary: Number(form.salary || 0),
+      phone_number: form.phone_number.trim() || null,
+      social_link: form.social_link.trim() || null,
     }])
     if (error) return alert(error.message)
-    setForm({ full_name: '', username: '', password: '', salary: '0' })
+    setForm({ full_name: '', username: '', password: '', salary: '0', phone_number: '', social_link: '' })
     void refresh()
   }
 
@@ -79,13 +87,13 @@ export default function StaffManagement() {
       <div className="page-header">
         <div>
           <h1>Staff accounts</h1>
-          <p className="lede">Track Active, On Leave, and Resigned staff — plus salary and account details.</p>
+          <p className="lede">Track Active, On Leave, and Resigned staff — plus salary, phone numbers, and social contact details.</p>
         </div>
       </div>
 
       <div className="panel">
         <h2 style={{ marginTop: 0 }}>Create staff account</h2>
-        <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}>
+        <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1rem' }}>
           <div className="field">
             <label>Full name</label>
             <input value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
@@ -96,53 +104,87 @@ export default function StaffManagement() {
           </div>
           <PasswordInput label="Password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
           <div className="field">
-            <label>Salary</label>
+            <label>Salary (₱)</label>
             <input type="number" value={form.salary} onChange={(e) => setForm({ ...form, salary: e.target.value })} />
           </div>
+          <div className="field">
+            <label>Phone Number</label>
+            <input
+              placeholder="e.g. 0917-123-4567"
+              value={form.phone_number}
+              onChange={(e) => setForm({ ...form, phone_number: e.target.value })}
+            />
+          </div>
+          <div className="field">
+            <label>Social / Messenger</label>
+            <input
+              placeholder="e.g. fb.com/username"
+              value={form.social_link}
+              onChange={(e) => setForm({ ...form, social_link: e.target.value })}
+            />
+          </div>
         </div>
-        <button className="btn" type="button" onClick={createStaff}>Create staff</button>
+        <button className="btn" type="button" style={{ marginTop: 16 }} onClick={createStaff}>Create staff</button>
       </div>
 
+      <h2>Current staff</h2>
       {loading ? (
-        <SkeletonTable rows={4} cols={5} />
+        <SkeletonTable rows={3} cols={7} />
       ) : (
         <div className="table-wrap">
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Username</th>
-            <th>Status</th>
-            <th>Salary</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {staff.map((u) => (
-            <tr key={u.user_id}>
-              <td>{u.full_name}</td>
-              <td>{u.username}</td>
-              <td>
-                <span className={`badge ${u.status === 'Active' ? 'ok' : u.status === 'On Leave' ? 'warn' : 'bad'}`}>
-                  {u.status}
-                </span>
-              </td>
-              <td>{peso(u.salary)}</td>
-              <td>
-                <div className="row">
-                  <button className="btn-ghost" type="button" onClick={() => updateStatus(u, 'Active')}>Active</button>
-                  <button className="btn-ghost" type="button" onClick={() => updateStatus(u, 'On Leave')}>On Leave</button>
-                  <button className="btn-ghost" type="button" onClick={() => updateStatus(u, 'Resigned')}>Resigned</button>
-                  <button className="btn" type="button" onClick={() => updateSalary(u)}>Salary</button>
-                </div>
-              </td>
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Username</th>
+              <th>Phone</th>
+              <th>Social Link</th>
+              <th>Status</th>
+              <th>Salary</th>
+              <th>Action</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-      </div>
+          </thead>
+          <tbody>
+            {staff.map((s) => (
+              <tr key={s.user_id}>
+                <td><strong>{s.full_name}</strong></td>
+                <td>{s.username}</td>
+                <td>{s.phone_number || <span className="muted">—</span>}</td>
+                <td>
+                  {s.social_link ? (
+                    <a
+                      href={s.social_link.startsWith('http') ? s.social_link : `https://${s.social_link}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: 'var(--accent)', textDecoration: 'underline' }}
+                    >
+                      {s.social_link}
+                    </a>
+                  ) : (
+                    <span className="muted">—</span>
+                  )}
+                </td>
+                <td>
+                  <select
+                    value={s.status || 'Active'}
+                    onChange={(e) => updateStatus(s, e.target.value)}
+                  >
+                    <option value="Active">Active</option>
+                    <option value="On Leave">On Leave</option>
+                    <option value="Resigned">Resigned</option>
+                  </select>
+                </td>
+                <td>{peso(s.salary)}</td>
+                <td>
+                  <button className="btn-ghost" type="button" onClick={() => updateSalary(s)}>Edit salary</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        </div>
       )}
-      {staff.length === 0 && <div className="empty" style={{ marginTop: '1rem' }}>No staff accounts yet.</div>}
+      {staff.length === 0 && !loading && <div className="empty">No staff accounts.</div>}
     </section>
   )
 }

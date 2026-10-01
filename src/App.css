@@ -1060,18 +1060,127 @@ textarea {
   background: #f4f5f7;
 }
 
-@media (max-width: 900px) {
-  .admin-shell {
+/* ── Mobile Navigation & Header Styling ── */
+.hamburger-btn {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  line-height: 1;
+  padding: 0.4rem;
+  cursor: pointer;
+  color: #000;
+  display: none;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+}
+
+.hamburger-btn:hover {
+  background: #f0f0f0;
+}
+
+.admin-mobile-header {
+  display: none;
+}
+
+@media (max-width: 840px) {
+  .hamburger-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .top-nav {
+    padding: 0.85rem 1.25rem;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .nav-links {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: #ffffff;
     flex-direction: column;
+    align-items: stretch;
+    padding: 1.25rem 1.5rem;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.12);
+    border-bottom: 2px solid #000000;
+    gap: 1rem;
+    z-index: 99;
   }
+
+  .nav-links.mobile-open {
+    display: flex;
+    animation: rise 0.2s ease both;
+  }
+
+  .nav-links a {
+    padding: 0.6rem 0;
+    font-size: 1rem;
+    border-bottom: 1px solid #f0f0f0;
+  }
+
+  /* Admin off-canvas drawer */
+  .admin-mobile-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1.25rem;
+    background: #ffffff;
+    border-bottom: 1px solid #eee;
+    position: sticky;
+    top: 0;
+    z-index: 80;
+  }
+
+  .admin-shell {
+    display: block;
+  }
+
   .admin-sidebar {
-    position: relative;
-    width: 100%;
-    min-height: auto;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 280px;
+    z-index: 120;
+    transform: translateX(-100%);
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 6px 0 24px rgba(0, 0, 0, 0.2);
+    background: #ffffff;
+    overflow-y: auto;
   }
+
+  .admin-sidebar.open {
+    transform: translateX(0);
+  }
+
+  .admin-sidebar-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 110;
+  }
+
   .admin-main {
-    margin-left: 0;
-    width: 100%;
+    margin-left: 0 !important;
+    padding: 1.25rem 1rem !important;
+    width: 100% !important;
+  }
+
+  .split {
+    grid-template-columns: 1fr !important;
+  }
+
+  .footer-grid {
+    grid-template-columns: 1fr !important;
+    gap: 2rem !important;
   }
 }
 
@@ -1123,31 +1232,119 @@ main section {
   background: #ffffff;
 }
 
-/* Print styles */
+/* ── Dedicated Print Styles ── */
+.print-report-container {
+  display: none;
+}
+
 @media print {
   body {
-    background: #fff;
+    background: #fff !important;
+    color: #000 !important;
   }
 
   .top-nav,
+  .admin-sidebar,
+  .admin-mobile-header,
+  .admin-sidebar-overlay,
   .no-print,
   .hero-strip,
   .promo-banner,
-  .site-footer {
+  .site-footer,
+  .alert {
     display: none !important;
   }
 
-  main {
-    width: 100%;
-    padding: 0;
-    animation: none;
+  .admin-shell {
+    display: block !important;
   }
 
-  .panel,
-  .table-wrap,
-  .card,
-  .stat {
-    box-shadow: none;
-    border: 1px solid #ccc;
+  .admin-main {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+  }
+
+  main {
+    width: 100% !important;
+    padding: 0 !important;
+    animation: none !important;
+  }
+
+  /* Printable Report Container */
+  .print-report-container {
+    display: block !important;
+    padding: 2rem 1.5rem;
+    font-family: var(--font-body), sans-serif;
+    color: #000;
+  }
+
+  .print-report-header {
+    text-align: center;
+    border-bottom: 2px solid #000;
+    padding-bottom: 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .print-report-header h2 {
+    font-size: 1.6rem;
+    margin: 0 0 0.25rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .print-report-header h3 {
+    font-size: 1.2rem;
+    margin: 0 0 0.75rem;
+    color: #333;
+  }
+
+  .print-report-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.85rem;
+    margin-top: 0.5rem;
+  }
+
+  .print-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 2rem;
+    font-size: 0.9rem;
+  }
+
+  .print-table th,
+  .print-table td {
+    border: 1px solid #222;
+    padding: 0.6rem 0.75rem;
+  }
+
+  .print-table th {
+    background: #f0f0f0 !important;
+    font-weight: 800;
+    text-transform: uppercase;
+    font-size: 0.8rem;
+  }
+
+  .print-report-signatures {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 4rem;
+    padding: 0 2rem;
+  }
+
+  .sig-line {
+    width: 180px;
+    border-bottom: 1px solid #000;
+    margin-bottom: 0.5rem;
+  }
+
+  /* Contract Printable Document */
+  #contract-print {
+    display: block !important;
+    border: 1px solid #000 !important;
+    padding: 2.5rem !important;
+    margin: 0 auto !important;
+    width: 100% !important;
   }
 }

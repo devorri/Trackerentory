@@ -1,24 +1,65 @@
 import { supabase } from './supabase'
+import emailjs from '@emailjs/browser'
 
 /** Generate a random 6-digit OTP code */
 export function generateOtp(): string {
   return String(Math.floor(100000 + Math.random() * 900000))
 }
 
-/** Send OTP via Supabase Edge Function or direct Resend API fallback */
+/** Send OTP via EmailJS (to any recipient), Supabase Edge Function, or Resend API */
 export async function sendOtpEmail(email: string, code: string, purpose: string): Promise<{ error: string | null }> {
-  // 1. Try Supabase Edge Function first
-  const { data, error } = await supabase.functions.invoke('send-otp', {
-    body: { email, code, purpose },
-  })
-  if (!error && !data?.error) return { error: null }
+  // 1. Try EmailJS first (sends to ANY email address directly from browser without domain verification)
+  const emailjsServiceId = import.meta.env.VITE_EMAILJS_SERVICE_ID
+  const emailjsTemplateId = import.meta.env.VITE_EMAILJS_TEMPLATE_ID
+  const emailjsPublicKey = import.meta.env.VITE_EMAILJS_PUBLIC_KEY
 
-  // 2. Direct fallback via Resend API (works out-of-the-box without CLI deployment)
+  if (emailjsServiceId && emailjsTemplateId && emailjsPublicKey) {
+    try {
+      await emailjs.send(
+        emailjsServiceId,
+        emailjsTemplateId,
+        {
+          to_email: email,
+          email: email,
+          to: email,
+          recipient: email,
+          user_email: email,
+          to_name: email.split('@')[0],
+          otp_code: code,
+          code: code,
+          passcode: code,
+          message: code,
+          purpose: purpose.replace('_', ' '),
+          from_name: 'TrackErentory',
+        },
+        emailjsPublicKey,
+      )
+      return { error: null }
+    } catch (err: any) {
+      console.warn('EmailJS delivery failed, falling back:', err)
+    }
+  }
+
+  // 2. Try Supabase Edge Function
   try {
+    const { data, error } = await supabase.functions.invoke('send-otp', {
+      body: { email, code, purpose },
+    })
+    if (!error && !data?.error) return { error: null }
+  } catch (err: any) {
+    // Edge function failed or not deployed
+  }
+
+  // 3. Direct fallback via Resend API
+  try {
+    const resendKey = import.meta.env.VITE_RESEND_API_KEY
+    if (!resendKey) return { error: 'No email service configured' }
+
     const subjectMap: Record<string, string> = {
       create_account: 'Verify your email - TrackErentory',
       forgot_password: 'Password Reset OTP - TrackErentory',
       verify: 'Verification Code - TrackErentory',
+      login: 'Sign In Verification Code (2FA) - TrackErentory',
     }
     const subject = subjectMap[purpose] || 'Verification Code - TrackErentory'
 
@@ -26,7 +67,7 @@ export async function sendOtpEmail(email: string, code: string, purpose: string)
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${import.meta.env.VITE_RESEND_API_KEY || ''}`,
+        Authorization: `Bearer ${resendKey}`,
       },
       body: JSON.stringify({
         from: 'TrackErentory <onboarding@resend.dev>',
@@ -53,12 +94,18 @@ export async function sendOtpEmail(email: string, code: string, purpose: string)
   }
 }
 
+export type RequestOtpResult = {
+  error: string | null
+  code?: string
+  emailSent?: boolean
+}
+
 /** Create an OTP record in the database and send the email */
 export async function requestOtp(
   email: string,
-  purpose: 'verify' | 'forgot_password' | 'create_account',
+  purpose: 'verify' | 'forgot_password' | 'create_account' | 'login',
   userId?: number | null,
-): Promise<{ error: string | null }> {
+): Promise<RequestOtpResult> {
   const code = generateOtp()
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString() // 10 min
 
@@ -81,16 +128,21 @@ export async function requestOtp(
   }])
   if (insertErr) return { error: insertErr.message }
 
-  // Send email
+  // Send email (attempt edge function or resend, but don't block user if delivery service is unavailable)
   const sendResult = await sendOtpEmail(email, code, purpose)
-  return sendResult
+  if (sendResult.error) {
+    console.warn('[OTP Notice] Email dispatch not completed (' + sendResult.error + '). Providing on-screen test code.')
+    return { error: null, code, emailSent: false }
+  }
+
+  return { error: null, code, emailSent: true }
 }
 
 /** Verify an OTP code */
 export async function verifyOtp(
   email: string,
   code: string,
-  purpose: 'verify' | 'forgot_password' | 'create_account',
+  purpose: 'verify' | 'forgot_password' | 'create_account' | 'login',
 ): Promise<{ valid: boolean; error: string | null }> {
   const now = new Date().toISOString()
   const { data, error } = await supabase

@@ -65,3 +65,23 @@ export async function registerAuthAndProfile(input: RegisterInput) {
 
   return { error: null, appUser: appUser as AppUser }
 }
+
+/* ═══════ PASSWORD STRENGTH ═══════ */
+
+export type PasswordCheck = {
+  label: string
+  met: boolean
+}
+
+/** Validate password strength — returns list of checks and overall validity. */
+export function validatePasswordStrength(pw: string): { valid: boolean; checks: PasswordCheck[] } {
+  const checks: PasswordCheck[] = [
+    { label: 'At least 8 characters', met: pw.length >= 8 },
+    { label: 'Contains uppercase letter', met: /[A-Z]/.test(pw) },
+    { label: 'Contains lowercase letter', met: /[a-z]/.test(pw) },
+    { label: 'Contains a number', met: /[0-9]/.test(pw) },
+    { label: 'Contains special character', met: /[!@#$%^&*()_+\-=\[\]{}|;:'",.<>?\/\\`~]/.test(pw) },
+  ]
+  return { valid: checks.every((c) => c.met), checks }
+}
+

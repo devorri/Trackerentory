@@ -12,6 +12,8 @@ import StaffManagement from './pages/StaffManagement'
 import AboutPage from './pages/AboutPage'
 import ServicesPage from './pages/ServicesPage'
 import OwnerProductsPage from './pages/OwnerProductsPage'
+import TermsPage from './pages/TermsPage'
+import PrivacyPage from './pages/PrivacyPage'
 import { AuthProvider, useAuth } from './context/Auth'
 import { useEffect, useState } from 'react'
 import { supabase } from './lib/supabase'
@@ -29,7 +31,8 @@ function App() {
 function InnerApp() {
   const { user, loading, signOut } = useAuth()
   const [notices, setNotices] = useState<string[]>([])
-  const [promoEmail, setPromoEmail] = useState('')
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [adminSidebarOpen, setAdminSidebarOpen] = useState(false)
 
   useEffect(() => {
     void cancelExpiredReservations()
@@ -64,12 +67,41 @@ function InnerApp() {
   const role = user?.role
   const isAdmin = role === 'Owner' || role === 'Staff'
 
-  // ════════════ ADMIN / OWNER LEFT SIDEBAR LAYOUT ════════════
+  // ════════════ ADMIN / OWNER / STAFF LEFT SIDEBAR LAYOUT ════════════
   if (isAdmin) {
     return (
       <div className="admin-shell">
-        <aside className="admin-sidebar">
-          <Link to={role === 'Owner' ? '/owner' : '/pickup'} className="admin-sidebar-brand">
+        {/* Mobile Admin Header */}
+        <header className="admin-mobile-header no-print">
+          <button
+            type="button"
+            className="hamburger-btn"
+            onClick={() => setAdminSidebarOpen(!adminSidebarOpen)}
+            aria-label="Toggle navigation menu"
+          >
+            ☰
+          </button>
+          <div className="admin-sidebar-brand" style={{ padding: 0 }}>
+            <img src="/TrackErentory.svg" alt="TrackErentory" className="brand-logo" />
+            <span>Track<span>Erentory</span></span>
+          </div>
+          <span className="badge info" style={{ fontSize: '0.75rem' }}>{role}</span>
+        </header>
+
+        {/* Sidebar Overlay on mobile */}
+        {adminSidebarOpen && (
+          <div
+            className="admin-sidebar-overlay no-print"
+            onClick={() => setAdminSidebarOpen(false)}
+          />
+        )}
+
+        <aside className={`admin-sidebar ${adminSidebarOpen ? 'open' : ''}`}>
+          <Link
+            to={role === 'Owner' ? '/owner' : '/pickup'}
+            className="admin-sidebar-brand"
+            onClick={() => setAdminSidebarOpen(false)}
+          >
             <img src="/TrackErentory.svg" alt="TrackErentory" className="brand-logo" />
             <span>Track<span>Erentory</span></span>
           </Link>
@@ -77,33 +109,58 @@ function InnerApp() {
           <div className="admin-nav-group">
             <div className="admin-nav-label">Management</div>
             {role === 'Owner' && (
-              <NavLink to="/owner" className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}>
-                Sales & Reports
+              <NavLink
+                to="/owner"
+                className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
+                onClick={() => setAdminSidebarOpen(false)}
+              >
+                📊 Sales & Reports
               </NavLink>
             )}
-            {(role === 'Owner' || role === 'Staff') && (
-              <NavLink to="/pickup" className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}>
-                Pickup Tracking
-              </NavLink>
-            )}
-            {(role === 'Owner' || role === 'Staff') && (
-              <NavLink to="/owner-products" className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}>
-                Products Management
+            <NavLink
+              to="/pickup"
+              className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
+              onClick={() => setAdminSidebarOpen(false)}
+            >
+              📦 Pickup Tracking
+            </NavLink>
+            <NavLink
+              to="/display-tracking"
+              className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
+              onClick={() => setAdminSidebarOpen(false)}
+            >
+              🏬 Display Tracking
+            </NavLink>
+            <NavLink
+              to="/owner-products"
+              className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
+              onClick={() => setAdminSidebarOpen(false)}
+            >
+              🏷️ Products Management
+            </NavLink>
+            <NavLink
+              to="/cubes"
+              className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
+              onClick={() => setAdminSidebarOpen(false)}
+            >
+              🧊 Cube Management
+            </NavLink>
+            {role === 'Owner' && (
+              <NavLink
+                to="/contracts"
+                className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
+                onClick={() => setAdminSidebarOpen(false)}
+              >
+                📜 Contracts
               </NavLink>
             )}
             {role === 'Owner' && (
-              <NavLink to="/cubes" className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}>
-                Cube Management
-              </NavLink>
-            )}
-            {role === 'Owner' && (
-              <NavLink to="/contracts" className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}>
-                Contracts
-              </NavLink>
-            )}
-            {role === 'Owner' && (
-              <NavLink to="/staff" className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}>
-                Staff Accounts
+              <NavLink
+                to="/staff"
+                className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
+                onClick={() => setAdminSidebarOpen(false)}
+              >
+                👥 Staff Accounts
               </NavLink>
             )}
           </div>
@@ -111,9 +168,14 @@ function InnerApp() {
           <div className="admin-user-card">
             <div className="admin-user-info">
               <strong>{user?.full_name || 'Admin'}</strong>
-              <span>{user?.role || 'Owner'} Dashboard</span>
+              <span>{user?.role || 'Staff'} Dashboard</span>
             </div>
-            <button className="btn-ghost" style={{ width: '100%', justifyContent: 'center' }} type="button" onClick={() => signOut()}>
+            <button
+              className="btn-ghost"
+              style={{ width: '100%', justifyContent: 'center' }}
+              type="button"
+              onClick={() => signOut()}
+            >
               Sign Out
             </button>
           </div>
@@ -121,7 +183,7 @@ function InnerApp() {
 
         <main className="admin-main">
           {notices.length > 0 && (
-            <div className="alert warn">
+            <div className="alert warn no-print">
               <strong>Contract expiry notice</strong>
               <ul style={{ margin: '0.55rem 0 0', paddingLeft: 18 }}>
                 {notices.map((n) => <li key={n}>{n}</li>)}
@@ -134,7 +196,8 @@ function InnerApp() {
             <Route path="/owner-products" element={<OwnerProductsPage />} />
             <Route path="/cubes" element={<CubeManagement />} />
             <Route path="/contracts" element={<ContractsPage />} />
-            <Route path="/pickup" element={<TransactionsPage />} />
+            <Route path="/pickup" element={<TransactionsPage defaultFilter="Pick-up" pageTitle="Pickup Tracking" />} />
+            <Route path="/display-tracking" element={<TransactionsPage defaultFilter="Display" pageTitle="Display Tracking" />} />
             <Route path="/staff" element={<StaffManagement />} />
             <Route path="*" element={<Navigate to={role === 'Owner' ? '/owner' : '/pickup'} replace />} />
           </Routes>
@@ -147,18 +210,30 @@ function InnerApp() {
   return (
     <div className="app-shell">
       <nav className="top-nav">
-        <Link to="/" className="brand">
+        <Link to="/" className="brand" onClick={() => setMobileMenuOpen(false)}>
           <img src="/TrackErentory.svg" alt="TrackErentory" className="brand-logo" />
           <span className="brand-text">Track<span>Erentory</span></span>
         </Link>
-        <div className="nav-links">
-          <NavLink to="/">Catalogue</NavLink>
-          <NavLink to="/services">Services</NavLink>
-          <NavLink to="/about">About</NavLink>
-          {role === 'Customer' && <NavLink to="/reservations">Reservations</NavLink>}
-          {role === 'Renter' && <NavLink to="/renter">Renter</NavLink>}
-          {role === 'Renter' && <NavLink to="/contracts">Contracts</NavLink>}
+
+        {/* Mobile Hamburger Button */}
+        <button
+          type="button"
+          className="hamburger-btn no-print"
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          aria-label="Toggle Navigation"
+        >
+          {mobileMenuOpen ? '✕' : '☰'}
+        </button>
+
+        <div className={`nav-links ${mobileMenuOpen ? 'mobile-open' : ''}`}>
+          <NavLink to="/" onClick={() => setMobileMenuOpen(false)}>Catalogue</NavLink>
+          <NavLink to="/services" onClick={() => setMobileMenuOpen(false)}>Services</NavLink>
+          <NavLink to="/about" onClick={() => setMobileMenuOpen(false)}>About</NavLink>
+          {role === 'Customer' && <NavLink to="/reservations" onClick={() => setMobileMenuOpen(false)}>Reservations</NavLink>}
+          {role === 'Renter' && <NavLink to="/renter" onClick={() => setMobileMenuOpen(false)}>Renter</NavLink>}
+          {role === 'Renter' && <NavLink to="/contracts" onClick={() => setMobileMenuOpen(false)}>Contracts</NavLink>}
         </div>
+
         <div className="nav-user">
           {user ? (
             <>
@@ -176,7 +251,7 @@ function InnerApp() {
 
       <main>
         {notices.length > 0 && (
-          <div className="alert warn">
+          <div className="alert warn no-print">
             <strong>Contract expiry notice</strong>
             <ul style={{ margin: '0.55rem 0 0', paddingLeft: 18 }}>
               {notices.map((n) => <li key={n}>{n}</li>)}
@@ -189,33 +264,13 @@ function InnerApp() {
           <Route path="/" element={<ProductsPage />} />
           <Route path="/services" element={<ServicesPage />} />
           <Route path="/about" element={<AboutPage />} />
+          <Route path="/terms" element={<TermsPage />} />
+          <Route path="/privacy" element={<PrivacyPage />} />
           <Route path="/reservations" element={<ReservationsPage />} />
           <Route path="/renter" element={<RenterDashboard />} />
           <Route path="/contracts" element={<ContractsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
-
-        {/* Promo Community Banner */}
-        <section className="promo-banner no-print">
-          <h2>Join Rental Community To Get Monthly Updates</h2>
-          <p>Type your email down below and stay updated with available display & pick-up cubes!</p>
-          <form className="promo-form" onSubmit={(e) => {
-            e.preventDefault()
-            if (promoEmail) {
-              alert('Thank you for subscribing!')
-              setPromoEmail('')
-            }
-          }}>
-            <input
-              type="email"
-              placeholder="Add your email here"
-              value={promoEmail}
-              onChange={(e) => setPromoEmail(e.target.value)}
-              required
-            />
-            <button type="submit">SEND</button>
-          </form>
-        </section>
       </main>
 
       {/* Solid Black Editorial Footer */}
@@ -246,8 +301,8 @@ function InnerApp() {
           <div className="footer-col">
             <h4>Legal</h4>
             <ul>
-              <li><a href="#terms">Terms & Conditions</a></li>
-              <li><a href="#privacy">Privacy Policy</a></li>
+              <li><Link to="/terms">Terms & Conditions</Link></li>
+              <li><Link to="/privacy">Privacy Policy</Link></li>
             </ul>
           </div>
         </div>

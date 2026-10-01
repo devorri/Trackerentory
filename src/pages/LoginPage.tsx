@@ -1,18 +1,35 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth, type AppUser } from '../context/Auth'
 import { supabaseConfigError, supabase } from '../lib/supabase'
 import { requestOtp, verifyOtp } from '../lib/otp'
+import { validatePasswordStrength, type PasswordCheck } from '../lib/auth-utils'
 import PasswordInput from '../components/PasswordInput'
 
 const PUBLIC_ROLES: AppUser['role'][] = ['Customer', 'Renter']
 
 type AuthMode = 'signin' | 'signup' | 'forgot'
+type SigninStep = 'credentials' | 'otp'
 type SignupStep = 'form' | 'otp' | 'done'
 type ForgotStep = 'email' | 'otp' | 'newpass'
 
+function PasswordStrengthIndicator({ checks }: { checks: PasswordCheck[] }) {
+  if (!checks.length) return null
+  return (
+    <ul className="pw-checks">
+      {checks.map((c) => (
+        <li key={c.label} className={c.met ? 'met' : ''}>
+          <span className="pw-check-icon">{c.met ? '✓' : '✗'}</span>
+          {c.label}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 export default function LoginPage() {
   const [mode, setMode] = useState<AuthMode>('signin')
+  const [searchParams] = useSearchParams()
 
   // Sign in state
   const [username, setUsername] = useState('')
@@ -21,12 +38,19 @@ export default function LoginPage() {
   const { signIn, signUp, resetPassword } = useAuth()
   const nav = useNavigate()
 
+  // Sign in 2FA state
+  const [signinStep, setSigninStep] = useState<SigninStep>('credentials')
+  const [signinOtp, setSigninOtp] = useState('')
+  const [signinEmail, setSigninEmail] = useState('')
+  const [signinTestOtp, setSigninTestOtp] = useState<string | null>(null)
+
   // Sign up state
   const [signupStep, setSignupStep] = useState<SignupStep>('form')
   const [fullName, setFullName] = useState('')
   const [signupEmail, setSignupEmail] = useState('')
   const [signupUsername, setSignupUsername] = useState('')
   const [signupPassword, setSignupPassword] = useState('')
+  const [signupConfirmPw, setSignupConfirmPw] = useState('')
   const [role, setRole] = useState<AppUser['role']>('Customer')
   const [otpCode, setOtpCode] = useState('')
 
@@ -36,6 +60,11 @@ export default function LoginPage() {
   const [forgotEmail, setForgotEmail] = useState('')
   const [forgotOtp, setForgotOtp] = useState('')
   const [newPassword, setNewPassword] = useState('')
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState('')
+
+  // Test / demo fallback OTP code display
+  const [signupTestOtp, setSignupTestOtp] = useState<string | null>(null)
+  const [forgotTestOtp, setForgotTestOtp] = useState<string | null>(null)
 
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
@@ -44,26 +73,108 @@ export default function LoginPage() {
     setMode(m)
     setError('')
     setInfo('')
+    setSigninStep('credentials')
     setSignupStep('form')
     setForgotStep('email')
     setOtpCode('')
+    setSigninOtp('')
     setForgotOtp('')
+    setSignupTestOtp(null)
+    setSigninTestOtp(null)
+    setForgotTestOtp(null)
+    setSignupConfirmPw('')
+    setNewPasswordConfirm('')
   }
 
-  // ── SIGN IN ──
-  async function handleSignIn() {
+  function navigateAfterAuth(u: AppUser | null) {
+    const redirect = searchParams.get('redirect')
+    if (redirect) {
+      nav(redirect)
+      return
+    }
+    if (u?.role === 'Owner') nav('/owner')
+    else if (u?.role === 'Renter') nav('/renter')
+    else if (u?.role === 'Staff') nav('/pickup')
+    else nav('/')
+  }
+
+  // ── SIGN IN (Step 1: credentials → Step 2: OTP) ──
+  async function handleSignInCredentials() {
     setLoading(true)
     setError('')
+
+    // Validate credentials first
+    const { data, error: dbError } = await supabase
+      .from('users')
+      .select('user_id, full_name, role, status, salary, username, email')
+      .eq('username', username)
+      .eq('password', password)
+      .maybeSingle()
+
+    if (dbError) {
+      setLoading(false)
+      return setError(dbError.message)
+    }
+    if (!data) {
+      setLoading(false)
+      return setError('Invalid username or password.')
+    }
+    if (data.status === 'Resigned') {
+      setLoading(false)
+      return setError('This account is resigned.')
+    }
+
+    const appUser = data as AppUser
+
+    // Check if user has email for 2FA
+    if (!appUser.email) {
+      // No email — skip 2FA, sign in directly
+      const result = await signIn(username, password)
+      setLoading(false)
+      if (result.error) return setError(result.error)
+      const raw = localStorage.getItem('trackerentory_user')
+      const u = raw ? JSON.parse(raw) as AppUser : null
+      navigateAfterAuth(u)
+      return
+    }
+
+    // Send OTP for 2FA
+    setSigninEmail(appUser.email)
+    const otpResult = await requestOtp(appUser.email, 'login', appUser.user_id)
+    setLoading(false)
+
+    if (otpResult.error) return setError('Failed to send OTP: ' + otpResult.error)
+
+    if (otpResult.emailSent) {
+      setInfo(`A verification code has been sent to ${maskEmail(appUser.email)}.`)
+      setSigninTestOtp(null)
+    } else if (otpResult.code) {
+      setSigninTestOtp(otpResult.code)
+      setSigninOtp(otpResult.code)
+      setInfo(`Demo/Test Mode: Your verification code is ${otpResult.code} (auto-filled below).`)
+    }
+    setSigninStep('otp')
+  }
+
+  async function handleSignInVerifyOtp() {
+    if (!signinOtp || signinOtp.length < 6) return setError('Enter the 6-digit code.')
+    setLoading(true)
+    setError('')
+
+    const verify = await verifyOtp(signinEmail, signinOtp, 'login')
+    if (!verify.valid) {
+      setLoading(false)
+      return setError(verify.error || 'Invalid code.')
+    }
+
+    // OTP verified — complete sign in
     const result = await signIn(username, password)
     setLoading(false)
     if (result.error) return setError(result.error)
 
     const raw = localStorage.getItem('trackerentory_user')
     const u = raw ? JSON.parse(raw) as AppUser : null
-    if (u?.role === 'Owner') nav('/owner')
-    else if (u?.role === 'Renter') nav('/renter')
-    else if (u?.role === 'Staff') nav('/pickup')
-    else nav('/')
+    navigateAfterAuth(u)
   }
 
   // ── SIGN UP ──
@@ -71,6 +182,18 @@ export default function LoginPage() {
     if (!fullName || !signupUsername || !signupPassword || !signupEmail) {
       return setError('All fields are required.')
     }
+
+    // Password strength
+    const strength = validatePasswordStrength(signupPassword)
+    if (!strength.valid) {
+      return setError('Password does not meet the requirements.')
+    }
+
+    // Confirm password
+    if (signupPassword !== signupConfirmPw) {
+      return setError('Passwords do not match.')
+    }
+
     setLoading(true)
     setError('')
 
@@ -90,7 +213,14 @@ export default function LoginPage() {
     setLoading(false)
     if (otpResult.error) return setError('Failed to send OTP: ' + otpResult.error)
 
-    setInfo('A 6-digit code has been sent to your email.')
+    if (otpResult.emailSent) {
+      setInfo('A 6-digit code has been sent to your email.')
+      setSignupTestOtp(null)
+    } else if (otpResult.code) {
+      setSignupTestOtp(otpResult.code)
+      setOtpCode(otpResult.code)
+      setInfo(`Demo/Test Mode: Your verification code is ${otpResult.code} (auto-filled below).`)
+    }
     setSignupStep('otp')
   }
 
@@ -118,8 +248,7 @@ export default function LoginPage() {
 
     const raw = localStorage.getItem('trackerentory_user')
     const u = raw ? JSON.parse(raw) as AppUser : null
-    if (u?.role === 'Renter') nav('/renter')
-    else nav('/')
+    navigateAfterAuth(u)
   }
 
   // ── FORGOT PASSWORD ──
@@ -145,7 +274,14 @@ export default function LoginPage() {
     setLoading(false)
     if (otpResult.error) return setError('Failed to send OTP: ' + otpResult.error)
 
-    setInfo(`OTP sent to ${maskEmail(user.email)}.`)
+    if (otpResult.emailSent) {
+      setInfo(`OTP sent to ${maskEmail(user.email)}.`)
+      setForgotTestOtp(null)
+    } else if (otpResult.code) {
+      setForgotTestOtp(otpResult.code)
+      setForgotOtp(otpResult.code)
+      setInfo(`Demo/Test Mode: Your verification code is ${otpResult.code} (auto-filled below).`)
+    }
     setForgotStep('otp')
   }
 
@@ -163,7 +299,15 @@ export default function LoginPage() {
   }
 
   async function handleForgotResetPassword() {
-    if (!newPassword || newPassword.length < 4) return setError('Password must be at least 4 characters.')
+    // Password strength
+    const strength = validatePasswordStrength(newPassword)
+    if (!strength.valid) {
+      return setError('Password does not meet the requirements.')
+    }
+    // Confirm password
+    if (newPassword !== newPasswordConfirm) {
+      return setError('Passwords do not match.')
+    }
     setLoading(true)
     setError('')
 
@@ -182,14 +326,21 @@ export default function LoginPage() {
     return `${masked}@${domain}`
   }
 
+  // Password strength for current form
+  const signupPwChecks = signupPassword ? validatePasswordStrength(signupPassword).checks : []
+  const newPwChecks = newPassword ? validatePasswordStrength(newPassword).checks : []
+
   // ── RENDER ──
   return (
     <div className="auth-layout">
       <div className="auth-card">
         <span className="brand">Track<span>Erentory</span></span>
 
-        {mode === 'signin' && (
+        {mode === 'signin' && signinStep === 'credentials' && (
           <p className="lede">Sign in to manage cubes, reservations, and pickups.</p>
+        )}
+        {mode === 'signin' && signinStep === 'otp' && (
+          <p className="lede">Enter the verification code sent to your email.</p>
         )}
         {mode === 'signup' && (
           <p className="lede">Create a Customer or Renter account. Staff are added by the Owner.</p>
@@ -217,7 +368,7 @@ export default function LoginPage() {
         )}
 
         {/* ═══════ SIGN IN ═══════ */}
-        {mode === 'signin' && (
+        {mode === 'signin' && signinStep === 'credentials' && (
           <>
             <div className="field">
               <label>Username</label>
@@ -235,11 +386,52 @@ export default function LoginPage() {
               </button>
             </div>
             <div className="row" style={{ marginTop: '0.35rem' }}>
-              <button className="btn" type="button" onClick={handleSignIn} disabled={loading}>
+              <button className="btn" type="button" onClick={handleSignInCredentials} disabled={loading}>
                 {loading ? 'Please wait…' : 'Sign in'}
               </button>
               <button className="btn-ghost" type="button" onClick={() => switchMode('signup')} disabled={loading}>
                 Need an account?
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* SIGN IN — OTP Step (2FA) */}
+        {mode === 'signin' && signinStep === 'otp' && (
+          <>
+            <div className="auth-steps">
+              <div className="auth-step done" />
+              <div className="auth-step active" />
+            </div>
+            <div className="field">
+              <label>Enter the 6-digit code sent to {maskEmail(signinEmail)}</label>
+              <input
+                className="otp-input"
+                maxLength={6}
+                value={signinOtp}
+                onChange={(e) => setSigninOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                placeholder="000000"
+              />
+              {signinTestOtp && (
+                <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.4rem 0.75rem', background: 'rgba(99, 102, 241, 0.1)', border: '1px solid rgba(99, 102, 241, 0.25)', borderRadius: '6px', fontSize: '0.85rem' }}>
+                  <span>Test Code: <strong style={{ letterSpacing: '1px' }}>{signinTestOtp}</strong></span>
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem', height: 'auto' }}
+                    onClick={() => setSigninOtp(signinTestOtp)}
+                  >
+                    Auto-Fill
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="row" style={{ marginTop: '0.35rem' }}>
+              <button className="btn" type="button" onClick={handleSignInVerifyOtp} disabled={loading}>
+                {loading ? 'Verifying…' : 'Verify & Sign in'}
+              </button>
+              <button className="btn-ghost" type="button" onClick={() => { setSigninStep('credentials'); setError(''); setInfo('') }} disabled={loading}>
+                Back
               </button>
             </div>
           </>
@@ -282,6 +474,19 @@ export default function LoginPage() {
                   onChange={(e) => setSignupPassword(e.target.value)}
                   autoComplete="new-password"
                 />
+                {signupPassword && <PasswordStrengthIndicator checks={signupPwChecks} />}
+                <PasswordInput
+                  label="Confirm password"
+                  value={signupConfirmPw}
+                  onChange={(e) => setSignupConfirmPw(e.target.value)}
+                  autoComplete="new-password"
+                />
+                {signupConfirmPw && signupPassword !== signupConfirmPw && (
+                  <p style={{ color: '#dc2626', fontSize: '0.82rem', margin: '-0.3rem 0 0.5rem' }}>Passwords do not match.</p>
+                )}
+                {signupConfirmPw && signupPassword === signupConfirmPw && signupConfirmPw.length > 0 && (
+                  <p style={{ color: '#16a34a', fontSize: '0.82rem', margin: '-0.3rem 0 0.5rem' }}>✓ Passwords match.</p>
+                )}
                 <div className="row" style={{ marginTop: '0.35rem' }}>
                   <button className="btn" type="button" onClick={handleSignupSubmitForm} disabled={loading}>
                     {loading ? 'Sending OTP…' : 'Continue'}
@@ -304,6 +509,19 @@ export default function LoginPage() {
                     onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                     placeholder="000000"
                   />
+                  {signupTestOtp && (
+                    <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.4rem 0.75rem', background: 'rgba(99, 102, 241, 0.1)', border: '1px solid rgba(99, 102, 241, 0.25)', borderRadius: '6px', fontSize: '0.85rem' }}>
+                      <span>Test Code: <strong style={{ letterSpacing: '1px' }}>{signupTestOtp}</strong></span>
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem', height: 'auto' }}
+                        onClick={() => setOtpCode(signupTestOtp)}
+                      >
+                        Auto-Fill
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="row" style={{ marginTop: '0.35rem' }}>
                   <button className="btn" type="button" onClick={handleSignupVerifyOtp} disabled={loading}>
@@ -356,6 +574,19 @@ export default function LoginPage() {
                     onChange={(e) => setForgotOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
                     placeholder="000000"
                   />
+                  {forgotTestOtp && (
+                    <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.4rem 0.75rem', background: 'rgba(99, 102, 241, 0.1)', border: '1px solid rgba(99, 102, 241, 0.25)', borderRadius: '6px', fontSize: '0.85rem' }}>
+                      <span>Test Code: <strong style={{ letterSpacing: '1px' }}>{forgotTestOtp}</strong></span>
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem', height: 'auto' }}
+                        onClick={() => setForgotOtp(forgotTestOtp)}
+                      >
+                        Auto-Fill
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="row" style={{ marginTop: '0.35rem' }}>
                   <button className="btn" type="button" onClick={handleForgotVerifyOtp} disabled={loading}>
@@ -376,6 +607,19 @@ export default function LoginPage() {
                   onChange={(e) => setNewPassword(e.target.value)}
                   autoComplete="new-password"
                 />
+                {newPassword && <PasswordStrengthIndicator checks={newPwChecks} />}
+                <PasswordInput
+                  label="Confirm new password"
+                  value={newPasswordConfirm}
+                  onChange={(e) => setNewPasswordConfirm(e.target.value)}
+                  autoComplete="new-password"
+                />
+                {newPasswordConfirm && newPassword !== newPasswordConfirm && (
+                  <p style={{ color: '#dc2626', fontSize: '0.82rem', margin: '-0.3rem 0 0.5rem' }}>Passwords do not match.</p>
+                )}
+                {newPasswordConfirm && newPassword === newPasswordConfirm && newPasswordConfirm.length > 0 && (
+                  <p style={{ color: '#16a34a', fontSize: '0.82rem', margin: '-0.3rem 0 0.5rem' }}>✓ Passwords match.</p>
+                )}
                 <div className="row" style={{ marginTop: '0.35rem' }}>
                   <button className="btn" type="button" onClick={handleForgotResetPassword} disabled={loading}>
                     {loading ? 'Resetting…' : 'Reset password'}
