@@ -145,12 +145,232 @@ export default function OwnerDashboard() {
     return { list, total }
   }, [transactions, rentalSales, printReportType, printMonth, printRenterId])
 
+  function buildPrintableReportHtml() {
+    const reportTitle = printReportType === 'display'
+      ? 'Display Sales Report'
+      : printReportType === 'pickup'
+        ? 'Pick-up Sales Report'
+        : 'Monthly Rental Payment Report'
+
+    const rowsHtml = printReportType === 'rental'
+      ? (printFilteredData.list as typeof rentalSales).map((r) => `
+          <tr>
+            <td>${r.renter}</td>
+            <td>${r.cube ?? '—'}</td>
+            <td>${r.type ?? '—'}</td>
+            <td>${r.period}</td>
+            <td style="text-align:right;">${peso(r.monthly)}</td>
+          </tr>
+        `).join('')
+      : (printFilteredData.list as Transaction[]).map((t) => {
+          const renter = getTxRenter(t)
+          return `
+            <tr>
+              <td><strong>${t.products?.product_name || t.product_name || '—'}</strong>${t.products?.variant ? `<div style="font-size:0.75rem;color:#555;">Variant: ${t.products.variant}</div>` : ''}</td>
+              <td>${t.products?.cubes?.cube_number || t.cubes?.cube_number || '—'}</td>
+              <td>${renter.name}</td>
+              <td>${new Date(t.transaction_date).toLocaleDateString('en-PH')}</td>
+              <td>${t.payment_status}</td>
+              <td>${t.payment_method || 'Cash'}</td>
+              <td>${t.quantity || 1}</td>
+              <td style="text-align:right;">${peso(Number(t.products?.price || 0) * Number(t.quantity || 1))}</td>
+            </tr>
+          `
+        }).join('')
+
+    const tableMarkup = printReportType === 'rental'
+      ? `
+        <table>
+          <thead>
+            <tr>
+              <th>Renter</th>
+              <th>Cube No.</th>
+              <th>Type</th>
+              <th>Contract Period</th>
+              <th style="text-align:right;">Monthly Rent</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+          <tfoot>
+            <tr>
+              <td colspan="4"><strong>Total Rental Income</strong></td>
+              <td style="text-align:right;"><strong>${peso(printFilteredData.total)}</strong></td>
+            </tr>
+          </tfoot>
+        </table>
+      `
+      : `
+        <table>
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th>Cube</th>
+              <th>Renter</th>
+              <th>Date</th>
+              <th>Payment</th>
+              <th>Process</th>
+              <th>Qty</th>
+              <th style="text-align:right;">Total</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+          <tfoot>
+            <tr>
+              <td colspan="7"><strong>Overall Total (${printMonth})</strong></td>
+              <td style="text-align:right;"><strong>${peso(printFilteredData.total)}</strong></td>
+            </tr>
+          </tfoot>
+        </table>
+      `
+
+    return `<!doctype html>
+      <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <title>${reportTitle}</title>
+          <style>
+            body {
+              margin: 0;
+              padding: 2rem 1.5rem;
+              font-family: Arial, Helvetica, sans-serif;
+              color: #111827;
+              background: #fff;
+            }
+            .toolbar {
+              display: flex;
+              justify-content: flex-end;
+              gap: 0.75rem;
+              margin-bottom: 1rem;
+            }
+            .toolbar button {
+              border: 1px solid #111827;
+              background: #111827;
+              color: white;
+              padding: 0.65rem 1rem;
+              border-radius: 8px;
+              cursor: pointer;
+              font-size: 0.9rem;
+            }
+            .toolbar button.secondary {
+              background: white;
+              color: #111827;
+            }
+            .report {
+              border: 1px solid #d1d5db;
+              padding: 1.5rem;
+              max-width: 1100px;
+              margin: 0 auto;
+            }
+            .header {
+              text-align: center;
+              border-bottom: 2px solid #111827;
+              padding-bottom: 1rem;
+              margin-bottom: 1.5rem;
+            }
+            .header h1 {
+              margin: 0 0 0.25rem;
+              font-size: 1.8rem;
+              letter-spacing: 0.04em;
+              text-transform: uppercase;
+            }
+            .header h2 {
+              margin: 0;
+              font-size: 1.2rem;
+              color: #374151;
+            }
+            .meta {
+              display: flex;
+              justify-content: space-between;
+              gap: 1rem;
+              font-size: 0.82rem;
+              margin-top: 0.75rem;
+              flex-wrap: wrap;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              font-size: 0.9rem;
+            }
+            th, td {
+              border: 1px solid #374151;
+              padding: 0.6rem 0.7rem;
+              vertical-align: top;
+            }
+            th {
+              background: #e5e7eb;
+              text-transform: uppercase;
+              font-size: 0.78rem;
+            }
+            tfoot td {
+              background: #f9fafb;
+              font-weight: 700;
+            }
+            .signatures {
+              display: flex;
+              justify-content: space-between;
+              margin-top: 3rem;
+              gap: 2rem;
+            }
+            .sig-line {
+              width: 180px;
+              border-bottom: 1px solid #111827;
+              margin-bottom: 0.5rem;
+            }
+            @media print {
+              .toolbar { display: none !important; }
+              body { padding: 0; }
+              .report { border: none; max-width: none; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="toolbar">
+            <button type="button" onclick="window.print()">Print / Save as PDF</button>
+            <button type="button" class="secondary" onclick="window.close()">Close</button>
+          </div>
+
+          <div class="report">
+            <div class="header">
+              <h1>TrackErentory</h1>
+              <h2>${reportTitle}</h2>
+              <div class="meta">
+                <span><strong>Period:</strong> ${printReportType === 'rental' ? 'Active Contracts' : monthLabel}</span>
+                <span><strong>Renter:</strong> ${selectedRenterName}</span>
+                <span><strong>Date Generated:</strong> ${new Date().toLocaleDateString('en-PH')}</span>
+              </div>
+            </div>
+
+            ${tableMarkup}
+
+            <div class="signatures">
+              <div>
+                <div class="sig-line"></div>
+                <div>Prepared By (Owner)</div>
+              </div>
+              <div>
+                <div class="sig-line"></div>
+                <div>Received / Acknowledged By</div>
+              </div>
+            </div>
+          </div>
+        </body>
+      </html>
+    `
+  }
+
   function handleTriggerPrint() {
     setIsPrintModalOpen(false)
-    // Small timeout to allow modal state to close before triggering browser print
-    setTimeout(() => {
-      window.print()
-    }, 150)
+
+    const reportWindow = window.open('', '_blank', 'width=1200,height=900,noopener,noreferrer')
+    if (!reportWindow) {
+      alert('Please allow pop-ups to open the report preview.')
+      return
+    }
+
+    reportWindow.document.open()
+    reportWindow.document.write(buildPrintableReportHtml())
+    reportWindow.document.close()
+    reportWindow.focus()
   }
 
   if (!user || user.role !== 'Owner') {
@@ -368,7 +588,7 @@ export default function OwnerDashboard() {
                   Cancel
                 </button>
                 <button className="btn" type="button" onClick={handleTriggerPrint}>
-                  🖨️ Print Now
+                  🖨️ Open PDF / Print Preview
                 </button>
               </div>
             </div>
