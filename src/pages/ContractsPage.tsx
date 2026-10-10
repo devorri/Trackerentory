@@ -9,10 +9,6 @@ import {
   X,
   AlertTriangle,
   CheckCircle2,
-  Calendar,
-  Box,
-  User,
-  RotateCcw,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
