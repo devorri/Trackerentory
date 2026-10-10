@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth, type AppUser } from '../context/Auth'
 import { peso } from '../lib/types'
 import PasswordInput from '../components/PasswordInput'
+import ConfirmModal from '../components/ConfirmModal'
 import { SkeletonTable } from '../components/Skeleton'
 
 type StaffRow = AppUser & {
@@ -18,6 +19,13 @@ export default function StaffManagement() {
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState<'active' | 'trash'>('active')
   const [editing, setEditing] = useState<StaffRow | null>(null)
+  const [confirmAction, setConfirmAction] = useState<{
+    title: string
+    message: string
+    confirmText?: string
+    isDanger?: boolean
+    onConfirm: () => void
+  } | null>(null)
   const [editForm, setEditForm] = useState({
     full_name: '',
     username: '',
@@ -97,11 +105,19 @@ export default function StaffManagement() {
     void refresh()
   }
 
-  async function moveToTrash(u: StaffRow) {
-    if (!window.confirm(`Move ${u.full_name} to Trash?`)) return
-    const { error } = await supabase.from('users').update({ deleted_at: new Date().toISOString() }).eq('user_id', u.user_id)
-    if (error) return alert(error.message)
-    void refresh()
+  function moveToTrash(u: StaffRow) {
+    setConfirmAction({
+      title: 'Move Staff to Trash',
+      message: `Are you sure you want to move ${u.full_name} to Trash?`,
+      confirmText: 'Move to Trash',
+      isDanger: true,
+      onConfirm: async () => {
+        setConfirmAction(null)
+        const { error } = await supabase.from('users').update({ deleted_at: new Date().toISOString() }).eq('user_id', u.user_id)
+        if (error) return alert(error.message)
+        void refresh()
+      },
+    })
   }
 
   async function restore(u: StaffRow) {
@@ -110,11 +126,19 @@ export default function StaffManagement() {
     void refresh()
   }
 
-  async function deletePermanently(u: StaffRow) {
-    if (!window.confirm(`Permanently delete ${u.full_name}? This cannot be undone.`)) return
-    const { error } = await supabase.from('users').delete().eq('user_id', u.user_id)
-    if (error) return alert(error.message)
-    void refresh()
+  function deletePermanently(u: StaffRow) {
+    setConfirmAction({
+      title: 'Delete Staff Permanently',
+      message: `Permanently delete ${u.full_name}? This cannot be undone.`,
+      confirmText: 'Delete Permanently',
+      isDanger: true,
+      onConfirm: async () => {
+        setConfirmAction(null)
+        const { error } = await supabase.from('users').delete().eq('user_id', u.user_id)
+        if (error) return alert(error.message)
+        void refresh()
+      },
+    })
   }
 
   async function createStaff() {
@@ -285,6 +309,18 @@ export default function StaffManagement() {
             </div>
           </div>
         </div>
+      )}
+
+      {confirmAction && (
+        <ConfirmModal
+          isOpen={true}
+          title={confirmAction.title}
+          message={confirmAction.message}
+          confirmText={confirmAction.confirmText || 'Confirm'}
+          isDanger={confirmAction.isDanger ?? true}
+          onConfirm={confirmAction.onConfirm}
+          onCancel={() => setConfirmAction(null)}
+        />
       )}
     </section>
   )

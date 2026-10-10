@@ -1,3 +1,5 @@
+import { MapPin, Clock, Phone, Mail, MessageCircle, ExternalLink } from 'lucide-react'
+
 export default function AboutPage() {
   return (
     <section>
@@ -39,8 +41,8 @@ export default function AboutPage() {
       <div className="panel" style={{ padding: '2rem', marginBottom: '2.5rem' }}>
         <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '2rem', alignItems: 'center' }}>
           <div>
-            <div style={{ display: 'inline-block', background: 'rgba(57, 181, 74, 0.1)', color: 'var(--accent)', fontWeight: 800, fontSize: '0.8rem', padding: '0.35rem 0.75rem', borderRadius: 999, marginBottom: '1rem', textTransform: 'uppercase' }}>
-              📍 Physical Store Location
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(57, 181, 74, 0.1)', color: 'var(--accent)', fontWeight: 800, fontSize: '0.8rem', padding: '0.35rem 0.75rem', borderRadius: 999, marginBottom: '1rem', textTransform: 'uppercase' }}>
+              <MapPin size={14} /> Physical Store Location
             </div>
             <h3 style={{ fontSize: '1.5rem', margin: '0 0 0.75rem' }}>TrackErentory Concept & Rental Hub</h3>
             <p style={{ color: '#444', lineHeight: 1.7, fontSize: '1rem', marginBottom: '1.25rem' }}>
@@ -49,17 +51,17 @@ export default function AboutPage() {
             </p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', fontSize: '0.92rem', color: '#555' }}>
-              <div>
-                <strong>🕒 Operating Hours:</strong> Monday to Sunday, 9:00 AM – 8:00 PM
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                <Clock size={16} /> <strong>Operating Hours:</strong> Monday to Sunday, 9:00 AM – 8:00 PM
               </div>
-              <div>
-                <strong>📞 Contact Number:</strong> +63 917 123 4567 / (02) 8123 4567
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                <Phone size={16} /> <strong>Contact Number:</strong> +63 917 123 4567 / (02) 8123 4567
               </div>
-              <div>
-                <strong>✉️ Email:</strong> support@trackerentory.com
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                <Mail size={16} /> <strong>Email:</strong> support@trackerentory.com
               </div>
-              <div>
-                <strong>💬 Messenger / Socials:</strong> m.me/TrackErentoryOfficial
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                <MessageCircle size={16} /> <strong>Messenger / Socials:</strong> m.me/TrackErentoryOfficial
               </div>
             </div>
 
@@ -71,7 +73,7 @@ export default function AboutPage() {
                 className="btn"
                 style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
               >
-                🗺️ Open in Google Maps
+                <ExternalLink size={16} /> Open in Google Maps
               </a>
             </div>
           </div>

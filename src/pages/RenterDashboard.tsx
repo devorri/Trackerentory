@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Store, Package, KeyRound, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import {
@@ -36,6 +37,7 @@ export default function RenterDashboard() {
     price: '',
     stock_quantity: '1',
     variant: '',
+    category: '',
     image_url: '',
     cube_id: '',
   })
@@ -191,6 +193,7 @@ export default function RenterDashboard() {
       price: Number(productForm.price),
       stock_quantity: Number(productForm.stock_quantity || 1),
       variant: productForm.variant ? productForm.variant.trim() : null,
+      category: productForm.category ? productForm.category.trim() : null,
       image_url: imageUrl,
     }]).select('product_id').single()
     setBusy(false)
@@ -221,6 +224,7 @@ export default function RenterDashboard() {
       price: '',
       stock_quantity: '1',
       variant: '',
+      category: '',
       image_url: '',
       cube_id: productForm.cube_id,
     })
@@ -284,21 +288,21 @@ export default function RenterDashboard() {
           className={visibleTab === 'display' ? 'btn' : 'btn-ghost'}
           onClick={() => setActiveTab('display')}
         >
-          🏬 Display Products & Sales ({displayProducts.length})
+          <Store size={16} /> Display Products & Sales ({displayProducts.length})
         </button>}
         {hasPickupCube && <button
           type="button"
           className={visibleTab === 'pickup' ? 'btn' : 'btn-ghost'}
           onClick={() => setActiveTab('pickup')}
         >
-          📦 Pick-up Items & Handovers ({pickupProducts.length})
+          <Package size={16} /> Pick-up Items & Handovers ({pickupProducts.length})
         </button>}
         <button
           type="button"
           className={visibleTab === 'cubes_contracts' ? 'btn' : 'btn-ghost'}
           onClick={() => setActiveTab('cubes_contracts')}
         >
-          🔑 My Cubes & Contracts ({contracts.length})
+          <KeyRound size={16} /> My Cubes & Contracts ({contracts.length})
         </button>
       </div>
 
@@ -546,6 +550,24 @@ export default function RenterDashboard() {
               <input placeholder="e.g. Size M, Shade #2" value={productForm.variant} onChange={(e) => setProductForm({ ...productForm, variant: e.target.value })} />
             </div>
             <div className="field">
+              <label>Category (e.g. Perfumes, Dresses)</label>
+              <input
+                list="renter-categories"
+                placeholder="Type or select category"
+                value={productForm.category}
+                onChange={(e) => setProductForm({ ...productForm, category: e.target.value })}
+              />
+              <datalist id="renter-categories">
+                <option value="Perfumes" />
+                <option value="Dresses" />
+                <option value="Cosmetics & Skincare" />
+                <option value="Accessories" />
+                <option value="Footwear" />
+                <option value="Food & Treats" />
+                <option value="Others" />
+              </datalist>
+            </div>
+            <div className="field">
               <label>Assigned Cube *</label>
               <select value={productForm.cube_id} onChange={(e) => setProductForm({ ...productForm, cube_id: e.target.value })}>
                 <option value="">Select your cube…</option>
@@ -679,7 +701,7 @@ export default function RenterDashboard() {
           <div className="modal-card" style={{ maxWidth: 600, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Receipt Proof</h3>
-              <button className="modal-close" onClick={() => setPreviewReceipt(null)}>✕</button>
+              <button className="modal-close" onClick={() => setPreviewReceipt(null)}><X size={18} /></button>
             </div>
             <img src={previewReceipt} alt="Receipt proof" style={{ maxWidth: '100%', maxHeight: '75vh', objectFit: 'contain', marginTop: 12 }} />
           </div>

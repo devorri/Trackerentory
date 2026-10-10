@@ -1,20 +1,10 @@
 import { useMemo, useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { X, ArrowRight } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
-import { type Reservation, type Cube, peso } from '../lib/types'
+import { type Reservation, type Cube, type Product, peso, isReservationExpired } from '../lib/types'
 import { SkeletonCard } from '../components/Skeleton'
-
-type Product = {
-  product_id: number
-  product_name: string
-  description?: string
-  price?: number
-  stock_quantity?: number
-  variant?: string
-  image_url?: string
-  deleted_at?: string | null
-}
 
 export default function ProductsPage() {
   const { user } = useAuth()
@@ -29,6 +19,7 @@ export default function ProductsPage() {
   const [hours, setHours] = useState<number>(1)
   const [cubeMonths, setCubeMonths] = useState<number>(1)
   const [tab, setTab] = useState<'products' | 'cubes'>('products')
+  const [selectedCategory, setSelectedCategory] = useState<string>('All')
 
   useEffect(() => {
     const reserveId = searchParams.get('reserve')
@@ -132,7 +123,7 @@ export default function ProductsPage() {
   const reservationMap = useMemo(() => {
     const map = new Map<number, Reservation[]>()
     for (const r of reservations) {
-      if (r.product_id) {
+      if (r.product_id && !isReservationExpired(r)) {
         const list = map.get(r.product_id) || []
         list.push(r)
         map.set(r.product_id, list)
@@ -141,10 +132,25 @@ export default function ProductsPage() {
     return map
   }, [reservations])
 
+  const categories = useMemo(() => {
+    const set = new Set<string>()
+    products.forEach((p) => {
+      if (p.category && p.category.trim()) {
+        set.add(p.category.trim())
+      }
+    })
+    return ['All', ...Array.from(set).sort()]
+  }, [products])
+
+  const filteredProducts = useMemo(() => {
+    if (selectedCategory === 'All') return products
+    return products.filter((p) => (p.category || 'General').toLowerCase() === selectedCategory.toLowerCase())
+  }, [products, selectedCategory])
+
   const cubeReservationSet = useMemo(() => {
     const set = new Set<number>()
     for (const r of reservations) {
-      if (r.cube_id) set.add(r.cube_id)
+      if (r.cube_id && !isReservationExpired(r)) set.add(r.cube_id)
     }
     return set
   }, [reservations])
@@ -193,18 +199,37 @@ export default function ProductsPage() {
       {/* ═══ PRODUCTS TAB ═══ */}
       {tab === 'products' && (
         <>
-          <h2>NEW ARRIVALS & PRODUCTS</h2>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', marginBottom: '1rem' }}>
+            <h2 style={{ margin: 0 }}>NEW ARRIVALS & PRODUCTS</h2>
+            {categories.length > 1 && (
+              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                <span className="muted" style={{ fontSize: '0.82rem', fontWeight: 600, marginRight: '0.25rem' }}>Category:</span>
+                {categories.map((cat) => (
+                  <button
+                    key={cat}
+                    type="button"
+                    className={selectedCategory === cat ? 'btn' : 'btn-ghost'}
+                    style={{ padding: '0.3rem 0.75rem', fontSize: '0.82rem', borderRadius: '20px' }}
+                    onClick={() => setSelectedCategory(cat)}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           {loading ? (
             <div className="grid products-grid">
               {Array.from({ length: 6 }).map((_, i) => (
                 <SkeletonCard key={i} />
               ))}
             </div>
-          ) : products.length === 0 ? (
-            <div className="empty">No products available at this time.</div>
+          ) : filteredProducts.length === 0 ? (
+            <div className="empty">No products found in category &quot;{selectedCategory}&quot;.</div>
           ) : (
             <div className="grid products-grid">
-              {products.map((p) => {
+              {filteredProducts.map((p) => {
                 const reservedCount = reservationMap.get(p.product_id)?.length || 0
                 const availableCount = Math.max((p.stock_quantity || 0) - reservedCount, 0)
                 const isFullyReserved = availableCount <= 0
@@ -248,6 +273,11 @@ export default function ProductsPage() {
                           <span className="product-badge">{availableCount} left</span>
                         )}
                         <span className="product-badge">{p.variant || 'Standard'}</span>
+                        {p.category && (
+                          <span className="product-badge" style={{ background: '#e0e7ff', color: '#4338ca' }}>
+                            {p.category}
+                          </span>
+                        )}
                       </div>
 
                       <div className="product-summary">
@@ -266,12 +296,12 @@ export default function ProductsPage() {
                         {isFullyReserved ? (
                           <button className="btn" disabled type="button" style={{ width: '100%', justifyContent: 'space-between' }}>
                             <span>Reserved / Sold out</span>
-                            <span>✗</span>
+                            <X size={16} />
                           </button>
                         ) : !user ? (
                           <button className="btn" type="button" style={{ width: '100%', justifyContent: 'space-between' }} onClick={(e) => { e.stopPropagation(); nav('/login?redirect=/') }}>
                             <span>Sign in to Reserve</span>
-                            <span>→</span>
+                            <ArrowRight size={16} />
                           </button>
                         ) : user.role === 'Customer' ? (
                           <button
@@ -391,12 +421,12 @@ export default function ProductsPage() {
                         {isReserved ? (
                           <button className="btn" disabled type="button" style={{ width: '100%', justifyContent: 'space-between' }}>
                             <span>Reserved</span>
-                            <span>✗</span>
+                            <X size={16} />
                           </button>
                         ) : !user ? (
                           <button className="btn" type="button" style={{ width: '100%', justifyContent: 'space-between' }} onClick={(e) => { e.stopPropagation(); nav('/login?redirect=/') }}>
                             <span>Sign in to Reserve</span>
-                            <span>→</span>
+                            <ArrowRight size={16} />
                           </button>
                         ) : (
                           <button

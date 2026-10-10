@@ -1,11 +1,14 @@
 import { useEffect, useState, useMemo } from 'react'
 import { createPortal } from 'react-dom'
+import { Trash2, RotateCcw, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import { peso, type Cube, type Product } from '../lib/types'
 import { SkeletonTable } from '../components/Skeleton'
 import { uploadPublicImage } from '../lib/storage'
 import { BUCKET_PRODUCT_IMAGES } from '../lib/supabase'
+
+import ConfirmModal from '../components/ConfirmModal'
 
 export default function OwnerProductsPage() {
   const { user } = useAuth()
@@ -16,6 +19,13 @@ export default function OwnerProductsPage() {
   const [editId, setEditId] = useState<number | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [tab, setTab] = useState<'active' | 'trash'>('active')
+  const [confirmAction, setConfirmAction] = useState<{
+    title: string
+    message: string
+    confirmText?: string
+    isDanger?: boolean
+    onConfirm: () => void
+  } | null>(null)
 
   const [form, setForm] = useState({
     product_name: '',
@@ -23,6 +33,7 @@ export default function OwnerProductsPage() {
     price: '',
     stock_quantity: '1',
     variant: '',
+    category: '',
     cube_id: '',
   })
 
@@ -61,6 +72,7 @@ export default function OwnerProductsPage() {
       price: String(p.price || 0),
       stock_quantity: String(p.stock_quantity || 1),
       variant: p.variant || '',
+      category: p.category || '',
       cube_id: String(p.cube_id || ''),
     })
     setCurrentImageUrl(p.image_url || null)
@@ -77,6 +89,7 @@ export default function OwnerProductsPage() {
       price: '',
       stock_quantity: '1',
       variant: '',
+      category: '',
       cube_id: '',
     })
     setImageFile(null)
@@ -111,6 +124,7 @@ export default function OwnerProductsPage() {
       price: Number(form.price),
       stock_quantity: Number(form.stock_quantity || 1),
       variant: form.variant ? form.variant.trim() : null,
+      category: form.category ? form.category.trim() : null,
       image_url: finalImageUrl || null,
       cube_id: Number(form.cube_id),
     }
@@ -138,16 +152,24 @@ export default function OwnerProductsPage() {
   }
 
   // Soft delete: move to trash
-  async function moveToTrash(productId: number) {
-    if (!window.confirm('Move this product to Trash? You can recover it anytime from the Trash tab.')) return
-    setBusy(true)
-    const { error } = await supabase
-      .from('products')
-      .update({ deleted_at: new Date().toISOString() })
-      .eq('product_id', productId)
-    setBusy(false)
-    if (error) return alert(error.message)
-    void load()
+  function moveToTrash(productId: number) {
+    setConfirmAction({
+      title: 'Move Product to Trash',
+      message: 'Move this product to Trash? You can recover it anytime from the Trash tab.',
+      confirmText: 'Move to Trash',
+      isDanger: true,
+      onConfirm: async () => {
+        setConfirmAction(null)
+        setBusy(true)
+        const { error } = await supabase
+          .from('products')
+          .update({ deleted_at: new Date().toISOString() })
+          .eq('product_id', productId)
+        setBusy(false)
+        if (error) return alert(error.message)
+        void load()
+      },
+    })
   }
 
   // Restore from trash
@@ -163,13 +185,21 @@ export default function OwnerProductsPage() {
   }
 
   // Permanently delete from database
-  async function permanentDelete(productId: number) {
-    if (!window.confirm('Delete this product permanently? This cannot be undone.')) return
-    setBusy(true)
-    const { error } = await supabase.from('products').delete().eq('product_id', productId)
-    setBusy(false)
-    if (error) return alert(error.message)
-    void load()
+  function permanentDelete(productId: number) {
+    setConfirmAction({
+      title: 'Delete Product Permanently',
+      message: 'Delete this product permanently? This cannot be undone.',
+      confirmText: 'Delete Permanently',
+      isDanger: true,
+      onConfirm: async () => {
+        setConfirmAction(null)
+        setBusy(true)
+        const { error } = await supabase.from('products').delete().eq('product_id', productId)
+        setBusy(false)
+        if (error) return alert(error.message)
+        void load()
+      },
+    })
   }
 
   function onImageFile(file: File | null) {
@@ -212,7 +242,7 @@ export default function OwnerProductsPage() {
           onClick={() => setTab('trash')}
           style={{ color: tab === 'trash' ? '#fff' : '#b00020' }}
         >
-          🗑️ Trash ({trashProducts.length})
+          <Trash2 size={16} /> Trash ({trashProducts.length})
         </button>
       </div>
 
@@ -299,7 +329,7 @@ export default function OwnerProductsPage() {
                           disabled={busy}
                           onClick={() => restoreProduct(p.product_id)}
                         >
-                          ♻️ Restore
+                          <RotateCcw size={14} /> Restore
                         </button>
                         <button
                           className="btn-ghost"
@@ -327,7 +357,7 @@ export default function OwnerProductsPage() {
                           disabled={busy}
                           onClick={() => moveToTrash(p.product_id)}
                         >
-                          🗑️ Trash
+                          <Trash2 size={14} /> Trash
                         </button>
                       </div>
                     )}
@@ -352,7 +382,7 @@ export default function OwnerProductsPage() {
               <div className="modal-header">
                 <h3>{editId ? 'Edit Product' : 'Add New Product'}</h3>
                 <button className="modal-close" onClick={closeModal}>
-                  ✕
+                  <X size={18} />
                 </button>
               </div>
 
@@ -407,13 +437,32 @@ export default function OwnerProductsPage() {
                   />
                 </div>
 
-                <div className="field" style={{ gridColumn: 'span 2' }}>
-                  <label>Variant / Shade / Options</label>
+                <div className="field">
+                  <label>Variant / Shade</label>
                   <input
                     value={form.variant}
                     onChange={(e) => setForm({ ...form, variant: e.target.value })}
-                    placeholder="e.g. Matte Black / Size M"
+                    placeholder="e.g. Matte Black / 01 Fair"
                   />
+                </div>
+
+                <div className="field">
+                  <label>Category (e.g. Perfumes, Dresses, Cosmetics)</label>
+                  <input
+                    list="product-categories"
+                    value={form.category}
+                    onChange={(e) => setForm({ ...form, category: e.target.value })}
+                    placeholder="Type or select category"
+                  />
+                  <datalist id="product-categories">
+                    <option value="Perfumes" />
+                    <option value="Dresses" />
+                    <option value="Cosmetics & Skincare" />
+                    <option value="Accessories" />
+                    <option value="Footwear" />
+                    <option value="Food & Treats" />
+                    <option value="Others" />
+                  </datalist>
                 </div>
 
                 <div className="field" style={{ gridColumn: 'span 2' }}>
@@ -460,6 +509,18 @@ export default function OwnerProductsPage() {
           </div>,
           document.body
         )}
+
+      {confirmAction && (
+        <ConfirmModal
+          isOpen={true}
+          title={confirmAction.title}
+          message={confirmAction.message}
+          confirmText={confirmAction.confirmText || 'Confirm'}
+          isDanger={confirmAction.isDanger ?? true}
+          onConfirm={confirmAction.onConfirm}
+          onCancel={() => setConfirmAction(null)}
+        />
+      )}
     </section>
   )
 }

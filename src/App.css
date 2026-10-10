@@ -1238,11 +1238,16 @@ main section {
 }
 
 @media print {
+  @page {
+    margin: 0.75in;
+  }
+
   body {
     background: #fff !important;
     color: #000 !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
+    margin: 0 !important;
   }
 
   .top-nav,
@@ -1253,7 +1258,10 @@ main section {
   .hero-strip,
   .promo-banner,
   .site-footer,
-  .alert {
+  .alert,
+  .page-header,
+  .split > div:first-child,
+  .split > div:last-child:not(.contract-doc) {
     display: none !important;
   }
 
@@ -1276,7 +1284,7 @@ main section {
   /* Printable Report Container */
   .print-report-container {
     display: block !important;
-    padding: 2rem 1.5rem;
+    padding: 0;
     font-family: var(--font-body), sans-serif;
     color: #000;
   }

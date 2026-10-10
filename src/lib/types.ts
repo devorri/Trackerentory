@@ -34,6 +34,7 @@ export type Product = {
   price: number
   stock_quantity: number
   variant: string | null
+  category?: string | null
   image_url: string | null
   deleted_at: string | null
   cubes?: Pick<Cube, 'cube_number' | 'type'> | null
@@ -117,3 +118,25 @@ export function addMonths(isoDate: string, months: number): string {
 export function todayISO() {
   return new Date().toISOString().slice(0, 10)
 }
+
+/** Safely parse expiry_time from PostgreSQL timestamp without timezone into proper Date */
+export function parseReservationExpiry(dateStr: string | null | undefined): Date {
+  if (!dateStr) return new Date(0)
+  if (!dateStr.endsWith('Z') && !/[+-]\d{2}(:?\d{2})?$/.test(dateStr)) {
+    return new Date(dateStr.replace(' ', 'T') + 'Z')
+  }
+  return new Date(dateStr)
+}
+
+/** Check if a pending reservation has truly expired */
+export function isReservationExpired(r: { status: string; expiry_time: string }): boolean {
+  if (r.status !== 'Pending') return false
+  return parseReservationExpiry(r.expiry_time).getTime() < Date.now()
+}
+
+/** Compute remaining hours for a reservation */
+export function getReservationHoursLeft(r: { expiry_time: string }): number {
+  const diff = parseReservationExpiry(r.expiry_time).getTime() - Date.now()
+  return Math.max(0, Math.ceil(diff / (1000 * 60 * 60)))
+}
+

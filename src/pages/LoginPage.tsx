@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Check, X } from 'lucide-react'
 import { useAuth, type AppUser } from '../context/Auth'
 import { supabaseConfigError, supabase } from '../lib/supabase'
 import { requestOtp, verifyOtp } from '../lib/otp'
@@ -19,7 +20,7 @@ function PasswordStrengthIndicator({ checks }: { checks: PasswordCheck[] }) {
     <ul className="pw-checks">
       {checks.map((c) => (
         <li key={c.label} className={c.met ? 'met' : ''}>
-          <span className="pw-check-icon">{c.met ? '✓' : '✗'}</span>
+          <span className="pw-check-icon">{c.met ? <Check size={12} /> : <X size={12} />}</span>
           {c.label}
         </li>
       ))}
@@ -47,6 +48,7 @@ export default function LoginPage() {
   const [signupStep, setSignupStep] = useState<SignupStep>('form')
   const [fullName, setFullName] = useState('')
   const [signupEmail, setSignupEmail] = useState('')
+  const [signupPhone, setSignupPhone] = useState('')
   const [signupUsername, setSignupUsername] = useState('')
   const [signupPassword, setSignupPassword] = useState('')
   const [signupConfirmPw, setSignupConfirmPw] = useState('')
@@ -172,8 +174,16 @@ export default function LoginPage() {
 
   // ── SIGN UP ──
   async function handleSignupSubmitForm() {
-    if (!fullName || !signupUsername || !signupPassword || !signupEmail) {
-      return setError('All fields are required.')
+    if (!fullName || !signupUsername || !signupPassword || !signupEmail || !signupPhone) {
+      return setError('All fields including contact number are required.')
+    }
+
+    if (/\d/.test(fullName)) {
+      return setError('Full name cannot contain numbers.')
+    }
+
+    if (signupPhone.length < 10) {
+      return setError('Please enter a valid 10-11 digit contact number.')
     }
 
     // Password strength
@@ -234,6 +244,7 @@ export default function LoginPage() {
       username: signupUsername,
       password: signupPassword,
       email: signupEmail,
+      phone_number: signupPhone,
       role,
     })
     setLoading(false)
@@ -446,12 +457,25 @@ export default function LoginPage() {
             {signupStep === 'form' && (
               <>
                 <div className="field">
-                  <label>Full name</label>
-                  <input value={fullName} onChange={(e) => setFullName(e.target.value)} />
+                  <label>Full name (letters only)</label>
+                  <input
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value.replace(/[0-9]/g, ''))}
+                    placeholder="e.g. Maria Santos"
+                  />
                 </div>
                 <div className="field">
                   <label>Email</label>
                   <input type="email" value={signupEmail} onChange={(e) => setSignupEmail(e.target.value)} placeholder="your@email.com" />
+                </div>
+                <div className="field">
+                  <label>Contact Number (numbers only)</label>
+                  <input
+                    type="tel"
+                    value={signupPhone}
+                    onChange={(e) => setSignupPhone(e.target.value.replace(/\D/g, '').slice(0, 11))}
+                    placeholder="e.g. 09171234567"
+                  />
                 </div>
                 <div className="field">
                   <label>Role</label>
@@ -482,7 +506,9 @@ export default function LoginPage() {
                   <p style={{ color: '#dc2626', fontSize: '0.82rem', margin: '-0.3rem 0 0.5rem' }}>Passwords do not match.</p>
                 )}
                 {signupConfirmPw && signupPassword === signupConfirmPw && signupConfirmPw.length > 0 && (
-                  <p style={{ color: '#16a34a', fontSize: '0.82rem', margin: '-0.3rem 0 0.5rem' }}>✓ Passwords match.</p>
+                  <p style={{ color: '#16a34a', fontSize: '0.82rem', margin: '-0.3rem 0 0.5rem', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <Check size={14} /> Passwords match.
+                  </p>
                 )}
                 <div className="row" style={{ marginTop: '0.35rem' }}>
                   <button className="btn" type="button" onClick={handleSignupSubmitForm} disabled={loading}>
@@ -615,7 +641,9 @@ export default function LoginPage() {
                   <p style={{ color: '#dc2626', fontSize: '0.82rem', margin: '-0.3rem 0 0.5rem' }}>Passwords do not match.</p>
                 )}
                 {newPasswordConfirm && newPassword === newPasswordConfirm && newPasswordConfirm.length > 0 && (
-                  <p style={{ color: '#16a34a', fontSize: '0.82rem', margin: '-0.3rem 0 0.5rem' }}>✓ Passwords match.</p>
+                  <p style={{ color: '#16a34a', fontSize: '0.82rem', margin: '-0.3rem 0 0.5rem', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <Check size={14} /> Passwords match.
+                  </p>
                 )}
                 <div className="row" style={{ marginTop: '0.35rem' }}>
                   <button className="btn" type="button" onClick={handleForgotResetPassword} disabled={loading}>

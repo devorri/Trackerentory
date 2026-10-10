@@ -1,11 +1,14 @@
 import { useEffect, useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
+import { Trash2, RotateCcw, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import { type Cube, peso } from '../lib/types'
 import { SkeletonTable } from '../components/Skeleton'
 import { uploadPublicImage } from '../lib/storage'
 import { BUCKET_PRODUCT_IMAGES } from '../lib/supabase'
+
+import ConfirmModal from '../components/ConfirmModal'
 
 type Tab = 'Display' | 'Pick-up' | 'Trash'
 
@@ -26,6 +29,13 @@ export default function CubeManagement() {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [currentTab, setCurrentTab] = useState<Tab>('Display')
+  const [confirmAction, setConfirmAction] = useState<{
+    title: string
+    message: string
+    confirmText?: string
+    isDanger?: boolean
+    onConfirm: () => void
+  } | null>(null)
 
   // Create form
   const [form, setForm] = useState(initialForm)
@@ -144,14 +154,22 @@ export default function CubeManagement() {
   }
 
   // Soft delete: move to trash
-  async function moveToTrash(cube_id: number) {
-    if (!window.confirm('Move this cube to Trash?')) return
-    const { error } = await supabase
-      .from('cubes')
-      .update({ deleted_at: new Date().toISOString() })
-      .eq('cube_id', cube_id)
-    if (error) return alert(error.message)
-    await loadCubes()
+  function moveToTrash(cube_id: number) {
+    setConfirmAction({
+      title: 'Move Cube to Trash',
+      message: 'Are you sure you want to move this cube to Trash?',
+      confirmText: 'Move to Trash',
+      isDanger: true,
+      onConfirm: async () => {
+        setConfirmAction(null)
+        const { error } = await supabase
+          .from('cubes')
+          .update({ deleted_at: new Date().toISOString() })
+          .eq('cube_id', cube_id)
+        if (error) return alert(error.message)
+        await loadCubes()
+      },
+    })
   }
 
   // Restore from trash
@@ -165,11 +183,19 @@ export default function CubeManagement() {
   }
 
   // Permanent delete
-  async function permanentDelete(cube_id: number) {
-    if (!window.confirm('Permanently delete this cube? This cannot be undone.')) return
-    const { error } = await supabase.from('cubes').delete().eq('cube_id', cube_id)
-    if (error) return alert(error.message)
-    await loadCubes()
+  function permanentDelete(cube_id: number) {
+    setConfirmAction({
+      title: 'Delete Cube Permanently',
+      message: 'Permanently delete this cube? This cannot be undone.',
+      confirmText: 'Delete Permanently',
+      isDanger: true,
+      onConfirm: async () => {
+        setConfirmAction(null)
+        const { error } = await supabase.from('cubes').delete().eq('cube_id', cube_id)
+        if (error) return alert(error.message)
+        await loadCubes()
+      },
+    })
   }
 
   if (!user || (user.role !== 'Owner' && user.role !== 'Staff')) {
@@ -324,7 +350,7 @@ export default function CubeManagement() {
           onClick={() => setCurrentTab('Trash')}
           style={{ color: currentTab === 'Trash' ? '#fff' : '#b00020' }}
         >
-          🗑️ Trash ({trashCubes.length})
+          <Trash2 size={16} /> Trash ({trashCubes.length})
         </button>
       </div>
 
@@ -378,7 +404,7 @@ export default function CubeManagement() {
                     {currentTab === 'Trash' ? (
                       <div className="row" style={{ justifyContent: 'flex-end', gap: '0.5rem' }}>
                         <button className="btn-ghost" type="button" onClick={() => restoreFromTrash(c.cube_id)}>
-                          ♻️ Restore
+                          <RotateCcw size={14} /> Restore
                         </button>
                         <button
                           className="btn-ghost"
@@ -400,7 +426,7 @@ export default function CubeManagement() {
                           type="button"
                           onClick={() => moveToTrash(c.cube_id)}
                         >
-                          🗑️ Trash
+                          <Trash2 size={14} /> Trash
                         </button>
                       </div>
                     )}
@@ -423,7 +449,7 @@ export default function CubeManagement() {
           <div className="modal-card" style={{ maxWidth: 540 }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Edit Cube #{editForm.cube_number}</h3>
-              <button className="modal-close" onClick={() => setEditId(null)}>✕</button>
+              <button className="modal-close" onClick={() => setEditId(null)}><X size={18} /></button>
             </div>
 
             <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '1rem' }}>
@@ -523,6 +549,18 @@ export default function CubeManagement() {
             </div>
           </div>
         </div>
+      )}
+
+      {confirmAction && (
+        <ConfirmModal
+          isOpen={true}
+          title={confirmAction.title}
+          message={confirmAction.message}
+          confirmText={confirmAction.confirmText || 'Confirm'}
+          isDanger={confirmAction.isDanger ?? true}
+          onConfirm={confirmAction.onConfirm}
+          onCancel={() => setConfirmAction(null)}
+        />
       )}
     </section>
   )

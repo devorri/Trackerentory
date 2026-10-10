@@ -16,8 +16,10 @@ import TermsPage from './pages/TermsPage'
 import PrivacyPage from './pages/PrivacyPage'
 import { AuthProvider, useAuth } from './context/Auth'
 import { useEffect, useState } from 'react'
+import { BarChart3, Package, Store, CalendarCheck, Tag, Box, FileText, Users, Menu, X } from 'lucide-react'
 import { supabase } from './lib/supabase'
 import { daysUntil, type Contract } from './lib/types'
+import ConfirmModal from './components/ConfirmModal'
 import { cancelExpiredReservations, expireContracts } from './lib/maintenance'
 
 function App() {
@@ -33,6 +35,7 @@ function InnerApp() {
   const [notices, setNotices] = useState<string[]>([])
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [adminSidebarOpen, setAdminSidebarOpen] = useState(false)
+  const [showSignOutConfirm, setShowSignOutConfirm] = useState(false)
 
   useEffect(() => {
     void cancelExpiredReservations()
@@ -66,8 +69,9 @@ function InnerApp() {
 
   const role = user?.role
   const isAdmin = role === 'Owner' || role === 'Staff'
-  const confirmSignOut = () => {
-    if (window.confirm('Are you sure you want to sign out?')) signOut()
+  const handleSignOut = () => {
+    setShowSignOutConfirm(false)
+    signOut()
   }
 
   // ════════════ ADMIN / OWNER / STAFF LEFT SIDEBAR LAYOUT ════════════
@@ -82,7 +86,7 @@ function InnerApp() {
             onClick={() => setAdminSidebarOpen(!adminSidebarOpen)}
             aria-label="Toggle navigation menu"
           >
-            ☰
+            {adminSidebarOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
           <div className="admin-sidebar-brand" style={{ padding: 0 }}>
             <img src="/TrackErentory.svg" alt="TrackErentory" className="brand-logo" />
@@ -117,7 +121,8 @@ function InnerApp() {
                 className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
                 onClick={() => setAdminSidebarOpen(false)}
               >
-                📊 Sales & Reports
+                <BarChart3 size={18} />
+                <span>Sales & Reports</span>
               </NavLink>
             )}
             <NavLink
@@ -125,35 +130,40 @@ function InnerApp() {
               className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
               onClick={() => setAdminSidebarOpen(false)}
             >
-              📦 Pickup Tracking
+              <Package size={18} />
+              <span>Pickup Tracking</span>
             </NavLink>
             <NavLink
               to="/display-tracking"
               className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
               onClick={() => setAdminSidebarOpen(false)}
             >
-              🏬 Display Tracking
+              <Store size={18} />
+              <span>Display Tracking</span>
             </NavLink>
             <NavLink
               to="/reservations"
               className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
               onClick={() => setAdminSidebarOpen(false)}
             >
-              📋 Reservations
+              <CalendarCheck size={18} />
+              <span>Reservations</span>
             </NavLink>
             <NavLink
               to="/owner-products"
               className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
               onClick={() => setAdminSidebarOpen(false)}
             >
-              🏷️ Products Management
+              <Tag size={18} />
+              <span>Products Management</span>
             </NavLink>
             <NavLink
               to="/cubes"
               className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
               onClick={() => setAdminSidebarOpen(false)}
             >
-              🧊 Cube Management
+              <Box size={18} />
+              <span>Cube Management</span>
             </NavLink>
             {role === 'Owner' && (
               <NavLink
@@ -161,7 +171,8 @@ function InnerApp() {
                 className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
                 onClick={() => setAdminSidebarOpen(false)}
               >
-                📜 Contracts
+                <FileText size={18} />
+                <span>Contracts</span>
               </NavLink>
             )}
             {role === 'Owner' && (
@@ -170,7 +181,8 @@ function InnerApp() {
                 className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
                 onClick={() => setAdminSidebarOpen(false)}
               >
-                👥 Staff Accounts
+                <Users size={18} />
+                <span>Staff Accounts</span>
               </NavLink>
             )}
           </div>
@@ -184,7 +196,7 @@ function InnerApp() {
               className="btn-ghost"
               style={{ width: '100%', justifyContent: 'center' }}
               type="button"
-              onClick={confirmSignOut}
+              onClick={() => setShowSignOutConfirm(true)}
             >
               Sign Out
             </button>
@@ -213,6 +225,17 @@ function InnerApp() {
             <Route path="*" element={<Navigate to={role === 'Owner' ? '/owner' : '/pickup'} replace />} />
           </Routes>
         </main>
+
+        <ConfirmModal
+          isOpen={showSignOutConfirm}
+          title="Sign Out"
+          message="Are you sure you want to sign out of your account?"
+          confirmText="Sign Out"
+          cancelText="Stay Signed In"
+          isDanger={true}
+          onConfirm={handleSignOut}
+          onCancel={() => setShowSignOutConfirm(false)}
+        />
       </div>
     )
   }
@@ -233,7 +256,7 @@ function InnerApp() {
           onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
           aria-label="Toggle Navigation"
         >
-          {mobileMenuOpen ? '✕' : '☰'}
+          {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
         </button>
 
         <div className={`nav-links ${mobileMenuOpen ? 'mobile-open' : ''}`}>
@@ -253,7 +276,7 @@ function InnerApp() {
                 <strong>{user.full_name}</strong>
                 <span>{user.role}</span>
               </div>
-              <button className="btn-ghost" type="button" onClick={confirmSignOut}>Sign out</button>
+              <button className="btn-ghost" type="button" onClick={() => setShowSignOutConfirm(true)}>Sign out</button>
             </>
           ) : (
             <Link className="btn" to="/login">Sign in</Link>
@@ -323,6 +346,17 @@ function InnerApp() {
           <div>Smart Inventory & Cube Rental System</div>
         </div>
       </footer>
+
+      <ConfirmModal
+        isOpen={showSignOutConfirm}
+        title="Sign Out"
+        message="Are you sure you want to sign out of your account?"
+        confirmText="Sign Out"
+        cancelText="Stay Signed In"
+        isDanger={true}
+        onConfirm={handleSignOut}
+        onCancel={() => setShowSignOutConfirm(false)}
+      />
     </div>
   )
 }

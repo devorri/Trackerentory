@@ -1,8 +1,9 @@
 import { useEffect, useState, useMemo } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
+import { Zap, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
-import { peso, type Product, type Transaction, type Cube, type UserRow } from '../lib/types'
+import { peso, type Product, type Transaction, type Cube, type UserRow, type Reservation, isReservationExpired } from '../lib/types'
 import { uploadPublicImage } from '../lib/storage'
 import { BUCKET_DOCUMENTS } from '../lib/supabase'
 import { SkeletonTable } from '../components/Skeleton'
@@ -44,10 +45,13 @@ type Props = {
 
 export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: Props) {
   const { user } = useAuth()
+  const [searchParams] = useSearchParams()
   const [rows, setRows] = useState<Transaction[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [cubes, setCubes] = useState<Cube[]>([])
   const [renters, setRenters] = useState<UserRow[]>([])
+  const [reservations, setReservations] = useState<Reservation[]>([])
+  const [selectedReservationId, setSelectedReservationId] = useState<string>('')
   const [form, setForm] = useState<FormState>(emptyForm)
   const [filter, setFilter] = useState<'All' | 'Display' | 'Pick-up'>(defaultFilter)
   const [busy, setBusy] = useState(false)
@@ -62,7 +66,7 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
 
   async function load() {
     setLoading(true)
-    const [tRes, pRes, cRes, rRes] = await Promise.all([
+    const [tRes, pRes, cRes, rRes, resRes] = await Promise.all([
       supabase
         .from('transactions')
         .select('*, products(*, cubes(cube_number, type)), cubes(cube_number, type), users!processed_by(full_name, role)')
@@ -70,15 +74,50 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
       supabase.from('products').select('*, cubes(cube_number, type)').order('product_name'),
       supabase.from('cubes').select('*').order('cube_number'),
       supabase.from('users').select('*').eq('role', 'Renter').order('full_name'),
+      supabase
+        .from('reservations')
+        .select('*, products(*, cubes(cube_number, type)), cubes(cube_number, type), customer:users!customer_id(full_name, email, phone_number)')
+        .in('status', ['Pending', 'Confirmed'])
+        .order('expiry_time', { ascending: false }),
     ])
     setLoading(false)
     if (!tRes.error) setRows((tRes.data || []) as Transaction[])
     if (!pRes.error) setProducts((pRes.data || []) as Product[])
     if (!cRes.error) setCubes((cRes.data || []) as Cube[])
     if (!rRes.error) setRenters((rRes.data || []) as UserRow[])
+    if (!resRes.error) {
+      const resList = (resRes.data || []) as Reservation[]
+      setReservations(resList)
+
+      // Handle claimId from query parameter
+      const queryClaimId = searchParams.get('claimId')
+      if (queryClaimId) {
+        const found = resList.find((r) => String(r.reservation_id) === queryClaimId)
+        if (found) {
+          applyReservationToForm(found)
+        }
+      }
+    }
   }
 
-  useEffect(() => { void load() }, [])
+  function applyReservationToForm(r: Reservation) {
+    setSelectedReservationId(String(r.reservation_id))
+    const p = r.products
+    const prodName = p ? `${p.product_name}${p.variant ? ` (${p.variant})` : ''}` : ''
+    setForm((prev) => ({
+      ...prev,
+      buyer_name: r.customer?.full_name || prev.buyer_name,
+      product_id: p?.product_id ? String(p.product_id) : prev.product_id,
+      product_name: prodName || prev.product_name,
+      cube_id: p?.cube_id ? String(p.cube_id) : r.cube_id ? String(r.cube_id) : prev.cube_id,
+      renter_id: p?.renter_id ? String(p.renter_id) : prev.renter_id,
+      quantity: '1',
+      pickup_status: 'Picked-up',
+      payment_status: 'Paid',
+    }))
+  }
+
+  useEffect(() => { void load() }, [searchParams])
 
   const renterMap = useMemo(() => {
     const map = new Map<number, string>()
@@ -161,6 +200,16 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
         await supabase.from('products').update({ stock_quantity: Math.max(0, prod.stock_quantity - quantity) }).eq('product_id', prod.product_id)
       }
     }
+
+    // Automatically mark customer reservation as Confirmed / Claimed
+    if (selectedReservationId) {
+      await supabase
+        .from('reservations')
+        .update({ status: 'Confirmed' })
+        .eq('reservation_id', Number(selectedReservationId))
+      setSelectedReservationId('')
+    }
+
     setForm(emptyForm)
     void load()
   }
@@ -209,24 +258,39 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
         </div>
       </div>
 
-      <div className="row no-print" style={{ marginBottom: 16 }}>
-        {(['All', 'Pick-up', 'Display'] as const).map((f) => (
-          <button
-            key={f}
-            type="button"
-            className={filter === f ? 'btn' : 'btn-ghost'}
-            onClick={() => setFilter(f)}
-          >
-            {f === 'All' ? 'All Transactions' : f === 'Pick-up' ? 'Pick-up Tracking' : 'Display Tracking'}
-          </button>
-        ))}
-      </div>
-
       {/* NEW TRANSACTION FORM */}
       <div className="panel no-print" style={{ marginBottom: '2rem' }}>
         <h2 style={{ marginTop: 0 }}>Record New Transaction / Hand-over</h2>
         <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
           
+          {/* RESERVATION QUICK SELECTOR */}
+          {reservations.length > 0 && (
+            <div className="field" style={{ gridColumn: '1 / -1', background: '#f8fafc', padding: '0.85rem', borderRadius: 8, border: '1px solid #cbd5e1' }}>
+              <label style={{ fontWeight: 700, color: '#1e293b', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <Zap size={16} color="#0284c7" /> Auto-Fill from Customer Reservation
+              </label>
+              <select
+                value={selectedReservationId}
+                onChange={(e) => {
+                  const rid = e.target.value
+                  setSelectedReservationId(rid)
+                  if (!rid) return
+                  const found = reservations.find((r) => String(r.reservation_id) === rid)
+                  if (found) applyReservationToForm(found)
+                }}
+              >
+                <option value="">Select customer reservation (auto-fills Buyer Name, Product, Cube, Renter)…</option>
+                {reservations
+                  .filter((r) => !isReservationExpired(r))
+                  .map((r) => (
+                    <option key={r.reservation_id} value={r.reservation_id}>
+                      {r.customer?.full_name || 'Customer'} — {r.products?.product_name || (r.cube_id ? `Cube #${r.cubes?.cube_number}` : 'Product')} {r.products?.variant ? `(${r.products.variant})` : ''} [{r.status}]
+                    </option>
+                  ))}
+              </select>
+            </div>
+          )}
+
           {/* Renter selector */}
           <div className="field">
             <label>Renter Who Left It</label>
@@ -326,17 +390,20 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
             </select>
           </div>
 
-          <div className="field">
-            <label>Receipt Proof (Online Payment)</label>
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => void onReceiptFile(e.target.files?.[0] || null, (url) => setForm({ ...form, receipt_image_url: url }))}
-            />
-          </div>
+          {/* Conditional receipt upload for Online payments only */}
+          {form.payment_method === 'Online' && (
+            <div className="field">
+              <label>Receipt Proof (Online Payment)</label>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => void onReceiptFile(e.target.files?.[0] || null, (url) => setForm({ ...form, receipt_image_url: url }))}
+              />
+            </div>
+          )}
         </div>
 
-        {form.receipt_image_url && (
+        {form.payment_method === 'Online' && form.receipt_image_url && (
           <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
             <img src={form.receipt_image_url} alt="Receipt Preview" style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 6, border: '1px solid #ddd' }} />
             <span style={{ fontSize: '0.8rem', color: '#666' }}>Receipt attached</span>
@@ -458,19 +525,14 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                             <option value="Pending">Payment: Pending</option>
                             <option value="Paid">Payment: Paid</option>
                           </select>
-                          <select
-                            defaultValue={t.payment_method || 'Cash'}
-                            onChange={(e) => void updateRow(t, { payment_method: e.target.value as 'Cash' | 'Online' })}
-                          >
-                            <option value="Cash">Process: Cash</option>
-                            <option value="Online">Process: Online</option>
-                          </select>
-                          <input
-                            type="file"
-                            accept="image/*"
-                            aria-label="Attach online payment receipt"
-                            onChange={(e) => void onReceiptFile(e.target.files?.[0] || null, (url) => void updateRow(t, { receipt_image_url: url, payment_method: 'Online' }))}
-                          />
+                          {t.payment_method === 'Online' && (
+                            <input
+                              type="file"
+                              accept="image/*"
+                              aria-label="Attach online payment receipt"
+                              onChange={(e) => void onReceiptFile(e.target.files?.[0] || null, (url) => void updateRow(t, { receipt_image_url: url, payment_method: 'Online' }))}
+                            />
+                          )}
                           <select
                             defaultValue={t.pickup_status}
                             onChange={(e) => void updateRow(t, { pickup_status: e.target.value as 'Waiting' | 'Picked-up' })}
@@ -501,7 +563,7 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
           <div className="modal-card" style={{ maxWidth: 600, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Payment Receipt Proof</h3>
-              <button className="modal-close" onClick={() => setPreviewReceipt(null)}>✕</button>
+              <button className="modal-close" onClick={() => setPreviewReceipt(null)}><X size={18} /></button>
             </div>
             <img src={previewReceipt} alt="Receipt proof" style={{ maxWidth: '100%', maxHeight: '75vh', objectFit: 'contain', marginTop: 12 }} />
           </div>

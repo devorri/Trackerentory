@@ -1,39 +1,60 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Printer, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
-import { peso, type Contract, type Transaction, type Product } from '../lib/types'
+import { peso, type Contract, type Transaction, type Product, type Reservation, isReservationExpired, getReservationHoursLeft, parseReservationExpiry } from '../lib/types'
 import { SkeletonStat, SkeletonTable } from '../components/Skeleton'
 
 type ReportType = 'display' | 'pickup' | 'rental'
+type DateFilterMode = 'monthly' | 'daily' | 'yearly' | 'custom'
 
 export default function OwnerDashboard() {
   const { user } = useAuth()
   const [contracts, setContracts] = useState<Contract[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [renters, setRenters] = useState<{ user_id: number; full_name: string }[]>([])
+  const [reservations, setReservations] = useState<Reservation[]>([])
   const [loading, setLoading] = useState(false)
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7))
 
   // Print Dialog State
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false)
   const [printReportType, setPrintReportType] = useState<ReportType>('display')
+  const [printDateMode, setPrintDateMode] = useState<DateFilterMode>('monthly')
   const [printMonth, setPrintMonth] = useState(() => new Date().toISOString().slice(0, 7))
+  const [printDaily, setPrintDaily] = useState(() => new Date().toISOString().slice(0, 10))
+  const [printYearly, setPrintYearly] = useState(() => String(new Date().getFullYear()))
+  const [printStartDate, setPrintStartDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [printEndDate, setPrintEndDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [printRenterId, setPrintRenterId] = useState<string>('all')
 
-  useEffect(() => {
+  function refreshData() {
     setLoading(true)
     void Promise.all([
       supabase.from('contracts').select('*, cubes(*), users!renter_id(user_id, full_name)'),
       supabase.from('transactions').select('*, products(*, cubes(cube_number, type)), cubes(cube_number, type), users!processed_by(full_name, role)'),
       supabase.from('users').select('user_id, full_name').eq('role', 'Renter').order('full_name'),
-    ]).then(([c, t, r]) => {
+      supabase.from('reservations').select('*, products(*, cubes(cube_number, type)), cubes(cube_number, type), customer:users!customer_id(full_name, email, phone_number)').order('expiry_time', { ascending: false }).limit(20),
+    ]).then(([c, t, r, res]) => {
       setLoading(false)
       if (!c.error) setContracts((c.data || []) as Contract[])
       if (!t.error) setTransactions((t.data || []) as Transaction[])
       if (!r.error) setRenters((r.data || []) as { user_id: number; full_name: string }[])
+      if (!res.error) setReservations((res.data || []) as Reservation[])
     })
+  }
+
+  useEffect(() => {
+    refreshData()
   }, [])
+
+  async function confirmReservation(id: number) {
+    const { error } = await supabase.from('reservations').update({ status: 'Confirmed' }).eq('reservation_id', id)
+    if (error) return alert('Failed to confirm: ' + error.message)
+    alert('Reservation confirmed!')
+    refreshData()
+  }
 
   // Map of renter_id to full_name from contracts
   const renterMap = useMemo(() => {
@@ -119,10 +140,21 @@ export default function OwnerDashboard() {
       return { list: filtered, total }
     }
 
+    // Match transaction date according to selected date mode
+    const matchesDate = (dateStr: string) => {
+      if (!dateStr) return false
+      const d = String(dateStr).slice(0, 10)
+      if (printDateMode === 'daily') return d === printDaily
+      if (printDateMode === 'monthly') return d.slice(0, 7) === printMonth
+      if (printDateMode === 'yearly') return d.slice(0, 4) === printYearly
+      if (printDateMode === 'custom') return d >= printStartDate && d <= printEndDate
+      return true
+    }
+
     // Display or Pick-up report
     const targetType = printReportType === 'display' ? 'Display' : 'Pick-up'
     let list = transactions.filter((t) => {
-      const dateMatch = String(t.transaction_date || '').startsWith(printMonth)
+      const dateMatch = matchesDate(t.transaction_date)
       const typeMatch = (t.products?.cubes?.type || t.cubes?.type) === targetType
       return dateMatch && typeMatch
     })
@@ -143,7 +175,16 @@ export default function OwnerDashboard() {
     }, 0)
 
     return { list, total }
-  }, [transactions, rentalSales, printReportType, printMonth, printRenterId])
+  }, [transactions, rentalSales, printReportType, printDateMode, printMonth, printDaily, printYearly, printStartDate, printEndDate, printRenterId])
+
+  const printPeriodLabel = useMemo(() => {
+    if (printReportType === 'rental') return 'Active Rental Contracts'
+    if (printDateMode === 'daily') return `Daily: ${new Date(printDaily).toLocaleDateString('en-PH', { dateStyle: 'long' })}`
+    if (printDateMode === 'monthly') return `Monthly: ${new Date(`${printMonth}-01`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`
+    if (printDateMode === 'yearly') return `Yearly: ${printYearly}`
+    if (printDateMode === 'custom') return `Custom Date Range: ${printStartDate} to ${printEndDate}`
+    return printMonth
+  }, [printReportType, printDateMode, printDaily, printMonth, printYearly, printStartDate, printEndDate])
 
   function buildPrintableReportHtml() {
     const reportTitle = printReportType === 'display'
@@ -406,7 +447,7 @@ export default function OwnerDashboard() {
           </div>
           <div className="row">
             <button className="btn" type="button" onClick={() => setIsPrintModalOpen(true)}>
-              🖨️ Print report
+              <Printer size={16} /> Print Report
             </button>
           </div>
         </div>
@@ -480,7 +521,7 @@ export default function OwnerDashboard() {
 
             <h2>Display / Pick-up sales ({month})</h2>
             <p className="muted">Use this to match renter records before releasing money.</p>
-            <div className="table-wrap">
+            <div className="table-wrap" style={{ marginBottom: '2.5rem' }}>
               <table className="table">
                 <thead>
                   <tr>
@@ -525,7 +566,87 @@ export default function OwnerDashboard() {
                 </tfoot>
               </table>
             </div>
-            {monthTx.length === 0 && <div className="empty">No transactions this month.</div>}
+            {monthTx.length === 0 && <div className="empty" style={{ marginBottom: '2.5rem' }}>No transactions this month.</div>}
+
+            {/* ════════════ PENDING CUSTOMER RESERVATIONS ════════════ */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <div>
+                <h2 style={{ margin: 0 }}>Customer Product Reservations</h2>
+                <p className="muted" style={{ margin: '0.2rem 0 0' }}>Review and confirm pending customer reservations directly from the Owner dashboard.</p>
+              </div>
+              <Link to="/reservations" className="btn-ghost" style={{ fontSize: '0.82rem' }}>
+                View All Reservations →
+              </Link>
+            </div>
+            <div className="table-wrap" style={{ marginBottom: '2.5rem' }}>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Product / Cube</th>
+                    <th>Customer</th>
+                    <th>Cube No.</th>
+                    <th>Price</th>
+                    <th>Status</th>
+                    <th>Expires</th>
+                    <th style={{ textAlign: 'right' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reservations.map((r) => {
+                    const expired = isReservationExpired(r)
+                    const hoursLeft = getReservationHoursLeft(r)
+                    const isPending = r.status === 'Pending' && !expired
+                    return (
+                      <tr key={r.reservation_id}>
+                        <td>
+                          <strong>{r.products?.product_name || (r.cube_id ? `Cube #${r.cubes?.cube_number}` : 'Product')}</strong>
+                          {r.products?.variant && <div className="muted" style={{ fontSize: '0.75rem' }}>{r.products.variant}</div>}
+                        </td>
+                        <td>
+                          {r.customer?.full_name || '—'}
+                          {r.customer?.phone_number && <div className="muted" style={{ fontSize: '0.75rem' }}>{r.customer.phone_number}</div>}
+                        </td>
+                        <td>{r.products?.cubes?.cube_number || r.cubes?.cube_number || '—'}</td>
+                        <td>{r.products ? peso(r.products.price) : '—'}</td>
+                        <td>
+                          <span className={`badge ${r.status === 'Cancelled' || expired ? 'bad' : r.status === 'Confirmed' ? 'ok' : 'warn'}`}>
+                            {expired ? 'Expired' : r.status}
+                          </span>
+                        </td>
+                        <td>
+                          {parseReservationExpiry(r.expiry_time).toLocaleString('en-PH')}
+                          <div className="muted" style={{ fontSize: '0.75rem' }}>
+                            {expired ? '(Expired)' : `${hoursLeft}h left`}
+                          </div>
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          <div className="row" style={{ justifyContent: 'flex-end', gap: '0.4rem' }}>
+                            {isPending && (
+                              <button
+                                className="btn"
+                                type="button"
+                                style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+                                onClick={() => confirmReservation(r.reservation_id)}
+                              >
+                                Confirm
+                              </button>
+                            )}
+                            <Link
+                              to={`/pickup?claimId=${r.reservation_id}`}
+                              className="btn-ghost"
+                              style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+                            >
+                              Process in Cashier
+                            </Link>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {reservations.length === 0 && <div className="empty" style={{ marginBottom: '2.5rem' }}>No customer reservations found.</div>}
           </>
         )}
       </div>
@@ -536,7 +657,7 @@ export default function OwnerDashboard() {
           <div className="modal-card" style={{ maxWidth: 540 }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Generate & Print Report</h3>
-              <button className="modal-close" onClick={() => setIsPrintModalOpen(false)}>✕</button>
+              <button className="modal-close" onClick={() => setIsPrintModalOpen(false)}><X size={18} /></button>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
@@ -553,14 +674,76 @@ export default function OwnerDashboard() {
               </div>
 
               {printReportType !== 'rental' && (
-                <div className="field">
-                  <label>Select Month</label>
-                  <input
-                    type="month"
-                    value={printMonth}
-                    onChange={(e) => setPrintMonth(e.target.value)}
-                  />
-                </div>
+                <>
+                  <div className="field">
+                    <label>Date Filter Period</label>
+                    <select
+                      value={printDateMode}
+                      onChange={(e) => setPrintDateMode(e.target.value as DateFilterMode)}
+                    >
+                      <option value="monthly">Monthly (e.g. 2026-10)</option>
+                      <option value="daily">Daily (Specific single date)</option>
+                      <option value="yearly">Yearly (Full calendar year)</option>
+                      <option value="custom">Custom Date Range (Start to End date)</option>
+                    </select>
+                  </div>
+
+                  {printDateMode === 'monthly' && (
+                    <div className="field">
+                      <label>Select Month</label>
+                      <input
+                        type="month"
+                        value={printMonth}
+                        onChange={(e) => setPrintMonth(e.target.value)}
+                      />
+                    </div>
+                  )}
+
+                  {printDateMode === 'daily' && (
+                    <div className="field">
+                      <label>Select Date</label>
+                      <input
+                        type="date"
+                        value={printDaily}
+                        onChange={(e) => setPrintDaily(e.target.value)}
+                      />
+                    </div>
+                  )}
+
+                  {printDateMode === 'yearly' && (
+                    <div className="field">
+                      <label>Select Year</label>
+                      <input
+                        type="number"
+                        min="2020"
+                        max="2035"
+                        value={printYearly}
+                        onChange={(e) => setPrintYearly(e.target.value)}
+                      />
+                    </div>
+                  )}
+
+                  {printDateMode === 'custom' && (
+                    <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                      <div className="field">
+                        <label>Start Date</label>
+                        <input
+                          type="date"
+                          value={printStartDate}
+                          onChange={(e) => setPrintStartDate(e.target.value)}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>End Date</label>
+                        <input
+                          type="date"
+                          value={printEndDate}
+                          onChange={(e) => setPrintEndDate(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
 
               <div className="field">
@@ -588,7 +771,7 @@ export default function OwnerDashboard() {
                   Cancel
                 </button>
                 <button className="btn" type="button" onClick={handleTriggerPrint}>
-                  🖨️ Open PDF / Print Preview
+                  <Printer size={16} /> Open PDF / Print Preview
                 </button>
               </div>
             </div>
@@ -606,7 +789,7 @@ export default function OwnerDashboard() {
             {printReportType === 'rental' && 'Monthly Rental Payment Report'}
           </h3>
           <div className="print-report-meta">
-            <span><strong>Period:</strong> {printReportType === 'rental' ? 'Active Contracts' : monthLabel}</span>
+            <span><strong>Period:</strong> {printPeriodLabel}</span>
             <span><strong>Renter:</strong> {selectedRenterName}</span>
             <span><strong>Date Generated:</strong> {new Date().toLocaleDateString('en-PH')}</span>
           </div>
@@ -677,7 +860,7 @@ export default function OwnerDashboard() {
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={7}><strong>Overall Total ({printMonth})</strong></td>
+                <td colSpan={7}><strong>Overall Total ({printPeriodLabel})</strong></td>
                 <td style={{ textAlign: 'right' }}><strong>{peso(printFilteredData.total)}</strong></td>
               </tr>
             </tfoot>
