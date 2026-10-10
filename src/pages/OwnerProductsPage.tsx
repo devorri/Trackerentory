@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react'
 import { createPortal } from 'react-dom'
-import { Trash2, RotateCcw, X } from 'lucide-react'
+import { Trash2, RotateCcw, X, ArrowUpDown } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import { peso, type Cube, type Product } from '../lib/types'
@@ -213,7 +213,39 @@ export default function OwnerProductsPage() {
     reader.readAsDataURL(file)
   }
 
-  const displayedList = tab === 'active' ? activeProducts : trashProducts
+  const [sortConfig, setSortConfig] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'name', dir: 'asc' })
+
+  function renderSortIndicator(col: string) {
+    if (sortConfig.col !== col) {
+      return <ArrowUpDown size={12} style={{ opacity: 0.35, marginLeft: 4, verticalAlign: 'middle', display: 'inline' }} />
+    }
+    return <span style={{ marginLeft: 4, fontSize: '0.72rem' }}>{sortConfig.dir === 'asc' ? '▲' : '▼'}</span>
+  }
+
+  function toggleSort(col: string) {
+    if (sortConfig.col === col) {
+      setSortConfig({ col, dir: sortConfig.dir === 'asc' ? 'desc' : 'asc' })
+    } else {
+      setSortConfig({ col, dir: 'asc' })
+    }
+  }
+
+  const displayedList = useMemo(() => {
+    const list = [...(tab === 'active' ? activeProducts : trashProducts)]
+    const { col, dir } = sortConfig
+    list.sort((a, b) => {
+      let vA: any = ''
+      let vB: any = ''
+      if (col === 'name') { vA = a.product_name; vB = b.product_name }
+      else if (col === 'cube') { vA = a.cubes?.cube_number || ''; vB = b.cubes?.cube_number || '' }
+      else if (col === 'price') { vA = Number(a.price || 0); vB = Number(b.price || 0) }
+      else if (col === 'stock') { vA = Number(a.stock_quantity || 0); vB = Number(b.stock_quantity || 0) }
+      if (vA < vB) return dir === 'asc' ? -1 : 1
+      if (vA > vB) return dir === 'asc' ? 1 : -1
+      return 0
+    })
+    return list
+  }, [tab, activeProducts, trashProducts, sortConfig])
 
   return (
     <section>
@@ -255,10 +287,18 @@ export default function OwnerProductsPage() {
             <thead>
               <tr>
                 <th style={{ width: 80 }}>Image</th>
-                <th>Product Name</th>
-                <th>Assigned Cube</th>
-                <th>Price</th>
-                <th>Stock</th>
+                <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('name')}>
+                  Product Name {renderSortIndicator('name')}
+                </th>
+                <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('cube')}>
+                  Assigned Cube {renderSortIndicator('cube')}
+                </th>
+                <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('price')}>
+                  Price {renderSortIndicator('price')}
+                </th>
+                <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('stock')}>
+                  Stock {renderSortIndicator('stock')}
+                </th>
                 <th>Variant / Details</th>
                 <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>

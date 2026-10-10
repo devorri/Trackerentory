@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { X, ArrowRight } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
-import { type Reservation, type Cube, type Product, peso, isReservationExpired } from '../lib/types'
+import { type Reservation, type Cube, type Product, peso, isReservationExpired, todayISO, addMonths } from '../lib/types'
 import { SkeletonCard } from '../components/Skeleton'
 
 export default function ProductsPage() {
@@ -84,9 +84,28 @@ export default function ProductsPage() {
       const { error } = await supabase.from('reservations').insert([
         { cube_id, customer_id: user.user_id, expiry_time: expiry, hours_valid: cubeMonths * 720, status: 'Pending' },
       ])
+      if (error) {
+        setLoading(false)
+        return alert('Reservation failed: ' + error.message)
+      }
+
+      // Also create pending contract record for Contracts Management
+      const start = todayISO()
+      const end = addMonths(start, cubeMonths)
+      await supabase.from('contracts').insert([
+        {
+          renter_id: user.user_id,
+          cube_id,
+          start_date: start,
+          end_date: end,
+          status: 'Pending',
+          contract_text: null,
+        },
+      ])
+      await supabase.from('cubes').update({ status: 'Occupied' }).eq('cube_id', cube_id)
+
       setLoading(false)
-      if (error) return alert('Reservation failed: ' + error.message)
-      alert('Cube reserved successfully! The owner will review your reservation.')
+      alert('Cube reserved successfully! The owner will review your contract agreement in Contracts.')
       setReservingCube(null)
       await loadProducts()
     } catch (err) {

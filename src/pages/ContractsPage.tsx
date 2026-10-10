@@ -9,6 +9,7 @@ import {
   X,
   AlertTriangle,
   CheckCircle2,
+  ArrowUpDown,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
@@ -201,6 +202,53 @@ export default function ContractsPage() {
     void load()
   }
 
+  async function handleApprovePending(c: Contract) {
+    setSaving(true)
+    const { error } = await supabase.from('contracts').update({ status: 'Active' }).eq('contract_id', c.contract_id)
+    if (error) {
+      setSaving(false)
+      return alert('Error approving contract: ' + error.message)
+    }
+    if (c.cube_id) {
+      await supabase.from('cubes').update({ status: 'Occupied' }).eq('cube_id', c.cube_id)
+      if (c.renter_id) {
+        await supabase
+          .from('reservations')
+          .update({ status: 'Confirmed' })
+          .eq('cube_id', c.cube_id)
+          .eq('customer_id', c.renter_id)
+          .eq('status', 'Pending')
+      }
+    }
+    setSaving(false)
+    alert(`Contract #${c.contract_id} approved and activated!`)
+    void load()
+  }
+
+  async function handleRejectPending(c: Contract) {
+    if (!confirm(`Are you sure you want to reject contract #${c.contract_id}? The cube will return to Available.`)) return
+    setSaving(true)
+    const { error } = await supabase.from('contracts').delete().eq('contract_id', c.contract_id)
+    if (error) {
+      setSaving(false)
+      return alert('Error rejecting contract: ' + error.message)
+    }
+    if (c.cube_id) {
+      await supabase.from('cubes').update({ status: 'Available' }).eq('cube_id', c.cube_id)
+      if (c.renter_id) {
+        await supabase
+          .from('reservations')
+          .update({ status: 'Cancelled' })
+          .eq('cube_id', c.cube_id)
+          .eq('customer_id', c.renter_id)
+          .eq('status', 'Pending')
+      }
+    }
+    setSaving(false)
+    alert(`Contract #${c.contract_id} rejected. Cube returned to Available.`)
+    void load()
+  }
+
   // Print agreement in formal document format
   function printAgreement(c: Contract) {
     const printWindow = window.open('', '_blank', 'width=950,height=950,noopener,noreferrer')
@@ -390,9 +438,27 @@ export default function ContractsPage() {
     }, 400)
   }
 
-  // Filtered and searched data
+  // Sorting State
+  const [sortConfig, setSortConfig] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'period', dir: 'desc' })
+
+  function renderSortIndicator(col: string) {
+    if (sortConfig.col !== col) {
+      return <ArrowUpDown size={12} style={{ opacity: 0.35, marginLeft: 4, verticalAlign: 'middle', display: 'inline' }} />
+    }
+    return <span style={{ marginLeft: 4, fontSize: '0.72rem' }}>{sortConfig.dir === 'asc' ? '▲' : '▼'}</span>
+  }
+
+  function toggleSort(col: string) {
+    if (sortConfig.col === col) {
+      setSortConfig({ col, dir: sortConfig.dir === 'asc' ? 'desc' : 'asc' })
+    } else {
+      setSortConfig({ col, dir: 'asc' })
+    }
+  }
+
+  // Filtered, searched, and sorted data
   const filteredContracts = useMemo(() => {
-    return contracts.filter((c) => {
+    const list = contracts.filter((c) => {
       const renterName = (c.users as any)?.full_name || ''
       const cubeNum = c.cubes?.cube_number || ''
       const contractId = String(c.contract_id)
@@ -413,19 +479,50 @@ export default function ContractsPage() {
 
       return true
     })
-  }, [contracts, search, filterStatus])
+
+    const { col, dir } = sortConfig
+    list.sort((a, b) => {
+      let vA: any = ''
+      let vB: any = ''
+      if (col === 'contract') {
+        vA = a.contract_id
+        vB = b.contract_id
+      } else if (col === 'renter') {
+        vA = (a.users as any)?.full_name || ''
+        vB = (b.users as any)?.full_name || ''
+      } else if (col === 'cube') {
+        vA = a.cubes?.cube_number || ''
+        vB = b.cubes?.cube_number || ''
+      } else if (col === 'rate') {
+        vA = a.cubes?.price_per_month || 0
+        vB = b.cubes?.price_per_month || 0
+      } else if (col === 'period') {
+        vA = a.end_date || ''
+        vB = b.end_date || ''
+      } else if (col === 'status') {
+        vA = a.status || ''
+        vB = b.status || ''
+      }
+      if (vA < vB) return dir === 'asc' ? -1 : 1
+      if (vA > vB) return dir === 'asc' ? 1 : -1
+      return 0
+    })
+
+    return list
+  }, [contracts, search, filterStatus, sortConfig])
 
   // Summary Metrics
   const metrics = useMemo(() => {
     const total = contracts.length
     const active = contracts.filter((c) => c.status === 'Active' && daysUntil(c.end_date) > 7).length
+    const pending = contracts.filter((c) => c.status === 'Pending').length
     const expiring = contracts.filter((c) => c.status === 'Active' && daysUntil(c.end_date) >= 0 && daysUntil(c.end_date) <= 7).length
     const expired = contracts.filter((c) => c.status === 'Expired' || daysUntil(c.end_date) < 0).length
     const monthlyIncome = contracts
       .filter((c) => c.status === 'Active')
       .reduce((sum, c) => sum + (c.cubes?.price_per_month || 0), 0)
 
-    return { total, active, expiring, expired, monthlyIncome }
+    return { total, active, pending, expiring, expired, monthlyIncome }
   }, [contracts])
 
   return (
@@ -457,6 +554,15 @@ export default function ContractsPage() {
         <div className="panel" style={{ padding: '1.15rem' }}>
           <div className="muted" style={{ fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase' }}>Total Agreements</div>
           <div style={{ fontSize: '1.8rem', fontWeight: 800, marginTop: '0.3rem' }}>{metrics.total}</div>
+        </div>
+        <div
+          className="panel"
+          style={{ padding: '1.15rem', borderLeft: '4px solid #f59e0b', cursor: 'pointer' }}
+          onClick={() => setFilterStatus('Pending')}
+          title="Click to view pending reservations"
+        >
+          <div className="muted" style={{ fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase' }}>Pending Reservations</div>
+          <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#d97706', marginTop: '0.3rem' }}>{metrics.pending}</div>
         </div>
         <div className="panel" style={{ padding: '1.15rem', borderLeft: '4px solid #16a34a' }}>
           <div className="muted" style={{ fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase' }}>Active Contracts</div>
@@ -514,12 +620,24 @@ export default function ContractsPage() {
           <table className="table">
             <thead>
               <tr>
-                <th style={{ width: 100 }}>Contract</th>
-                <th>Renter</th>
-                <th>Assigned Cube</th>
-                <th>Monthly Rate</th>
-                <th>Period</th>
-                <th>Status & Validity</th>
+                <th style={{ width: 110, cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('contract')}>
+                  Contract {renderSortIndicator('contract')}
+                </th>
+                <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('renter')}>
+                  Renter {renderSortIndicator('renter')}
+                </th>
+                <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('cube')}>
+                  Assigned Cube {renderSortIndicator('cube')}
+                </th>
+                <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('rate')}>
+                  Monthly Rate {renderSortIndicator('rate')}
+                </th>
+                <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('period')}>
+                  Period {renderSortIndicator('period')}
+                </th>
+                <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('status')}>
+                  Status & Validity {renderSortIndicator('status')}
+                </th>
                 <th style={{ textAlign: 'right', minWidth: 160 }}>Actions</th>
               </tr>
             </thead>
@@ -574,6 +692,28 @@ export default function ContractsPage() {
                     </td>
                     <td style={{ textAlign: 'right' }}>
                       <div className="row" style={{ justifyContent: 'flex-end', gap: '0.4rem' }}>
+                        {isOwner && c.status === 'Pending' && (
+                          <>
+                            <button
+                              className="btn"
+                              type="button"
+                              style={{ padding: '0.35rem 0.65rem', fontSize: '0.82rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                              onClick={() => void handleApprovePending(c)}
+                              title="Approve and activate contract"
+                            >
+                              <CheckCircle2 size={14} /> Approve
+                            </button>
+                            <button
+                              className="btn-ghost"
+                              type="button"
+                              style={{ padding: '0.35rem 0.65rem', fontSize: '0.82rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#dc2626' }}
+                              onClick={() => void handleRejectPending(c)}
+                              title="Reject reservation & release cube"
+                            >
+                              <X size={14} /> Reject
+                            </button>
+                          </>
+                        )}
                         <button
                           className="btn-ghost"
                           type="button"

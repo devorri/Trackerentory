@@ -165,9 +165,9 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
     setBusy(true)
     const matchedProduct = products.find((product) => product.product_id === Number(form.product_id))
     const selectedCube = cubes.find((cube) => cube.cube_id === Number(form.cube_id || matchedProduct?.cube_id))
-    if (selectedCube?.type === 'Pick-up') {
+    if (selectedCube?.type === 'Pick-up' && !selectedReservationId) {
       setBusy(false)
-      return alert('Pickup details must be submitted by the renter from their Pick-up dashboard.')
+      return alert('Pickup details must be submitted by the renter from their Pick-up dashboard. Staff only verifies/confirms at the counter.')
     }
     const quantity = Math.max(1, Number(form.quantity) || 1)
     if (matchedProduct && quantity > matchedProduct.stock_quantity) {
@@ -224,6 +224,16 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
         updated_at: new Date().toISOString(),
       })
       .eq('transaction_id', t.transaction_id)
+
+    // Deduct stock if payment was just verified as Paid
+    if (patch.payment_status === 'Paid' && t.payment_status !== 'Paid' && t.product_id) {
+      const prod = products.find((p) => p.product_id === t.product_id)
+      if (prod && prod.stock_quantity > 0) {
+        const qty = t.quantity || 1
+        await supabase.from('products').update({ stock_quantity: Math.max(0, prod.stock_quantity - qty) }).eq('product_id', prod.product_id)
+      }
+    }
+
     setBusy(false)
     if (error) return alert(error.message)
     setEditId(null)
@@ -543,9 +553,42 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                           <button className="btn-ghost" type="button" onClick={() => setEditId(null)}>Done</button>
                         </div>
                       ) : (
-                        <button className="btn-ghost" type="button" onClick={() => setEditId(t.transaction_id)}>
-                          Edit Status
-                        </button>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
+                          {t.payment_status === 'Pending' && (
+                            <button
+                              className="btn"
+                              type="button"
+                              style={{ padding: '0.25rem 0.55rem', fontSize: '0.74rem', background: '#10b981', color: '#fff', border: 'none' }}
+                              onClick={() => void updateRow(t, { payment_status: 'Paid' })}
+                              title="Verify customer payment"
+                            >
+                              Verify Paid
+                            </button>
+                          )}
+                          {t.pickup_status === 'Waiting' && (
+                            <button
+                              className="btn"
+                              type="button"
+                              style={{ padding: '0.25rem 0.55rem', fontSize: '0.74rem', background: '#2563eb', color: '#fff', border: 'none' }}
+                              onClick={() => void updateRow(t, { pickup_status: 'Picked-up' })}
+                              title="Confirm customer received item"
+                            >
+                              Confirm Claimed
+                            </button>
+                          )}
+                          {t.payment_status === 'Paid' && t.pickup_status === 'Picked-up' ? (
+                            <span className="badge ok" style={{ fontSize: '0.72rem' }}>Verified & Claimed</span>
+                          ) : (
+                            <button
+                              className="btn-ghost"
+                              type="button"
+                              style={{ padding: '0.2rem 0.5rem', fontSize: '0.74rem' }}
+                              onClick={() => setEditId(t.transaction_id)}
+                            >
+                              Edit Details
+                            </button>
+                          )}
+                        </div>
                       )}
                     </td>
                   </tr>

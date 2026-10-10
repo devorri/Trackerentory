@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { Trash2, RotateCcw, X } from 'lucide-react'
+import { Trash2, RotateCcw, X, ArrowUpDown } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import { type Cube, peso } from '../lib/types'
@@ -211,11 +211,41 @@ export default function CubeManagement() {
     )
   }
 
-  const currentList = currentTab === 'Display'
-    ? displayCubes
-    : currentTab === 'Pick-up'
-      ? pickupCubes
-      : trashCubes
+  const [sortConfig, setSortConfig] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'number', dir: 'asc' })
+
+  function renderSortIndicator(col: string) {
+    if (sortConfig.col !== col) {
+      return <ArrowUpDown size={12} style={{ opacity: 0.35, marginLeft: 4, verticalAlign: 'middle', display: 'inline' }} />
+    }
+    return <span style={{ marginLeft: 4, fontSize: '0.72rem' }}>{sortConfig.dir === 'asc' ? '▲' : '▼'}</span>
+  }
+
+  function toggleSort(col: string) {
+    if (sortConfig.col === col) {
+      setSortConfig({ col, dir: sortConfig.dir === 'asc' ? 'desc' : 'asc' })
+    } else {
+      setSortConfig({ col, dir: 'asc' })
+    }
+  }
+
+  const currentList = useMemo(() => {
+    const list = [...(currentTab === 'Display' ? displayCubes : currentTab === 'Pick-up' ? pickupCubes : trashCubes)]
+    const { col, dir } = sortConfig
+    list.sort((a, b) => {
+      let vA: any = ''
+      let vB: any = ''
+      if (col === 'number') { vA = a.cube_number; vB = b.cube_number }
+      else if (col === 'location') { vA = a.location || ''; vB = b.location || '' }
+      else if (col === 'type') { vA = a.type || ''; vB = b.type || '' }
+      else if (col === 'dimensions') { vA = (a.width_cm || 0) * (a.height_cm || 0); vB = (b.width_cm || 0) * (b.height_cm || 0) }
+      else if (col === 'price') { vA = Number(a.price_per_month || 0); vB = Number(b.price_per_month || 0) }
+      else if (col === 'status') { vA = a.status || ''; vB = b.status || '' }
+      if (vA < vB) return dir === 'asc' ? -1 : 1
+      if (vA > vB) return dir === 'asc' ? 1 : -1
+      return 0
+    })
+    return list
+  }, [currentTab, displayCubes, pickupCubes, trashCubes, sortConfig])
 
   return (
     <section>
@@ -363,12 +393,24 @@ export default function CubeManagement() {
             <thead>
               <tr>
                 <th style={{ width: 70 }}>Image</th>
-                <th>Cube No.</th>
-                <th>Location</th>
-                <th>Type</th>
-                <th>Dimensions</th>
-                <th>Monthly Rent</th>
-                <th>Status</th>
+                <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('number')}>
+                  Cube No. {renderSortIndicator('number')}
+                </th>
+                <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('location')}>
+                  Location {renderSortIndicator('location')}
+                </th>
+                <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('type')}>
+                  Type {renderSortIndicator('type')}
+                </th>
+                <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('dimensions')}>
+                  Dimensions {renderSortIndicator('dimensions')}
+                </th>
+                <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('price')}>
+                  Monthly Rent {renderSortIndicator('price')}
+                </th>
+                <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('status')}>
+                  Status {renderSortIndicator('status')}
+                </th>
                 <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>

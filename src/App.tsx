@@ -32,15 +32,36 @@ function App() {
 
 function InnerApp() {
   const { user, loading, signOut } = useAuth()
+  const role = user?.role
+  const isAdmin = role === 'Owner' || role === 'Staff'
+
   const [notices, setNotices] = useState<string[]>([])
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [adminSidebarOpen, setAdminSidebarOpen] = useState(false)
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false)
 
+  const [pendingContractsCount, setPendingContractsCount] = useState(0)
+  const [pendingReservationsCount, setPendingReservationsCount] = useState(0)
+
   useEffect(() => {
     void cancelExpiredReservations()
     void expireContracts()
   }, [])
+
+  useEffect(() => {
+    if (!isAdmin) return
+    void supabase
+      .from('contracts')
+      .select('contract_id', { count: 'exact', head: true })
+      .eq('status', 'Pending')
+      .then(({ count }) => setPendingContractsCount(count || 0))
+
+    void supabase
+      .from('reservations')
+      .select('reservation_id', { count: 'exact', head: true })
+      .eq('status', 'Pending')
+      .then(({ count }) => setPendingReservationsCount(count || 0))
+  }, [isAdmin, user])
 
   useEffect(() => {
     if (!user || (user.role !== 'Renter' && user.role !== 'Owner')) {
@@ -67,8 +88,6 @@ function InnerApp() {
     return <div className="loading-screen">TrackErentory</div>
   }
 
-  const role = user?.role
-  const isAdmin = role === 'Owner' || role === 'Staff'
   const handleSignOut = () => {
     setShowSignOutConfirm(false)
     signOut()
@@ -147,7 +166,12 @@ function InnerApp() {
               onClick={() => setAdminSidebarOpen(false)}
             >
               <CalendarCheck size={18} />
-              <span>Reservations</span>
+              <span style={{ flex: 1 }}>Reservations</span>
+              {pendingReservationsCount > 0 && (
+                <span className="badge warn" style={{ fontSize: '0.7rem', padding: '0.1rem 0.45rem' }}>
+                  {pendingReservationsCount}
+                </span>
+              )}
             </NavLink>
             <NavLink
               to="/owner-products"
@@ -172,7 +196,12 @@ function InnerApp() {
                 onClick={() => setAdminSidebarOpen(false)}
               >
                 <FileText size={18} />
-                <span>Contracts</span>
+                <span style={{ flex: 1 }}>Contracts</span>
+                {pendingContractsCount > 0 && (
+                  <span className="badge warn" style={{ fontSize: '0.7rem', padding: '0.1rem 0.45rem' }}>
+                    {pendingContractsCount}
+                  </span>
+                )}
               </NavLink>
             )}
             {role === 'Owner' && (

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Store, Package, KeyRound, X } from 'lucide-react'
+import { Store, Package, KeyRound, X, ArrowUpDown } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import {
@@ -40,10 +40,41 @@ export default function RenterDashboard() {
     category: '',
     image_url: '',
     cube_id: '',
+    buyer_name: '',
+    authorized_pickup_name: '',
+    payment_status: 'Pending' as 'Pending' | 'Paid',
+    payment_method: 'Cash' as 'Cash' | 'Online',
+    pickup_notes: '',
   })
 
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
+  const [pickupReceiptFile, setPickupReceiptFile] = useState<File | null>(null)
+  const [pickupReceiptPreview, setPickupReceiptPreview] = useState<string | null>(null)
+
+  // Edit Handover Modal State
+  const [editingTx, setEditingTx] = useState<Transaction | null>(null)
+  const [editTxForm, setEditTxForm] = useState({
+    buyer_name: '',
+    authorized_pickup_name: '',
+    payment_status: 'Pending' as 'Pending' | 'Paid',
+    payment_method: 'Cash' as 'Cash' | 'Online',
+    notes: '',
+  })
+  const [editTxReceiptFile, setEditTxReceiptFile] = useState<File | null>(null)
+
+  // New Handover for existing pick-up product Modal State
+  const [isNewHandoverModalOpen, setIsNewHandoverModalOpen] = useState(false)
+  const [newHandoverForm, setNewHandoverForm] = useState({
+    product_id: '',
+    buyer_name: '',
+    authorized_pickup_name: '',
+    quantity: '1',
+    payment_status: 'Pending' as 'Pending' | 'Paid',
+    payment_method: 'Cash' as 'Cash' | 'Online',
+    notes: '',
+  })
+  const [newHandoverReceiptFile, setNewHandoverReceiptFile] = useState<File | null>(null)
 
   async function load(silent = false) {
     if (!user) return
@@ -105,15 +136,79 @@ export default function RenterDashboard() {
       ? 'display'
       : activeTab
 
-  const displayTransactions = useMemo(
-    () => transactions.filter((t) => t.products?.cubes?.type === 'Display'),
-    [transactions]
-  )
+  const [sortDisplayTx, setSortDisplayTx] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'date', dir: 'desc' })
+  const [sortPickupTx, setSortPickupTx] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'date', dir: 'desc' })
+  const [sortContracts, setSortContracts] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'days', dir: 'asc' })
 
-  const pickupTransactions = useMemo(
-    () => transactions.filter((t) => t.products?.cubes?.type === 'Pick-up'),
-    [transactions]
-  )
+  function renderSortIndicator(currentCol: string, sortState: { col: string; dir: 'asc' | 'desc' }) {
+    if (sortState.col !== currentCol) {
+      return <ArrowUpDown size={12} style={{ opacity: 0.35, marginLeft: 4, verticalAlign: 'middle', display: 'inline' }} />
+    }
+    return <span style={{ marginLeft: 4, fontSize: '0.72rem' }}>{sortState.dir === 'asc' ? '▲' : '▼'}</span>
+  }
+
+  function toggleSort(state: { col: string; dir: 'asc' | 'desc' }, setState: React.Dispatch<React.SetStateAction<{ col: string; dir: 'asc' | 'desc' }>>, col: string) {
+    if (state.col === col) {
+      setState({ col, dir: state.dir === 'asc' ? 'desc' : 'asc' })
+    } else {
+      setState({ col, dir: 'asc' })
+    }
+  }
+
+  const displayTransactions = useMemo(() => {
+    const list = transactions.filter((t) => t.products?.cubes?.type === 'Display')
+    const { col, dir } = sortDisplayTx
+    list.sort((a, b) => {
+      let vA: any = ''
+      let vB: any = ''
+      if (col === 'product') { vA = a.products?.product_name || ''; vB = b.products?.product_name || '' }
+      else if (col === 'variant') { vA = a.products?.variant || ''; vB = b.products?.variant || '' }
+      else if (col === 'date') { vA = new Date(a.transaction_date).getTime(); vB = new Date(b.transaction_date).getTime() }
+      else if (col === 'price') { vA = Number(a.products?.price || 0); vB = Number(b.products?.price || 0) }
+      else if (col === 'payment') { vA = a.payment_status; vB = b.payment_status }
+      else if (col === 'qty') { vA = Number(a.quantity || 1); vB = Number(b.quantity || 1) }
+      if (vA < vB) return dir === 'asc' ? -1 : 1
+      if (vA > vB) return dir === 'asc' ? 1 : -1
+      return 0
+    })
+    return list
+  }, [transactions, sortDisplayTx])
+
+  const pickupTransactions = useMemo(() => {
+    const list = transactions.filter((t) => t.products?.cubes?.type === 'Pick-up')
+    const { col, dir } = sortPickupTx
+    list.sort((a, b) => {
+      let vA: any = ''
+      let vB: any = ''
+      if (col === 'product') { vA = a.products?.product_name || a.product_name || ''; vB = b.products?.product_name || b.product_name || '' }
+      else if (col === 'buyer') { vA = a.buyer_name || ''; vB = b.buyer_name || '' }
+      else if (col === 'pickup') { vA = a.pickup_status || ''; vB = b.pickup_status || '' }
+      else if (col === 'payment') { vA = a.payment_status; vB = b.payment_status }
+      else if (col === 'date') { vA = new Date(a.updated_at || a.transaction_date).getTime(); vB = new Date(b.updated_at || b.transaction_date).getTime() }
+      if (vA < vB) return dir === 'asc' ? -1 : 1
+      if (vA > vB) return dir === 'asc' ? 1 : -1
+      return 0
+    })
+    return list
+  }, [transactions, sortPickupTx])
+
+  const contractsSorted = useMemo(() => {
+    const list = [...contracts]
+    const { col, dir } = sortContracts
+    list.sort((a, b) => {
+      let vA: any = ''
+      let vB: any = ''
+      if (col === 'cube') { vA = a.cubes?.cube_number || ''; vB = b.cubes?.cube_number || '' }
+      else if (col === 'type') { vA = a.cubes?.type || ''; vB = b.cubes?.type || '' }
+      else if (col === 'period') { vA = a.end_date || ''; vB = b.end_date || '' }
+      else if (col === 'days') { vA = daysUntil(a.end_date); vB = daysUntil(b.end_date) }
+      else if (col === 'status') { vA = a.status; vB = b.status }
+      if (vA < vB) return dir === 'asc' ? -1 : 1
+      if (vA > vB) return dir === 'asc' ? 1 : -1
+      return 0
+    })
+    return list
+  }, [contracts, sortContracts])
 
   if (!user || user.role !== 'Renter') {
     return (
@@ -143,9 +238,20 @@ export default function RenterDashboard() {
       setBusy(false)
       return alert(error.message)
     }
+
+    // Also record in reservations table for tracking
+    const expiry = new Date(Date.now() + months * 30 * 24 * 60 * 60 * 1000).toISOString()
+    await supabase.from('reservations').insert([{
+      cube_id: cube.cube_id,
+      customer_id: user!.user_id,
+      expiry_time: expiry,
+      hours_valid: months * 720,
+      status: 'Pending',
+    }])
+
     await supabase.from('cubes').update({ status: 'Occupied' }).eq('cube_id', cube.cube_id)
     setBusy(false)
-    alert(`Cube ${cube.cube_number} reserved (Pending contract until ${end}). Review in Contracts.`)
+    alert(`Cube ${cube.cube_number} reserved! Your agreement request is now Pending Owner approval.`)
     void load()
   }
 
@@ -173,6 +279,12 @@ export default function RenterDashboard() {
     if (!productForm.product_name || !productForm.price || !productForm.cube_id) {
       return alert('Name, price, and assigned cube are required.')
     }
+
+    const selectedCube = myCubes.find((cube) => cube.cube_id === Number(productForm.cube_id))
+    if (selectedCube?.type === 'Pick-up' && !productForm.buyer_name.trim()) {
+      return alert('Buyer Name is required for pick-up items so staff can verify the claimant.')
+    }
+
     setBusy(true)
 
     let imageUrl = productForm.image_url || null
@@ -196,28 +308,40 @@ export default function RenterDashboard() {
       category: productForm.category ? productForm.category.trim() : null,
       image_url: imageUrl,
     }]).select('product_id').single()
-    setBusy(false)
-    if (error) return alert(error.message)
 
-    const selectedCube = myCubes.find((cube) => cube.cube_id === Number(productForm.cube_id))
+    if (error) {
+      setBusy(false)
+      return alert(error.message)
+    }
+
     if (selectedCube?.type === 'Pick-up' && createdProduct) {
+      let pickupReceiptUrl = null
+      if (pickupReceiptFile) {
+        const up = await uploadPublicImage(BUCKET_DOCUMENTS, pickupReceiptFile, 'receipts')
+        if (up.url) pickupReceiptUrl = up.url
+      }
+
       const { error: trackingError } = await supabase.from('transactions').insert([{
         product_id: createdProduct.product_id,
-        product_name: productForm.product_name.trim(),
+        product_name: `${productForm.product_name.trim()}${productForm.variant ? ` (${productForm.variant.trim()})` : ''}`,
         cube_id: selectedCube.cube_id,
         renter_id: user!.user_id,
-        buyer_name: null,
-        payment_status: 'Pending',
-        payment_method: 'Cash',
+        buyer_name: productForm.buyer_name.trim(),
+        authorized_pickup_name: productForm.authorized_pickup_name.trim() || null,
+        payment_status: productForm.payment_status,
+        payment_method: productForm.payment_method,
         pickup_status: 'Waiting',
-        quantity: 1,
+        quantity: Math.min(Number(productForm.stock_quantity || 1), 1),
         listed_quantity: Number(productForm.stock_quantity || 1),
-        notes: productForm.description.trim() || null,
+        notes: productForm.pickup_notes.trim() || productForm.description.trim() || null,
+        receipt_image_url: pickupReceiptUrl,
         processed_by: user!.user_id,
         updated_at: new Date().toISOString(),
       }])
       if (trackingError) alert(`Product saved, but pickup tracking could not be created: ${trackingError.message}`)
     }
+
+    setBusy(false)
     setProductForm({
       product_name: '',
       description: '',
@@ -227,9 +351,111 @@ export default function RenterDashboard() {
       category: '',
       image_url: '',
       cube_id: productForm.cube_id,
+      buyer_name: '',
+      authorized_pickup_name: '',
+      payment_status: 'Pending',
+      payment_method: 'Cash',
+      pickup_notes: '',
     })
     setImageFile(null)
     setImagePreview(null)
+    setPickupReceiptFile(null)
+    setPickupReceiptPreview(null)
+    alert(selectedCube?.type === 'Pick-up' ? 'Pick-up item and claimant details saved! Staff will confirm when claimed.' : 'Product listed successfully!')
+    void load()
+  }
+
+  async function addNewHandover() {
+    if (!newHandoverForm.product_id || !newHandoverForm.buyer_name.trim()) {
+      return alert('Please select a product and enter the buyer name.')
+    }
+    const prod = pickupProducts.find((p) => p.product_id === Number(newHandoverForm.product_id))
+    if (!prod) return alert('Selected product not found.')
+    const qty = Math.max(1, Number(newHandoverForm.quantity || 1))
+    if (qty > prod.stock_quantity) {
+      return alert(`Cannot allocate ${qty} unit(s). Only ${prod.stock_quantity} left in stock.`)
+    }
+    setBusy(true)
+
+    let receiptUrl = null
+    if (newHandoverReceiptFile) {
+      const up = await uploadPublicImage(BUCKET_DOCUMENTS, newHandoverReceiptFile, 'receipts')
+      if (up.url) receiptUrl = up.url
+    }
+
+    const { error } = await supabase.from('transactions').insert([{
+      product_id: prod.product_id,
+      product_name: `${prod.product_name}${prod.variant ? ` (${prod.variant})` : ''}`,
+      cube_id: prod.cube_id,
+      renter_id: user!.user_id,
+      buyer_name: newHandoverForm.buyer_name.trim(),
+      authorized_pickup_name: newHandoverForm.authorized_pickup_name.trim() || null,
+      payment_status: newHandoverForm.payment_status,
+      payment_method: newHandoverForm.payment_method,
+      pickup_status: 'Waiting',
+      quantity: qty,
+      listed_quantity: prod.stock_quantity,
+      receipt_image_url: receiptUrl,
+      notes: newHandoverForm.notes.trim() || null,
+      processed_by: user!.user_id,
+      updated_at: new Date().toISOString(),
+    }])
+
+    setBusy(false)
+    if (error) return alert('Failed to create handover record: ' + error.message)
+    setIsNewHandoverModalOpen(false)
+    setNewHandoverForm({
+      product_id: '',
+      buyer_name: '',
+      authorized_pickup_name: '',
+      quantity: '1',
+      payment_status: 'Pending',
+      payment_method: 'Cash',
+      notes: '',
+    })
+    setNewHandoverReceiptFile(null)
+    alert('Pick-up handover entry created! Staff will confirm when claimed.')
+    void load()
+  }
+
+  function openEditTx(t: Transaction) {
+    setEditingTx(t)
+    setEditTxForm({
+      buyer_name: t.buyer_name || '',
+      authorized_pickup_name: t.authorized_pickup_name || '',
+      payment_status: t.payment_status === 'Paid' ? 'Paid' : 'Pending',
+      payment_method: t.payment_method === 'Online' ? 'Online' : 'Cash',
+      notes: t.notes || '',
+    })
+    setEditTxReceiptFile(null)
+  }
+
+  async function updateHandover() {
+    if (!editingTx) return
+    if (!editTxForm.buyer_name.trim()) return alert('Buyer name cannot be empty.')
+    setBusy(true)
+
+    let receiptUrl = editingTx.receipt_image_url
+    if (editTxReceiptFile) {
+      const up = await uploadPublicImage(BUCKET_DOCUMENTS, editTxReceiptFile, 'receipts')
+      if (up.url) receiptUrl = up.url
+    }
+
+    const { error } = await supabase.from('transactions').update({
+      buyer_name: editTxForm.buyer_name.trim(),
+      authorized_pickup_name: editTxForm.authorized_pickup_name.trim() || null,
+      payment_status: editTxForm.payment_status,
+      payment_method: editTxForm.payment_method,
+      receipt_image_url: receiptUrl,
+      notes: editTxForm.notes.trim() || null,
+      updated_at: new Date().toISOString(),
+    }).eq('transaction_id', editingTx.transaction_id)
+
+    setBusy(false)
+    if (error) return alert('Failed to update: ' + error.message)
+    setEditingTx(null)
+    setEditTxReceiptFile(null)
+    alert('Pick-up handover details updated successfully!')
     void load()
   }
 
@@ -365,13 +591,25 @@ export default function RenterDashboard() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>Product</th>
-                  <th>Variant</th>
-                  <th>Date</th>
-                  <th>Price</th>
-                  <th>Payment Status</th>
+                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortDisplayTx, setSortDisplayTx, 'product')}>
+                    Product {renderSortIndicator('product', sortDisplayTx)}
+                  </th>
+                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortDisplayTx, setSortDisplayTx, 'variant')}>
+                    Variant {renderSortIndicator('variant', sortDisplayTx)}
+                  </th>
+                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortDisplayTx, setSortDisplayTx, 'date')}>
+                    Date {renderSortIndicator('date', sortDisplayTx)}
+                  </th>
+                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortDisplayTx, setSortDisplayTx, 'price')}>
+                    Price {renderSortIndicator('price', sortDisplayTx)}
+                  </th>
+                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortDisplayTx, setSortDisplayTx, 'payment')}>
+                    Payment Status {renderSortIndicator('payment', sortDisplayTx)}
+                  </th>
                   <th>Payment Process</th>
-                  <th>Quantity</th>
+                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortDisplayTx, setSortDisplayTx, 'qty')}>
+                    Quantity {renderSortIndicator('qty', sortDisplayTx)}
+                  </th>
                   <th>Receipt Proof</th>
                   <th>Processed By</th>
                 </tr>
@@ -454,21 +692,57 @@ export default function RenterDashboard() {
           )}
 
           {/* Pickup Transactions Table */}
-          <h2>Pick-up Handovers & Status</h2>
-          <p className="muted">Live status of customer pick-ups: whether waiting or picked-up, who claimed it, and payment proof.</p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginTop: '1.5rem', marginBottom: '0.5rem' }}>
+            <div>
+              <h2 style={{ margin: 0 }}>Pick-up Handovers & Status</h2>
+              <p className="muted" style={{ margin: '0.25rem 0 0' }}>Live status of customer pick-ups: whether waiting or picked-up, who claimed it, and payment proof.</p>
+            </div>
+            {pickupProducts.length > 0 && (
+              <button
+                className="btn"
+                type="button"
+                onClick={() => {
+                  setNewHandoverForm({
+                    product_id: String(pickupProducts[0].product_id),
+                    buyer_name: '',
+                    authorized_pickup_name: '',
+                    quantity: '1',
+                    payment_status: 'Pending',
+                    payment_method: 'Cash',
+                    notes: '',
+                  })
+                  setNewHandoverReceiptFile(null)
+                  setIsNewHandoverModalOpen(true)
+                }}
+              >
+                + Add Buyer / Pick-up Entry
+              </button>
+            )}
+          </div>
           <div className="table-wrap" style={{ marginBottom: '2.5rem' }}>
             <table className="table">
               <thead>
                 <tr>
-                  <th>Product</th>
-                  <th>Buyer Name</th>
+                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortPickupTx, setSortPickupTx, 'product')}>
+                    Product {renderSortIndicator('product', sortPickupTx)}
+                  </th>
+                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortPickupTx, setSortPickupTx, 'buyer')}>
+                    Buyer Name {renderSortIndicator('buyer', sortPickupTx)}
+                  </th>
                   <th>Authorized Alternate</th>
                   <th>Quantity left</th>
-                  <th>Pickup Status</th>
-                  <th>Payment Status</th>
+                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortPickupTx, setSortPickupTx, 'pickup')}>
+                    Pickup Status {renderSortIndicator('pickup', sortPickupTx)}
+                  </th>
+                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortPickupTx, setSortPickupTx, 'payment')}>
+                    Payment Status {renderSortIndicator('payment', sortPickupTx)}
+                  </th>
                   <th>Receipt Proof</th>
                   <th>Notes</th>
-                  <th>Date & Staff</th>
+                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortPickupTx, setSortPickupTx, 'date')}>
+                    Date & Staff {renderSortIndicator('date', sortPickupTx)}
+                  </th>
+                  <th className="no-print" style={{ textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -516,6 +790,20 @@ export default function RenterDashboard() {
                     <td>
                       <div style={{ fontSize: '0.8rem' }}>Updated {new Date(t.updated_at || t.transaction_date).toLocaleString('en-PH')}</div>
                       <div className="muted" style={{ fontSize: '0.75rem' }}>{t.users?.full_name || 'Renter'}</div>
+                    </td>
+                    <td className="no-print" style={{ textAlign: 'right' }}>
+                      {t.pickup_status === 'Picked-up' ? (
+                        <span className="badge ok" style={{ fontSize: '0.75rem' }}>Completed</span>
+                      ) : (
+                        <button
+                          className="btn-ghost"
+                          type="button"
+                          style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem' }}
+                          onClick={() => openEditTx(t)}
+                        >
+                          Edit Info
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -597,6 +885,91 @@ export default function RenterDashboard() {
             <label>Description</label>
             <textarea rows={2} value={productForm.description} onChange={(e) => setProductForm({ ...productForm, description: e.target.value })} />
           </div>
+
+          {/* Conditional Pick-up Handover & Claimant Details */}
+          {myCubes.find((c) => String(c.cube_id) === String(productForm.cube_id))?.type === 'Pick-up' && (
+            <div style={{ marginTop: '1.25rem', marginBottom: '1rem', padding: '1rem', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                <span className="badge" style={{ background: '#0284c7', color: '#fff' }}>Pick-up Cube</span>
+                <h3 style={{ margin: 0, fontSize: '1rem', color: '#0f172a' }}>Handover & Claimant Information</h3>
+              </div>
+              <p className="muted" style={{ fontSize: '0.82rem', marginTop: 0, marginBottom: '1rem' }}>
+                Specify the customer and authorized alternate who will claim this item. Staff will verify claimant and payment at the counter.
+              </p>
+              <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+                <div className="field">
+                  <label>Buyer / Customer Name *</label>
+                  <input
+                    placeholder="e.g. Maria Santos"
+                    value={productForm.buyer_name}
+                    onChange={(e) => setProductForm({ ...productForm, buyer_name: e.target.value })}
+                  />
+                </div>
+                <div className="field">
+                  <label>Authorized Alternate Claimant</label>
+                  <input
+                    placeholder="e.g. Juan Santos (relative / courier)"
+                    value={productForm.authorized_pickup_name}
+                    onChange={(e) => setProductForm({ ...productForm, authorized_pickup_name: e.target.value })}
+                  />
+                </div>
+                <div className="field">
+                  <label>Payment Status</label>
+                  <select
+                    value={productForm.payment_status}
+                    onChange={(e) => setProductForm({ ...productForm, payment_status: e.target.value as 'Pending' | 'Paid' })}
+                  >
+                    <option value="Pending">Pending Payment (Collect at counter)</option>
+                    <option value="Paid">Paid (Paid online to renter - staff verifies)</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Payment Method</label>
+                  <select
+                    value={productForm.payment_method}
+                    onChange={(e) => setProductForm({ ...productForm, payment_method: e.target.value as 'Cash' | 'Online' })}
+                  >
+                    <option value="Cash">Cash</option>
+                    <option value="Online">GCash / Maya / Online</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Payment Receipt Proof (if Paid)</label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] || null
+                      setPickupReceiptFile(file)
+                      if (file) {
+                        const r = new FileReader()
+                        r.onload = () => setPickupReceiptPreview(String(r.result || ''))
+                        r.readAsDataURL(file)
+                      } else {
+                        setPickupReceiptPreview(null)
+                      }
+                    }}
+                  />
+                  {pickupReceiptPreview && (
+                    <img
+                      src={pickupReceiptPreview}
+                      alt="Receipt preview"
+                      style={{ marginTop: 6, maxWidth: 90, maxHeight: 90, objectFit: 'cover', borderRadius: 4 }}
+                    />
+                  )}
+                </div>
+              </div>
+              <div className="field" style={{ marginTop: '0.75rem' }}>
+                <label>Notes / Instructions for Staff</label>
+                <input
+                  placeholder="e.g. Paid via GCash ref #1234, or claimant will show student ID"
+                  value={productForm.pickup_notes}
+                  onChange={(e) => setProductForm({ ...productForm, pickup_notes: e.target.value })}
+                />
+              </div>
+            </div>
+          )}
+
           <button className="btn" type="button" disabled={busy} onClick={addProduct} style={{ marginTop: '0.5rem' }}>
             {busy ? 'Saving…' : 'List Product'}
           </button>
@@ -648,16 +1021,26 @@ export default function RenterDashboard() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>Cube</th>
-                  <th>Type</th>
-                  <th>Period</th>
-                  <th>Days Left</th>
-                  <th>Status</th>
+                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortContracts, setSortContracts, 'cube')}>
+                    Cube {renderSortIndicator('cube', sortContracts)}
+                  </th>
+                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortContracts, setSortContracts, 'type')}>
+                    Type {renderSortIndicator('type', sortContracts)}
+                  </th>
+                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortContracts, setSortContracts, 'period')}>
+                    Period {renderSortIndicator('period', sortContracts)}
+                  </th>
+                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortContracts, setSortContracts, 'days')}>
+                    Days Left {renderSortIndicator('days', sortContracts)}
+                  </th>
+                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortContracts, setSortContracts, 'status')}>
+                    Status {renderSortIndicator('status', sortContracts)}
+                  </th>
                   <th className="no-print" style={{ textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {contracts.map((c) => {
+                {contractsSorted.map((c) => {
                   const left = daysUntil(c.end_date)
                   return (
                     <tr key={c.contract_id}>
@@ -704,6 +1087,197 @@ export default function RenterDashboard() {
               <button className="modal-close" onClick={() => setPreviewReceipt(null)}><X size={18} /></button>
             </div>
             <img src={previewReceipt} alt="Receipt proof" style={{ maxWidth: '100%', maxHeight: '75vh', objectFit: 'contain', marginTop: 12 }} />
+          </div>
+        </div>
+      )}
+
+      {/* NEW HANDOVER ENTRY MODAL (FOR MULTIPLE BUYERS / EXISTING PRODUCTS) */}
+      {isNewHandoverModalOpen && (
+        <div className="modal-overlay" onClick={() => setIsNewHandoverModalOpen(false)}>
+          <div className="modal-card" style={{ maxWidth: 540 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>+ Add Pick-up Entry / Buyer</h3>
+              <button className="modal-close" onClick={() => setIsNewHandoverModalOpen(false)}><X size={18} /></button>
+            </div>
+            <p className="muted" style={{ fontSize: '0.85rem', marginTop: 0 }}>
+              Add another buyer or claimant for your existing stock in Pick-up cubes. Staff will verify them when claiming.
+            </p>
+            <div className="grid" style={{ gridTemplateColumns: '1fr', gap: '0.85rem' }}>
+              <div className="field">
+                <label>Select Pick-up Product *</label>
+                <select
+                  value={newHandoverForm.product_id}
+                  onChange={(e) => setNewHandoverForm({ ...newHandoverForm, product_id: e.target.value })}
+                >
+                  <option value="">Select product…</option>
+                  {pickupProducts.map((p) => (
+                    <option key={p.product_id} value={p.product_id}>
+                      {p.product_name} {p.variant ? `(${p.variant})` : ''} — {p.stock_quantity} in stock ({peso(p.price)})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid" style={{ gridTemplateColumns: '2fr 1fr', gap: '0.85rem' }}>
+                <div className="field">
+                  <label>Buyer / Customer Name *</label>
+                  <input
+                    placeholder="e.g. Juan dela Cruz"
+                    value={newHandoverForm.buyer_name}
+                    onChange={(e) => setNewHandoverForm({ ...newHandoverForm, buyer_name: e.target.value })}
+                  />
+                </div>
+                <div className="field">
+                  <label>Quantity *</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={newHandoverForm.quantity}
+                    onChange={(e) => setNewHandoverForm({ ...newHandoverForm, quantity: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="field">
+                <label>Authorized Alternate Claimant (Optional)</label>
+                <input
+                  placeholder="e.g. Maria Santos (relative / courier)"
+                  value={newHandoverForm.authorized_pickup_name}
+                  onChange={(e) => setNewHandoverForm({ ...newHandoverForm, authorized_pickup_name: e.target.value })}
+                />
+              </div>
+              <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
+                <div className="field">
+                  <label>Payment Status</label>
+                  <select
+                    value={newHandoverForm.payment_status}
+                    onChange={(e) => setNewHandoverForm({ ...newHandoverForm, payment_status: e.target.value as 'Pending' | 'Paid' })}
+                  >
+                    <option value="Pending">Pending Payment (Collect at counter)</option>
+                    <option value="Paid">Paid (Paid online to renter)</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Payment Method</label>
+                  <select
+                    value={newHandoverForm.payment_method}
+                    onChange={(e) => setNewHandoverForm({ ...newHandoverForm, payment_method: e.target.value as 'Cash' | 'Online' })}
+                  >
+                    <option value="Cash">Cash</option>
+                    <option value="Online">GCash / Maya / Online</option>
+                  </select>
+                </div>
+              </div>
+              <div className="field">
+                <label>Payment Receipt Proof (if Paid)</label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setNewHandoverReceiptFile(e.target.files?.[0] || null)}
+                />
+              </div>
+              <div className="field">
+                <label>Notes / Claimant Instructions</label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g. Reference code, note on who is authorized to claim"
+                  value={newHandoverForm.notes}
+                  onChange={(e) => setNewHandoverForm({ ...newHandoverForm, notes: e.target.value })}
+                />
+              </div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1.25rem' }}>
+              <button className="btn-ghost" type="button" onClick={() => setIsNewHandoverModalOpen(false)}>Cancel</button>
+              <button className="btn" type="button" disabled={busy} onClick={addNewHandover}>
+                {busy ? 'Saving…' : 'Save Pick-up Entry'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT HANDOVER ENTRY MODAL */}
+      {editingTx && (
+        <div className="modal-overlay" onClick={() => setEditingTx(null)}>
+          <div className="modal-card" style={{ maxWidth: 540 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Edit Pick-up Entry: {editingTx.products?.product_name || editingTx.product_name}</h3>
+              <button className="modal-close" onClick={() => setEditingTx(null)}><X size={18} /></button>
+            </div>
+            <p className="muted" style={{ fontSize: '0.85rem', marginTop: 0 }}>
+              Update the customer, authorized claimant, or payment details for this pick-up item.
+            </p>
+            <div className="grid" style={{ gridTemplateColumns: '1fr', gap: '0.85rem' }}>
+              <div className="field">
+                <label>Buyer / Customer Name *</label>
+                <input
+                  placeholder="e.g. Juan dela Cruz"
+                  value={editTxForm.buyer_name}
+                  onChange={(e) => setEditTxForm({ ...editTxForm, buyer_name: e.target.value })}
+                />
+              </div>
+              <div className="field">
+                <label>Authorized Alternate Claimant</label>
+                <input
+                  placeholder="e.g. Maria Santos (relative / courier)"
+                  value={editTxForm.authorized_pickup_name}
+                  onChange={(e) => setEditTxForm({ ...editTxForm, authorized_pickup_name: e.target.value })}
+                />
+              </div>
+              <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
+                <div className="field">
+                  <label>Payment Status</label>
+                  <select
+                    value={editTxForm.payment_status}
+                    onChange={(e) => setEditTxForm({ ...editTxForm, payment_status: e.target.value as 'Pending' | 'Paid' })}
+                  >
+                    <option value="Pending">Pending Payment (Collect at counter)</option>
+                    <option value="Paid">Paid (Paid online to renter)</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Payment Method</label>
+                  <select
+                    value={editTxForm.payment_method}
+                    onChange={(e) => setEditTxForm({ ...editTxForm, payment_method: e.target.value as 'Cash' | 'Online' })}
+                  >
+                    <option value="Cash">Cash</option>
+                    <option value="Online">GCash / Maya / Online</option>
+                  </select>
+                </div>
+              </div>
+              <div className="field">
+                <label>Update Receipt Proof (Optional)</label>
+                {editingTx.receipt_image_url && (
+                  <div style={{ marginBottom: 6 }}>
+                    <img
+                      src={editingTx.receipt_image_url}
+                      alt="Current receipt"
+                      style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 4, border: '1px solid #ddd' }}
+                    />
+                    <span className="muted" style={{ fontSize: '0.75rem', marginLeft: 8 }}>Current receipt uploaded</span>
+                  </div>
+                )}
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setEditTxReceiptFile(e.target.files?.[0] || null)}
+                />
+              </div>
+              <div className="field">
+                <label>Notes / Claimant Instructions</label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g. Reference code, note on claimant"
+                  value={editTxForm.notes}
+                  onChange={(e) => setEditTxForm({ ...editTxForm, notes: e.target.value })}
+                />
+              </div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1.25rem' }}>
+              <button className="btn-ghost" type="button" onClick={() => setEditingTx(null)}>Cancel</button>
+              <button className="btn" type="button" disabled={busy} onClick={updateHandover}>
+                {busy ? 'Saving…' : 'Update Handover Info'}
+              </button>
+            </div>
           </div>
         </div>
       )}
