@@ -15,6 +15,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import { daysUntil, peso, type Contract, type Cube } from '../lib/types'
 import { SkeletonTable } from '../components/Skeleton'
+import TablePagination, { DEFAULT_PAGE_SIZE } from '../components/TablePagination'
 
 const DEFAULT_TERMS = `1. Renter may place products in the assigned Display or Pick-up cube only.
 2. Monthly rental fee is due as agreed; Owner reserves the right to withhold renter payouts until sales inventory records match.
@@ -32,6 +33,7 @@ export default function ContractsPage() {
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('All')
+  const [page, setPage] = useState(1)
 
   // Modals state
   const [viewingContract, setViewingContract] = useState<Contract | null>(null)
@@ -511,6 +513,9 @@ export default function ContractsPage() {
     return list
   }, [contracts, search, filterStatus, sortConfig])
 
+  useEffect(() => setPage(1), [search, filterStatus, sortConfig, contracts])
+  const pagedContracts = filteredContracts.slice((page - 1) * DEFAULT_PAGE_SIZE, page * DEFAULT_PAGE_SIZE)
+
   // Summary Metrics
   const metrics = useMemo(() => {
     const total = contracts.length
@@ -642,7 +647,7 @@ export default function ContractsPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredContracts.map((c) => {
+              {pagedContracts.map((c) => {
                 const daysLeft = daysUntil(c.end_date)
                 const isExpiringSoon = c.status === 'Active' && daysLeft >= 0 && daysLeft <= 7
                 const isPast = c.status === 'Expired' || daysLeft < 0
@@ -739,6 +744,8 @@ export default function ContractsPage() {
               })}
             </tbody>
           </table>
+
+          <TablePagination page={page} totalItems={filteredContracts.length} onPageChange={setPage} />
 
           {filteredContracts.length === 0 && (
             <div className="empty" style={{ padding: '3rem 1.5rem' }}>

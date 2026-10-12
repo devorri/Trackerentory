@@ -87,7 +87,7 @@ export default function RenterDashboard() {
       supabase
         .from('transactions')
         .select('*, products(*, cubes(cube_number, type)), users!processed_by(full_name, role)')
-        .order('transaction_date', { ascending: false }),
+        .order('updated_at', { ascending: false }),
     ])
       if (!silent) setLoading(false)
     if (!cRes.error) setCubes((cRes.data || []) as Cube[])

@@ -20,11 +20,13 @@ import { BarChart3, Package, Store, CalendarCheck, Tag, Box, FileText, Users, Me
 import { supabase } from './lib/supabase'
 import { daysUntil, type Contract } from './lib/types'
 import ConfirmModal from './components/ConfirmModal'
+import SystemNotice from './components/SystemNotice'
 import { cancelExpiredReservations, expireContracts } from './lib/maintenance'
 
 function App() {
   return (
     <AuthProvider>
+      <SystemNotice />
       <InnerApp />
     </AuthProvider>
   )

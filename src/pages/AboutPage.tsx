@@ -1,4 +1,4 @@
-import { MapPin, Clock, Phone, Mail, MessageCircle, ExternalLink } from 'lucide-react'
+import { MapPin, Clock, ExternalLink } from 'lucide-react'
 
 export default function AboutPage() {
   return (
@@ -44,30 +44,20 @@ export default function AboutPage() {
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(57, 181, 74, 0.1)', color: 'var(--accent)', fontWeight: 800, fontSize: '0.8rem', padding: '0.35rem 0.75rem', borderRadius: 999, marginBottom: '1rem', textTransform: 'uppercase' }}>
               <MapPin size={14} /> Physical Store Location
             </div>
-            <h3 style={{ fontSize: '1.5rem', margin: '0 0 0.75rem' }}>TrackErentory Concept & Rental Hub</h3>
+            <h3 style={{ fontSize: '1.5rem', margin: '0 0 0.75rem' }}>TrackErentory</h3>
             <p style={{ color: '#444', lineHeight: 1.7, fontSize: '1rem', marginBottom: '1.25rem' }}>
-              Unit 102, Ground Floor, Commercial Center Plaza,<br />
-              Rizal Avenue, Metro Manila, Philippines
+              Osmeña Drive, Poblacion, Kidapawan City, North Cotabato
             </p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', fontSize: '0.92rem', color: '#555' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                <Clock size={16} /> <strong>Operating Hours:</strong> Monday to Sunday, 9:00 AM – 8:00 PM
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                <Phone size={16} /> <strong>Contact Number:</strong> +63 917 123 4567 / (02) 8123 4567
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                <Mail size={16} /> <strong>Email:</strong> support@trackerentory.com
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                <MessageCircle size={16} /> <strong>Messenger / Socials:</strong> m.me/TrackErentoryOfficial
+                <Clock size={16} /> <strong>Operating Hours:</strong> Monday to Saturday, 9 AM - 8PM
               </div>
             </div>
 
             <div style={{ marginTop: '1.5rem' }}>
               <a
-                href="https://maps.google.com/?q=Manila+Philippines"
+                href="https://maps.google.com/?q=Osme%C3%B1a+Drive,+Poblacion,+Kidapawan+City,+North+Cotabato"
                 target="_blank"
                 rel="noreferrer"
                 className="btn"
@@ -81,7 +71,7 @@ export default function AboutPage() {
           <div style={{ borderRadius: 16, overflow: 'hidden', border: '1px solid #e5e5e5', height: 320, background: '#eee' }}>
             <iframe
               title="TrackErentory Store Location"
-              src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d123536.6534571932!2d120.94454029286064!3d14.596495713437597!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x3397ca03571ec38b%3A0x69d1d5751069c11f!2sManila%2C%20Metro%20Manila!5e0!3m2!1sen!2sph!4v1700000000000!5m2!1sen!2sph"
+              src="https://www.google.com/maps?q=Osme%C3%B1a%20Drive%2C%20Poblacion%2C%20Kidapawan%20City%2C%20North%20Cotabato&output=embed"
               width="100%"
               height="100%"
               style={{ border: 0 }}

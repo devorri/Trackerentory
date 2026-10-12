@@ -70,7 +70,7 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
       supabase
         .from('transactions')
         .select('*, products(*, cubes(cube_number, type)), cubes(cube_number, type), users!processed_by(full_name, role)')
-        .order('transaction_date', { ascending: false }),
+        .order('updated_at', { ascending: false }),
       supabase.from('products').select('*, cubes(cube_number, type)').order('product_name'),
       supabase.from('cubes').select('*').order('cube_number'),
       supabase.from('users').select('*').eq('role', 'Renter').order('full_name'),
@@ -253,7 +253,7 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
   const visible = rows.filter((t) => {
     if (filter === 'All') return true
     return (t.products?.cubes?.type || t.cubes?.type) === filter
-  })
+  }).sort((a, b) => new Date(b.updated_at || b.transaction_date).getTime() - new Date(a.updated_at || a.transaction_date).getTime())
 
   const computedTitle = pageTitle || (filter === 'Pick-up' ? 'Pickup Tracking' : filter === 'Display' ? 'Display Tracking' : 'Pickup & Display Tracking')
 
@@ -268,8 +268,8 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
         </div>
       </div>
 
-      {/* NEW TRANSACTION FORM */}
-      <div className="panel no-print" style={{ marginBottom: '2rem' }}>
+      {/* Pick-up details are entered only by renters. Counter roles update status below. */}
+      {filter !== 'Pick-up' && <div className="panel no-print" style={{ marginBottom: '2rem' }}>
         <h2 style={{ marginTop: 0 }}>Record New Transaction / Hand-over</h2>
         <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
           
@@ -432,7 +432,7 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
         <button className="btn" type="button" disabled={busy} onClick={saveNew} style={{ marginTop: '0.5rem' }}>
           {busy ? 'Saving…' : 'Save Record'}
         </button>
-      </div>
+      </div>}
 
       {/* TRANSACTIONS TABLE */}
       {loading ? (
@@ -469,7 +469,7 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                       {prod?.description && <div className="muted" style={{ fontSize: '0.78rem' }}>{prod.description}</div>}
                       {(t.listed_quantity ?? prod?.stock_quantity) != null && <div className="muted" style={{ fontSize: '0.78rem' }}>Quantity left in cube: {t.listed_quantity ?? prod?.stock_quantity}</div>}
                       <div className="muted" style={{ fontSize: '0.75rem' }}>
-                        {new Date(t.transaction_date).toLocaleString('en-PH')}
+                        Created {new Date(t.transaction_date).toLocaleString('en-PH')}<br />Updated {new Date(t.updated_at || t.transaction_date).toLocaleString('en-PH')}
                       </div>
                     </td>
                     <td><strong>{rName}</strong></td>
@@ -512,22 +512,22 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                     <td className="no-print" style={{ textAlign: 'right' }}>
                       {editId === t.transaction_id ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 140 }}>
-                          <input
+                          {filter !== 'Pick-up' && <input
                             aria-label="Buyer name"
                             placeholder="Buyer name"
                             defaultValue={t.buyer_name || ''}
                             onBlur={(e) => {
                               if (e.target.value !== (t.buyer_name || '')) void updateRow(t, { buyer_name: e.target.value || null })
                             }}
-                          />
-                          <input
+                          />}
+                          {filter !== 'Pick-up' && <input
                             aria-label="Authorized pickup person"
                             placeholder="Authorized pickup person"
                             defaultValue={t.authorized_pickup_name || ''}
                             onBlur={(e) => {
                               if (e.target.value !== (t.authorized_pickup_name || '')) void updateRow(t, { authorized_pickup_name: e.target.value || null })
                             }}
-                          />
+                          />}
                           <select
                             defaultValue={t.payment_status}
                             onChange={(e) => void updateRow(t, { payment_status: e.target.value as 'Pending' | 'Paid' })}

@@ -7,9 +7,12 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import { peso, type Contract, type Transaction, type Product, type Reservation, isReservationExpired, getReservationHoursLeft, parseReservationExpiry } from '../lib/types'
 import { SkeletonStat, SkeletonTable } from '../components/Skeleton'
+import TablePagination, { DEFAULT_PAGE_SIZE } from '../components/TablePagination'
 
 type ReportType = 'display' | 'pickup' | 'rental'
 type DateFilterMode = 'monthly' | 'daily' | 'yearly' | 'custom'
+type DashboardSection = 'cube-reservations' | 'rentals' | 'sales' | 'reservations'
+const PAGE_SIZE = DEFAULT_PAGE_SIZE
 
 export default function OwnerDashboard() {
   const { user } = useAuth()
@@ -19,6 +22,11 @@ export default function OwnerDashboard() {
   const [reservations, setReservations] = useState<Reservation[]>([])
   const [loading, setLoading] = useState(false)
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7))
+  const [dashboardSection, setDashboardSection] = useState<DashboardSection>('sales')
+  const [pendingCubesPage, setPendingCubesPage] = useState(1)
+  const [rentalsPage, setRentalsPage] = useState(1)
+  const [salesPage, setSalesPage] = useState(1)
+  const [reservationsPage, setReservationsPage] = useState(1)
 
   // Print Dialog State
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false)
@@ -30,14 +38,15 @@ export default function OwnerDashboard() {
   const [printStartDate, setPrintStartDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [printEndDate, setPrintEndDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [printRenterId, setPrintRenterId] = useState<string>('all')
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
 
   function refreshData() {
     setLoading(true)
     void Promise.all([
       supabase.from('contracts').select('*, cubes(*), users!renter_id(user_id, full_name)'),
-      supabase.from('transactions').select('*, products(*, cubes(cube_number, type)), cubes(cube_number, type), users!processed_by(full_name, role)'),
+      supabase.from('transactions').select('*, products(*, cubes(cube_number, type)), cubes(cube_number, type), users!processed_by(full_name, role)').order('updated_at', { ascending: false }),
       supabase.from('users').select('user_id, full_name').eq('role', 'Renter').order('full_name'),
-      supabase.from('reservations').select('*, products(*, cubes(cube_number, type)), cubes(cube_number, type), customer:users!customer_id(full_name, email, phone_number)').order('expiry_time', { ascending: false }).limit(20),
+      supabase.from('reservations').select('*, products(*, cubes(cube_number, type)), cubes(cube_number, type), customer:users!customer_id(full_name, email, phone_number)').order('expiry_time', { ascending: false }),
     ]).then(([c, t, r, res]) => {
       setLoading(false)
       if (!c.error) setContracts((c.data || []) as Contract[])
@@ -263,7 +272,7 @@ export default function OwnerDashboard() {
     list.sort((a, b) => {
       let vA: any = ''
       let vB: any = ''
-      if (col === 'date') { vA = new Date(a.transaction_date).getTime(); vB = new Date(b.transaction_date).getTime() }
+      if (col === 'date') { vA = new Date(a.updated_at || a.transaction_date).getTime(); vB = new Date(b.updated_at || b.transaction_date).getTime() }
       else if (col === 'product') { vA = a.products?.product_name || a.product_name || ''; vB = b.products?.product_name || b.product_name || '' }
       else if (col === 'cube') { vA = a.products?.cubes?.cube_number || a.cubes?.cube_number || ''; vB = b.products?.cubes?.cube_number || b.cubes?.cube_number || '' }
       else if (col === 'renter') { vA = getTxRenter(a).name; vB = getTxRenter(b).name }
@@ -295,6 +304,16 @@ export default function OwnerDashboard() {
     })
     return list
   }, [reservations, sortCustRes])
+
+  useEffect(() => setPendingCubesPage(1), [pendingCubeReservationsSorted])
+  useEffect(() => setRentalsPage(1), [rentalSalesSorted])
+  useEffect(() => setSalesPage(1), [monthTxSorted])
+  useEffect(() => setReservationsPage(1), [reservationsSorted])
+
+  const pendingCubesPageRows = pendingCubeReservationsSorted.slice((pendingCubesPage - 1) * PAGE_SIZE, pendingCubesPage * PAGE_SIZE)
+  const rentalsPageRows = rentalSalesSorted.slice((rentalsPage - 1) * PAGE_SIZE, rentalsPage * PAGE_SIZE)
+  const salesPageRows = monthTxSorted.slice((salesPage - 1) * PAGE_SIZE, salesPage * PAGE_SIZE)
+  const reservationsPageRows = reservationsSorted.slice((reservationsPage - 1) * PAGE_SIZE, reservationsPage * PAGE_SIZE)
 
   const byType = useMemo(() => {
     let display = 0
@@ -355,7 +374,7 @@ export default function OwnerDashboard() {
       const dateMatch = matchesDate(t.transaction_date)
       const typeMatch = (t.products?.cubes?.type || t.cubes?.type) === targetType
       return dateMatch && typeMatch
-    })
+    }).sort((a, b) => new Date(b.updated_at || b.transaction_date).getTime() - new Date(a.updated_at || a.transaction_date).getTime())
 
     if (printRenterId !== 'all') {
       const rid = Number(printRenterId)
@@ -682,8 +701,8 @@ export default function OwnerDashboard() {
     doc.line(136, finalY, 196, finalY)
     doc.text('Received / Acknowledged By', 136, finalY + 6)
 
-    const cleanDate = new Date().toISOString().slice(0, 10)
-    doc.save(`TrackErentory_${printReportType}_${cleanDate}.pdf`)
+    if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl)
+    setPdfPreviewUrl(String(doc.output('bloburl')))
   }
 
   function handleTriggerPrint() {
@@ -754,6 +773,13 @@ export default function OwnerDashboard() {
           </button>
         </div>
 
+        <nav aria-label="Sales and reports sections" className="report-section-nav no-print">
+          <button type="button" className={dashboardSection === 'sales' ? 'active' : ''} onClick={() => setDashboardSection('sales')}>Product Sales</button>
+          <button type="button" className={dashboardSection === 'cube-reservations' ? 'active' : ''} onClick={() => setDashboardSection('cube-reservations')}>Cube Reservations{pendingCubeReservations.length > 0 ? ` (${pendingCubeReservations.length})` : ''}</button>
+          <button type="button" className={dashboardSection === 'rentals' ? 'active' : ''} onClick={() => setDashboardSection('rentals')}>Monthly Rentals</button>
+          <button type="button" className={dashboardSection === 'reservations' ? 'active' : ''} onClick={() => setDashboardSection('reservations')}>Reservations ({reservations.length})</button>
+        </nav>
+
         {loading ? (
           <>
             <div className="stat-grid">
@@ -784,6 +810,7 @@ export default function OwnerDashboard() {
               </div>
             </div>
 
+            {dashboardSection === 'cube-reservations' && <>
             {/* ════════════ PENDING CUBE RESERVATIONS SECTION ════════════ */}
             {pendingCubeReservations.length > 0 && (
               <div style={{ marginBottom: '2.5rem' }}>
@@ -844,7 +871,7 @@ export default function OwnerDashboard() {
                       </tr>
                     </thead>
                     <tbody>
-                      {pendingCubeReservationsSorted.map((c) => {
+                      {pendingCubesPageRows.map((c) => {
                         const renterName =
                           c.users?.full_name || renterMap.get(c.renter_id || 0) || `Renter #${c.renter_id}`
                         return (
@@ -919,9 +946,13 @@ export default function OwnerDashboard() {
                     </tbody>
                   </table>
                 </div>
+                <TablePagination page={pendingCubesPage} totalItems={pendingCubeReservationsSorted.length} onPageChange={setPendingCubesPage} />
               </div>
             )}
 
+            </>}
+
+            {dashboardSection === 'rentals' && <>
             <h2>Monthly rental payments</h2>
             <div className="table-wrap">
               <table className="table">
@@ -948,7 +979,7 @@ export default function OwnerDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rentalSalesSorted.map((r, i) => (
+                  {rentalsPageRows.map((r, i) => (
                     <tr key={`${r.cube}-${i}`}>
                       <td>{r.renter}</td>
                       <td>{r.cube}</td>
@@ -974,7 +1005,11 @@ export default function OwnerDashboard() {
                 </tfoot>
               </table>
             </div>
+            <TablePagination page={rentalsPage} totalItems={rentalSalesSorted.length} onPageChange={setRentalsPage} />
 
+            </>}
+
+            {dashboardSection === 'sales' && <>
             <h2>Display / Pick-up sales ({month === 'all' ? 'All Time' : month})</h2>
             <p className="muted">Use this to match renter records before releasing money.</p>
             <div className="table-wrap" style={{ marginBottom: '2.5rem' }}>
@@ -1005,11 +1040,14 @@ export default function OwnerDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {monthTxSorted.map((t) => {
+                  {salesPageRows.map((t) => {
                     const r = getTxRenter(t)
                     return (
                       <tr key={t.transaction_id}>
-                        <td>{new Date(t.transaction_date).toLocaleString()}</td>
+                        <td>
+                          {new Date(t.updated_at || t.transaction_date).toLocaleString('en-PH')}
+                          <div className="muted" style={{ fontSize: '0.72rem' }}>Last action</div>
+                        </td>
                         <td>{t.products?.product_name || t.product_name}</td>
                         <td>{t.products?.cubes?.cube_number || t.cubes?.cube_number || '—'} · {t.products?.cubes?.type || t.cubes?.type || '—'}</td>
                         <td>{r.name}</td>
@@ -1036,8 +1074,12 @@ export default function OwnerDashboard() {
                 </tfoot>
               </table>
             </div>
+            <TablePagination page={salesPage} totalItems={monthTxSorted.length} onPageChange={setSalesPage} />
             {monthTx.length === 0 && <div className="empty" style={{ marginBottom: '2.5rem' }}>No transactions found for this period.</div>}
 
+            </>}
+
+            {dashboardSection === 'reservations' && <>
             {/* ════════════ PENDING CUSTOMER RESERVATIONS ════════════ */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
               <div>
@@ -1074,7 +1116,7 @@ export default function OwnerDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {reservationsSorted.map((r) => {
+                  {reservationsPageRows.map((r) => {
                     const expired = isReservationExpired(r)
                     const hoursLeft = getReservationHoursLeft(r)
                     const isPending = r.status === 'Pending' && !expired
@@ -1128,7 +1170,9 @@ export default function OwnerDashboard() {
                 </tbody>
               </table>
             </div>
+            <TablePagination page={reservationsPage} totalItems={reservationsSorted.length} onPageChange={setReservationsPage} />
             {reservations.length === 0 && <div className="empty" style={{ marginBottom: '2.5rem' }}>No customer reservations found.</div>}
+            </>}
           </>
         )}
       </div>
@@ -1267,9 +1311,25 @@ export default function OwnerDashboard() {
                   onClick={handleDownloadPdf}
                   title="Download standalone PDF document"
                 >
-                  <Download size={16} /> Download PDF
+                  <Download size={16} /> Preview PDF
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pdfPreviewUrl && (
+        <div className="modal-overlay no-print" onClick={() => setPdfPreviewUrl(null)}>
+          <div className="modal-card" style={{ maxWidth: 980, width: '96vw', height: '90vh', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div><h3 style={{ margin: 0 }}>PDF Preview</h3><p className="muted" style={{ margin: '0.2rem 0 0', fontSize: '.85rem' }}>Review the report before downloading it.</p></div>
+              <button className="modal-close" onClick={() => setPdfPreviewUrl(null)}><X size={18} /></button>
+            </div>
+            <iframe title="Report PDF preview" src={pdfPreviewUrl} style={{ flex: 1, width: '100%', border: '1px solid #e2e8f0', borderRadius: 8, marginTop: 12 }} />
+            <div className="row" style={{ justifyContent: 'flex-end', marginTop: 12 }}>
+              <button className="btn-ghost" type="button" onClick={() => setPdfPreviewUrl(null)}>Back</button>
+              <a className="btn" href={pdfPreviewUrl} download={`TrackErentory_${printReportType}_${new Date().toISOString().slice(0, 10)}.pdf`}><Download size={16} /> Download PDF</a>
             </div>
           </div>
         </div>

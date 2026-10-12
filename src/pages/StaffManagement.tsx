@@ -6,6 +6,7 @@ import { peso } from '../lib/types'
 import PasswordInput from '../components/PasswordInput'
 import ConfirmModal from '../components/ConfirmModal'
 import { SkeletonTable } from '../components/Skeleton'
+import TablePagination, { DEFAULT_PAGE_SIZE } from '../components/TablePagination'
 
 type StaffRow = AppUser & {
   phone_number?: string | null
@@ -18,6 +19,7 @@ export default function StaffManagement() {
   const [staff, setStaff] = useState<StaffRow[]>([])
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState<'active' | 'trash'>('active')
+  const [page, setPage] = useState(1)
   const [editing, setEditing] = useState<StaffRow | null>(null)
   const [confirmAction, setConfirmAction] = useState<{
     title: string
@@ -160,6 +162,9 @@ export default function StaffManagement() {
   }
 
   const displayedStaff = staff.filter((member) => tab === 'trash' ? Boolean(member.deleted_at) : !member.deleted_at)
+  const pagedStaff = displayedStaff.slice((page - 1) * DEFAULT_PAGE_SIZE, page * DEFAULT_PAGE_SIZE)
+
+  useEffect(() => setPage(1), [tab, staff])
 
   return (
     <section>
@@ -236,7 +241,7 @@ export default function StaffManagement() {
             </tr>
           </thead>
           <tbody>
-            {displayedStaff.map((s) => (
+            {pagedStaff.map((s) => (
               <tr key={s.user_id}>
                 <td><strong>{s.full_name}</strong></td>
                 <td>{s.username}</td>
@@ -284,6 +289,7 @@ export default function StaffManagement() {
             ))}
           </tbody>
         </table>
+        <TablePagination page={page} totalItems={displayedStaff.length} onPageChange={setPage} />
         </div>
       )}
       {displayedStaff.length === 0 && !loading && <div className="empty">{tab === 'trash' ? 'Trash is empty.' : 'No staff accounts.'}</div>}

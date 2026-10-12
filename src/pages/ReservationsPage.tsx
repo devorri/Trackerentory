@@ -25,6 +25,7 @@ import {
 } from '../lib/types'
 import { cancelExpiredReservations } from '../lib/maintenance'
 import { SkeletonTable } from '../components/Skeleton'
+import TablePagination, { DEFAULT_PAGE_SIZE } from '../components/TablePagination'
 
 type TypeFilter = 'all' | 'products' | 'cubes'
 type StatusFilter = 'all' | 'Pending' | 'Confirmed' | 'Cancelled'
@@ -56,6 +57,7 @@ export default function ReservationsPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [sortMode, setSortMode] = useState<SortMode>('expiry_asc')
   const [search, setSearch] = useState('')
+  const [page, setPage] = useState(1)
 
   function toggleSortCol(ascMode: SortMode, descMode: SortMode) {
     setSortMode((prev) => (prev === ascMode ? descMode : ascMode))
@@ -334,6 +336,22 @@ export default function ReservationsPage() {
       })
   }, [rows, typeFilter, statusFilter, sortMode, search])
 
+  useEffect(() => {
+    setPage(1)
+  }, [typeFilter, statusFilter, sortMode, search])
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(filteredRows.length / DEFAULT_PAGE_SIZE))
+    if (page > totalPages) {
+      setPage(totalPages)
+    }
+  }, [filteredRows.length, page])
+
+  const pagedRows = useMemo(() => {
+    const start = (page - 1) * DEFAULT_PAGE_SIZE
+    return filteredRows.slice(start, start + DEFAULT_PAGE_SIZE)
+  }, [filteredRows, page])
+
   return (
     <section>
       <div className="page-header">
@@ -488,7 +506,7 @@ export default function ReservationsPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredRows.map((r) => {
+              {pagedRows.map((r) => {
                 const isCube = Boolean(r.cube_id) && !r.product_id
                 const expired = isReservationExpired(r)
                 const hoursLeft = getReservationHoursLeft(r)
@@ -759,6 +777,7 @@ export default function ReservationsPage() {
               })}
             </tbody>
           </table>
+          <TablePagination page={page} totalItems={filteredRows.length} onPageChange={setPage} />
         </div>
       )}
 

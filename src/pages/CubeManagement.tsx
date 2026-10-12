@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import { type Cube, peso } from '../lib/types'
 import { SkeletonTable } from '../components/Skeleton'
+import TablePagination, { DEFAULT_PAGE_SIZE } from '../components/TablePagination'
 import { uploadPublicImage } from '../lib/storage'
 import { BUCKET_PRODUCT_IMAGES } from '../lib/supabase'
 
@@ -212,6 +213,7 @@ export default function CubeManagement() {
   }
 
   const [sortConfig, setSortConfig] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'number', dir: 'asc' })
+  const [page, setPage] = useState(1)
 
   function renderSortIndicator(col: string) {
     if (sortConfig.col !== col) {
@@ -246,6 +248,9 @@ export default function CubeManagement() {
     })
     return list
   }, [currentTab, displayCubes, pickupCubes, trashCubes, sortConfig])
+
+  useEffect(() => setPage(1), [currentTab, sortConfig, displayCubes, pickupCubes, trashCubes])
+  const pagedCubes = currentList.slice((page - 1) * DEFAULT_PAGE_SIZE, page * DEFAULT_PAGE_SIZE)
 
   return (
     <section>
@@ -415,7 +420,7 @@ export default function CubeManagement() {
               </tr>
             </thead>
             <tbody>
-              {currentList.map((c) => (
+              {pagedCubes.map((c) => (
                 <tr key={c.cube_id}>
                   <td>
                     {c.image_url ? (
@@ -477,6 +482,7 @@ export default function CubeManagement() {
               ))}
             </tbody>
           </table>
+          <TablePagination page={page} totalItems={currentList.length} onPageChange={setPage} />
           {currentList.length === 0 && (
             <div className="empty" style={{ padding: '2rem' }}>
               {currentTab === 'Trash' ? 'Trash is empty.' : `No ${currentTab} cubes found.`}
