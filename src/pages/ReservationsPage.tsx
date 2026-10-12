@@ -23,6 +23,7 @@ import {
   todayISO,
   addMonths,
 } from '../lib/types'
+import ConfirmModal from '../components/ConfirmModal'
 import { cancelExpiredReservations } from '../lib/maintenance'
 import { SkeletonTable } from '../components/Skeleton'
 import TablePagination, { DEFAULT_PAGE_SIZE } from '../components/TablePagination'
@@ -51,6 +52,7 @@ export default function ReservationsPage() {
   const [rows, setRows] = useState<Reservation[]>([])
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState<number | null>(null)
+  const [declineResTarget, setDeclineResTarget] = useState<Reservation | null>(null)
 
   // Filters & sorting
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
@@ -232,10 +234,10 @@ export default function ReservationsPage() {
     void load()
   }
 
-  async function cancelCubeReservation(r: Reservation) {
-    if (!confirm(`Are you sure you want to cancel reservation for Cube ${r.cubes?.cube_number || r.cube_id}?`)) {
-      return
-    }
+  async function confirmDeclineReservation() {
+    if (!declineResTarget) return
+    const r = declineResTarget
+    setDeclineResTarget(null)
     setBusyId(r.reservation_id)
 
     // Cancel reservation
@@ -256,7 +258,6 @@ export default function ReservationsPage() {
     }
 
     setBusyId(null)
-    alert('Cube reservation cancelled. Cube is now Available again.')
     void load()
   }
 
@@ -687,10 +688,10 @@ export default function ReservationsPage() {
                                   type="button"
                                   disabled={isBusy}
                                   style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem', color: '#dc2626' }}
-                                  onClick={() => void cancelCubeReservation(r)}
-                                  title="Cancel reservation and free up cube"
+                                  onClick={() => setDeclineResTarget(r)}
+                                  title="Decline reservation and free up cube"
                                 >
-                                  <XCircle size={14} /> Reject
+                                  <XCircle size={14} /> Decline
                                 </button>
                               </>
                             )}
@@ -787,6 +788,18 @@ export default function ReservationsPage() {
           reservations found matching the selected criteria.
         </div>
       )}
+
+      {/* Decline Reservation Confirmation Modal */}
+      <ConfirmModal
+        isOpen={Boolean(declineResTarget)}
+        title="Decline Cube Reservation"
+        message={declineResTarget ? `Are you sure you want to decline the reservation for Cube ${declineResTarget.cubes?.cube_number || declineResTarget.cube_id}? The cube will return to Available.` : ''}
+        confirmText="Decline Reservation"
+        cancelText="Cancel"
+        isDanger={true}
+        onConfirm={confirmDeclineReservation}
+        onCancel={() => setDeclineResTarget(null)}
+      />
     </section>
   )
 }

@@ -269,6 +269,18 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
       </div>
 
       {/* Pick-up details are entered only by renters. Counter roles update status below. */}
+      {filter === 'Pick-up' && (
+        <div className="panel no-print" style={{ marginBottom: '1.75rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '1rem 1.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+            <span className="badge" style={{ background: '#0284c7', color: '#fff' }}>Counter Pickup Verification</span>
+            <strong style={{ color: '#0f172a', fontSize: '0.95rem' }}>Renter-Submitted Handover Tracking</strong>
+          </div>
+          <p className="muted" style={{ margin: 0, fontSize: '0.85rem', lineHeight: 1.5 }}>
+            Pick-up products and claimant names are submitted by Renters from their dashboard. Counter staff and owners review claimant identity below, collect or verify payments, and click <strong>Verify Paid</strong> and <strong>Confirm Claimed</strong> to complete customer pickup.
+          </p>
+        </div>
+      )}
+
       {filter !== 'Pick-up' && <div className="panel no-print" style={{ marginBottom: '2rem' }}>
         <h2 style={{ marginTop: 0 }}>Record New Transaction / Hand-over</h2>
         <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
@@ -507,7 +519,19 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                       <div style={{ fontSize: '0.82rem', color: '#444' }}>{t.notes || '—'}</div>
                     </td>
                     <td>
-                      {t.users ? `${t.users.full_name} (${t.users.role})` : '—'}
+                      {t.users?.role === 'Renter' ? (
+                        <div>
+                          <span className="badge warn" style={{ fontSize: '0.72rem', padding: '0.12rem 0.45rem' }}>Awaiting Counter</span>
+                          <div className="muted" style={{ fontSize: '0.74rem', marginTop: 3 }}>Submitted by {t.users.full_name}</div>
+                        </div>
+                      ) : t.users ? (
+                        <div>
+                          <strong>{t.users.full_name}</strong>
+                          <div className="muted" style={{ fontSize: '0.74rem' }}>{t.users.role}</div>
+                        </div>
+                      ) : (
+                        <span className="muted" style={{ fontSize: '0.8rem' }}>—</span>
+                      )}
                     </td>
                     <td className="no-print" style={{ textAlign: 'right' }}>
                       {editId === t.transaction_id ? (

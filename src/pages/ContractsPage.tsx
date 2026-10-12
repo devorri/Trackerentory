@@ -16,6 +16,7 @@ import { useAuth } from '../context/Auth'
 import { daysUntil, peso, type Contract, type Cube } from '../lib/types'
 import { SkeletonTable } from '../components/Skeleton'
 import TablePagination, { DEFAULT_PAGE_SIZE } from '../components/TablePagination'
+import ConfirmModal from '../components/ConfirmModal'
 
 const DEFAULT_TERMS = `1. Renter may place products in the assigned Display or Pick-up cube only.
 2. Monthly rental fee is due as agreed; Owner reserves the right to withhold renter payouts until sales inventory records match.
@@ -39,6 +40,7 @@ export default function ContractsPage() {
   const [viewingContract, setViewingContract] = useState<Contract | null>(null)
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
   const [editingContract, setEditingContract] = useState<Contract | null>(null)
+  const [declineTarget, setDeclineTarget] = useState<Contract | null>(null)
   const [saving, setSaving] = useState(false)
 
   // Form states
@@ -227,13 +229,15 @@ export default function ContractsPage() {
     void load()
   }
 
-  async function handleRejectPending(c: Contract) {
-    if (!confirm(`Are you sure you want to reject contract #${c.contract_id}? The cube will return to Available.`)) return
+  async function confirmDeclineContract() {
+    if (!declineTarget) return
+    const c = declineTarget
+    setDeclineTarget(null)
     setSaving(true)
     const { error } = await supabase.from('contracts').delete().eq('contract_id', c.contract_id)
     if (error) {
       setSaving(false)
-      return alert('Error rejecting contract: ' + error.message)
+      return alert('Error declining contract: ' + error.message)
     }
     if (c.cube_id) {
       await supabase.from('cubes').update({ status: 'Available' }).eq('cube_id', c.cube_id)
@@ -247,13 +251,12 @@ export default function ContractsPage() {
       }
     }
     setSaving(false)
-    alert(`Contract #${c.contract_id} rejected. Cube returned to Available.`)
     void load()
   }
 
   // Print agreement in formal document format
   function printAgreement(c: Contract) {
-    const printWindow = window.open('', '_blank', 'width=950,height=950,noopener,noreferrer')
+    const printWindow = window.open('', '_blank', 'width=950,height=950')
     if (!printWindow) {
       alert('Please allow pop-ups to open the print document.')
       return
@@ -712,10 +715,10 @@ export default function ContractsPage() {
                               className="btn-ghost"
                               type="button"
                               style={{ padding: '0.35rem 0.65rem', fontSize: '0.82rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#dc2626' }}
-                              onClick={() => void handleRejectPending(c)}
-                              title="Reject reservation & release cube"
+                              onClick={() => setDeclineTarget(c)}
+                              title="Decline reservation & release cube"
                             >
-                              <X size={14} /> Reject
+                              <X size={14} /> Decline
                             </button>
                           </>
                         )}
@@ -1110,6 +1113,18 @@ export default function ContractsPage() {
           </div>
         </div>
       )}
+
+      {/* Decline Confirmation Modal */}
+      <ConfirmModal
+        isOpen={Boolean(declineTarget)}
+        title="Decline Contract Agreement"
+        message={declineTarget ? `Are you sure you want to decline contract #${declineTarget.contract_id}? The cube will return to Available.` : ''}
+        confirmText="Decline Contract"
+        cancelText="Cancel"
+        isDanger={true}
+        onConfirm={confirmDeclineContract}
+        onCancel={() => setDeclineTarget(null)}
+      />
     </section>
   )
 }

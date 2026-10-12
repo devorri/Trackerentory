@@ -140,6 +140,21 @@ export default function RenterDashboard() {
   const [sortPickupTx, setSortPickupTx] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'date', dir: 'desc' })
   const [sortContracts, setSortContracts] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'days', dir: 'asc' })
 
+  // Auto-select cube matching active tab
+  useEffect(() => {
+    if (visibleTab === 'pickup') {
+      const pCube = myCubes.find((c) => c.type === 'Pick-up')
+      if (pCube && (!productForm.cube_id || myCubes.find((c) => String(c.cube_id) === String(productForm.cube_id))?.type !== 'Pick-up')) {
+        setProductForm((prev) => ({ ...prev, cube_id: String(pCube.cube_id) }))
+      }
+    } else if (visibleTab === 'display') {
+      const dCube = myCubes.find((c) => c.type === 'Display')
+      if (dCube && (!productForm.cube_id || myCubes.find((c) => String(c.cube_id) === String(productForm.cube_id))?.type !== 'Display')) {
+        setProductForm((prev) => ({ ...prev, cube_id: String(dCube.cube_id) }))
+      }
+    }
+  }, [visibleTab, myCubes])
+
   function renderSortIndicator(currentCol: string, sortState: { col: string; dir: 'asc' | 'desc' }) {
     if (sortState.col !== currentCol) {
       return <ArrowUpDown size={12} style={{ opacity: 0.35, marginLeft: 4, verticalAlign: 'middle', display: 'inline' }} />
@@ -281,8 +296,9 @@ export default function RenterDashboard() {
     }
 
     const selectedCube = myCubes.find((cube) => cube.cube_id === Number(productForm.cube_id))
-    if (selectedCube?.type === 'Pick-up' && !productForm.buyer_name.trim()) {
-      return alert('Buyer Name is required for pick-up items so staff can verify the claimant.')
+    const isPickup = selectedCube?.type === 'Pick-up' || visibleTab === 'pickup'
+    if (isPickup && !productForm.buyer_name.trim()) {
+      return alert('Buyer / Customer Name is required for pick-up items so staff can verify the claimant.')
     }
 
     setBusy(true)
@@ -314,7 +330,7 @@ export default function RenterDashboard() {
       return alert(error.message)
     }
 
-    if (selectedCube?.type === 'Pick-up' && createdProduct) {
+    if (isPickup && createdProduct) {
       let pickupReceiptUrl = null
       if (pickupReceiptFile) {
         const up = await uploadPublicImage(BUCKET_DOCUMENTS, pickupReceiptFile, 'receipts')
@@ -324,7 +340,7 @@ export default function RenterDashboard() {
       const { error: trackingError } = await supabase.from('transactions').insert([{
         product_id: createdProduct.product_id,
         product_name: `${productForm.product_name.trim()}${productForm.variant ? ` (${productForm.variant.trim()})` : ''}`,
-        cube_id: selectedCube.cube_id,
+        cube_id: Number(productForm.cube_id),
         renter_id: user!.user_id,
         buyer_name: productForm.buyer_name.trim(),
         authorized_pickup_name: productForm.authorized_pickup_name.trim() || null,
@@ -361,7 +377,7 @@ export default function RenterDashboard() {
     setImagePreview(null)
     setPickupReceiptFile(null)
     setPickupReceiptPreview(null)
-    alert(selectedCube?.type === 'Pick-up' ? 'Pick-up item and claimant details saved! Staff will confirm when claimed.' : 'Product listed successfully!')
+    alert(isPickup ? 'Pick-up item and claimant details saved! Staff and Owner can now see and verify this on their Pickup Tracking dashboard.' : 'Product listed successfully!')
     void load()
   }
 
@@ -819,11 +835,25 @@ export default function RenterDashboard() {
       {/* ════════════ ADD PRODUCT FORM (Visible on both display and pickup tabs) ════════════ */}
       {visibleTab !== 'cubes_contracts' && (
         <div className="panel" style={{ marginBottom: '2.5rem' }}>
-          <h2 style={{ marginTop: 0 }}>Add Product to Your Cubes</h2>
+          <h2 style={{ marginTop: 0 }}>
+            {visibleTab === 'pickup' ? 'Add Pick-up Product & Handover Details' : 'Add Product to Your Cubes'}
+          </h2>
+
+          {visibleTab === 'pickup' && (
+            <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, padding: '0.85rem 1rem', marginBottom: '1.25rem' }}>
+              <strong style={{ color: '#0369a1', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.92rem' }}>
+                <Package size={18} /> Renter Pick-up Workflow
+              </strong>
+              <p style={{ margin: '0.35rem 0 0', fontSize: '0.84rem', color: '#0c4a6e', lineHeight: 1.5 }}>
+                Enter the product details and claimant information below. Once listed, this handover record will immediately reflect on the <strong>Owner & Staff Pickup Tracking</strong> counter dashboard so they can verify the buyer, confirm payment, and release the item.
+              </p>
+            </div>
+          )}
+
           <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem' }}>
             <div className="field">
               <label>Product Name *</label>
-              <input value={productForm.product_name} onChange={(e) => setProductForm({ ...productForm, product_name: e.target.value })} />
+              <input placeholder="e.g. Handmade Mug, Skincare Set" value={productForm.product_name} onChange={(e) => setProductForm({ ...productForm, product_name: e.target.value })} />
             </div>
             <div className="field">
               <label>Price (₱) *</label>
@@ -859,9 +889,11 @@ export default function RenterDashboard() {
               <label>Assigned Cube *</label>
               <select value={productForm.cube_id} onChange={(e) => setProductForm({ ...productForm, cube_id: e.target.value })}>
                 <option value="">Select your cube…</option>
-                {myCubes.map((c) => (
-                  <option key={c.cube_id} value={c.cube_id}>{c.cube_number} ({c.type})</option>
-                ))}
+                {myCubes
+                  .filter((c) => visibleTab === 'pickup' ? c.type === 'Pick-up' : visibleTab === 'display' ? c.type === 'Display' : true)
+                  .map((c) => (
+                    <option key={c.cube_id} value={c.cube_id}>{c.cube_number} ({c.type})</option>
+                  ))}
               </select>
             </div>
             <div className="field">
@@ -887,7 +919,7 @@ export default function RenterDashboard() {
           </div>
 
           {/* Conditional Pick-up Handover & Claimant Details */}
-          {myCubes.find((c) => String(c.cube_id) === String(productForm.cube_id))?.type === 'Pick-up' && (
+          {(visibleTab === 'pickup' || myCubes.find((c) => String(c.cube_id) === String(productForm.cube_id))?.type === 'Pick-up') && (
             <div style={{ marginTop: '1.25rem', marginBottom: '1rem', padding: '1rem', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
                 <span className="badge" style={{ background: '#0284c7', color: '#fff' }}>Pick-up Cube</span>
@@ -971,7 +1003,7 @@ export default function RenterDashboard() {
           )}
 
           <button className="btn" type="button" disabled={busy} onClick={addProduct} style={{ marginTop: '0.5rem' }}>
-            {busy ? 'Saving…' : 'List Product'}
+            {busy ? 'Saving…' : visibleTab === 'pickup' ? 'List Pick-up Item for Staff Verification' : 'List Product'}
           </button>
         </div>
       )}

@@ -8,6 +8,7 @@ import { useAuth } from '../context/Auth'
 import { peso, type Contract, type Transaction, type Product, type Reservation, isReservationExpired, getReservationHoursLeft, parseReservationExpiry } from '../lib/types'
 import { SkeletonStat, SkeletonTable } from '../components/Skeleton'
 import TablePagination, { DEFAULT_PAGE_SIZE } from '../components/TablePagination'
+import ConfirmModal from '../components/ConfirmModal'
 
 type ReportType = 'display' | 'pickup' | 'rental'
 type DateFilterMode = 'monthly' | 'daily' | 'yearly' | 'custom'
@@ -39,6 +40,7 @@ export default function OwnerDashboard() {
   const [printEndDate, setPrintEndDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [printRenterId, setPrintRenterId] = useState<string>('all')
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
+  const [declineContractTarget, setDeclineContractTarget] = useState<Contract | null>(null)
 
   function refreshData() {
     setLoading(true)
@@ -147,10 +149,12 @@ export default function OwnerDashboard() {
     refreshData()
   }
 
-  async function rejectContract(c: Contract) {
-    if (!confirm(`Are you sure you want to reject contract #${c.contract_id}? The cube will be released back to Available.`)) return
+  async function confirmDeclineContract() {
+    if (!declineContractTarget) return
+    const c = declineContractTarget
+    setDeclineContractTarget(null)
     const { error } = await supabase.from('contracts').delete().eq('contract_id', c.contract_id)
-    if (error) return alert('Failed to reject contract: ' + error.message)
+    if (error) return alert('Failed to decline contract: ' + error.message)
     if (c.cube_id) {
       await supabase.from('cubes').update({ status: 'Available' }).eq('cube_id', c.cube_id)
       if (c.renter_id) {
@@ -162,7 +166,6 @@ export default function OwnerDashboard() {
           .eq('status', 'Pending')
       }
     }
-    alert(`Contract #${c.contract_id} rejected. Cube returned to Available.`)
     refreshData()
   }
 
@@ -411,30 +414,36 @@ export default function OwnerDashboard() {
         : 'Monthly Rental Payment Report'
 
     const rowsHtml = printReportType === 'rental'
-      ? (printFilteredData.list as typeof rentalSales).map((r) => `
-          <tr>
-            <td>${r.renter}</td>
-            <td>${r.cube ?? '—'}</td>
-            <td>${r.type ?? '—'}</td>
-            <td>${r.period}</td>
-            <td style="text-align:right;">${peso(r.monthly)}</td>
-          </tr>
-        `).join('')
-      : (printFilteredData.list as Transaction[]).map((t) => {
-          const renter = getTxRenter(t)
-          return `
-            <tr>
-              <td><strong>${t.products?.product_name || t.product_name || '—'}</strong>${t.products?.variant ? `<div style="font-size:0.75rem;color:#555;">Variant: ${t.products.variant}</div>` : ''}</td>
-              <td>${t.products?.cubes?.cube_number || t.cubes?.cube_number || '—'}</td>
-              <td>${renter.name}</td>
-              <td>${new Date(t.transaction_date).toLocaleDateString('en-PH')}</td>
-              <td>${t.payment_status}</td>
-              <td>${t.payment_method || 'Cash'}</td>
-              <td>${t.quantity || 1}</td>
-              <td style="text-align:right;">${peso(Number(t.products?.price || 0) * Number(t.quantity || 1))}</td>
-            </tr>
-          `
-        }).join('')
+      ? (printFilteredData.list.length === 0
+          ? `<tr><td colspan="5" style="text-align:center;padding:1.5rem;color:#6b7280;">No rental contracts found for this selection.</td></tr>`
+          : (printFilteredData.list as typeof rentalSales).map((r) => `
+              <tr>
+                <td>${r.renter}</td>
+                <td>${r.cube ?? '—'}</td>
+                <td>${r.type ?? '—'}</td>
+                <td>${r.period}</td>
+                <td style="text-align:right;">${peso(r.monthly)}</td>
+              </tr>
+            `).join('')
+        )
+      : (printFilteredData.list.length === 0
+          ? `<tr><td colspan="8" style="text-align:center;padding:1.5rem;color:#6b7280;">No sales transactions found for this period.</td></tr>`
+          : (printFilteredData.list as Transaction[]).map((t) => {
+              const renter = getTxRenter(t)
+              return `
+                <tr>
+                  <td><strong>${t.products?.product_name || t.product_name || '—'}</strong>${t.products?.variant ? `<div style="font-size:0.75rem;color:#555;">Variant: ${t.products.variant}</div>` : ''}</td>
+                  <td>${t.products?.cubes?.cube_number || t.cubes?.cube_number || '—'}</td>
+                  <td>${renter.name}</td>
+                  <td>${new Date(t.transaction_date).toLocaleDateString('en-PH')}</td>
+                  <td>${t.payment_status}</td>
+                  <td>${t.payment_method || 'Cash'}</td>
+                  <td>${t.quantity || 1}</td>
+                  <td style="text-align:right;">${peso(Number(t.products?.price || 0) * Number(t.quantity || 1))}</td>
+                </tr>
+              `
+            }).join('')
+        )
 
     const tableMarkup = printReportType === 'rental'
       ? `
@@ -474,7 +483,7 @@ export default function OwnerDashboard() {
           <tbody>${rowsHtml}</tbody>
           <tfoot>
             <tr>
-              <td colspan="7"><strong>Overall Total (${printMonth})</strong></td>
+              <td colspan="7"><strong>Overall Total (${printPeriodLabel})</strong></td>
               <td style="text-align:right;"><strong>${peso(printFilteredData.total)}</strong></td>
             </tr>
           </tfoot>
@@ -592,7 +601,7 @@ export default function OwnerDashboard() {
               <h1>TrackErentory</h1>
               <h2>${reportTitle}</h2>
               <div class="meta">
-                <span><strong>Period:</strong> ${printReportType === 'rental' ? 'Active Contracts' : monthLabel}</span>
+                <span><strong>Period:</strong> ${printPeriodLabel}</span>
                 <span><strong>Renter:</strong> ${selectedRenterName}</span>
                 <span><strong>Date Generated:</strong> ${new Date().toLocaleDateString('en-PH')}</span>
               </div>
@@ -708,16 +717,23 @@ export default function OwnerDashboard() {
   function handleTriggerPrint() {
     setIsPrintModalOpen(false)
 
-    const reportWindow = window.open('', '_blank', 'width=1200,height=900,noopener,noreferrer')
+    const reportHtml = buildPrintableReportHtml()
+    const reportWindow = window.open('', '_blank', 'width=1100,height=850')
     if (!reportWindow) {
-      alert('Please allow pop-ups to open the report preview.')
+      // Fallback: If pop-ups are blocked, use standard window.print()
+      setTimeout(() => {
+        window.print()
+      }, 150)
       return
     }
 
     reportWindow.document.open()
-    reportWindow.document.write(buildPrintableReportHtml())
+    reportWindow.document.write(reportHtml)
     reportWindow.document.close()
     reportWindow.focus()
+    setTimeout(() => {
+      reportWindow.print()
+    }, 350)
   }
 
   if (!user || user.role !== 'Owner') {
@@ -736,11 +752,6 @@ export default function OwnerDashboard() {
   const selectedRenterName = printRenterId === 'all'
     ? 'All Renters'
     : (renters.find((r) => r.user_id === Number(printRenterId))?.full_name || 'Selected Renter')
-
-  const monthLabel = new Date(`${printMonth}-01`).toLocaleDateString('en-US', {
-    month: 'long',
-    year: 'numeric',
-  })
 
   return (
     <section>
@@ -925,10 +936,10 @@ export default function OwnerDashboard() {
                                   className="btn-ghost"
                                   type="button"
                                   style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem', color: '#dc2626' }}
-                                  onClick={() => void rejectContract(c)}
+                                  onClick={() => setDeclineContractTarget(c)}
                                   title="Decline reservation & release cube"
                                 >
-                                  <XCircle size={14} /> Reject
+                                  <XCircle size={14} /> Decline
                                 </button>
                                 <Link
                                   to="/contracts"
@@ -1335,6 +1346,18 @@ export default function OwnerDashboard() {
         </div>
       )}
 
+      {/* Decline Contract Confirmation Modal */}
+      <ConfirmModal
+        isOpen={Boolean(declineContractTarget)}
+        title="Decline Contract Agreement"
+        message={declineContractTarget ? `Are you sure you want to decline contract #${declineContractTarget.contract_id}? The cube will be released back to Available.` : ''}
+        confirmText="Decline Contract"
+        cancelText="Cancel"
+        isDanger={true}
+        onConfirm={confirmDeclineContract}
+        onCancel={() => setDeclineContractTarget(null)}
+      />
+
       {/* ════════════ DEDICATED PRINT DOCUMENT ════════════ */}
       <div id="owner-print-report" className="print-report-container">
         <div className="print-report-header">
@@ -1363,15 +1386,23 @@ export default function OwnerDashboard() {
               </tr>
             </thead>
             <tbody>
-              {(printFilteredData.list as typeof rentalSales).map((r, i) => (
-                <tr key={i}>
-                  <td>{r.renter}</td>
-                  <td>{r.cube}</td>
-                  <td>{r.type}</td>
-                  <td>{r.period}</td>
-                  <td style={{ textAlign: 'right' }}>{peso(r.monthly)}</td>
+              {printFilteredData.list.length === 0 ? (
+                <tr>
+                  <td colSpan={5} style={{ textAlign: 'center', padding: '1.5rem', color: '#6b7280' }}>
+                    No rental contracts found for this selection.
+                  </td>
                 </tr>
-              ))}
+              ) : (
+                (printFilteredData.list as typeof rentalSales).map((r, i) => (
+                  <tr key={i}>
+                    <td>{r.renter}</td>
+                    <td>{r.cube}</td>
+                    <td>{r.type}</td>
+                    <td>{r.period}</td>
+                    <td style={{ textAlign: 'right' }}>{peso(r.monthly)}</td>
+                  </tr>
+                ))
+              )}
             </tbody>
             <tfoot>
               <tr>
@@ -1395,24 +1426,32 @@ export default function OwnerDashboard() {
               </tr>
             </thead>
             <tbody>
-              {(printFilteredData.list as Transaction[]).map((t) => {
-                const r = getTxRenter(t)
-                return (
-                  <tr key={t.transaction_id}>
-                    <td>
-                      <strong>{t.products?.product_name || t.product_name || '—'}</strong>
-                      {t.products?.variant && <div style={{ fontSize: '0.75rem', color: '#555' }}>Variant: {t.products.variant}</div>}
-                    </td>
-                    <td>{t.products?.cubes?.cube_number || t.cubes?.cube_number || '—'}</td>
-                    <td>{r.name}</td>
-                    <td>{new Date(t.transaction_date).toLocaleDateString('en-PH')}</td>
-                    <td>{t.payment_status}</td>
-                    <td>{t.payment_method || 'Cash'}</td>
-                    <td>{t.quantity || 1}</td>
-                    <td style={{ textAlign: 'right' }}>{peso(Number(t.products?.price || 0) * Number(t.quantity || 1))}</td>
-                  </tr>
-                )
-              })}
+              {printFilteredData.list.length === 0 ? (
+                <tr>
+                  <td colSpan={8} style={{ textAlign: 'center', padding: '1.5rem', color: '#6b7280' }}>
+                    No sales transactions found for this period.
+                  </td>
+                </tr>
+              ) : (
+                (printFilteredData.list as Transaction[]).map((t) => {
+                  const r = getTxRenter(t)
+                  return (
+                    <tr key={t.transaction_id}>
+                      <td>
+                        <strong>{t.products?.product_name || t.product_name || '—'}</strong>
+                        {t.products?.variant && <div style={{ fontSize: '0.75rem', color: '#555' }}>Variant: {t.products.variant}</div>}
+                      </td>
+                      <td>{t.products?.cubes?.cube_number || t.cubes?.cube_number || '—'}</td>
+                      <td>{r.name}</td>
+                      <td>{new Date(t.transaction_date).toLocaleDateString('en-PH')}</td>
+                      <td>{t.payment_status}</td>
+                      <td>{t.payment_method || 'Cash'}</td>
+                      <td>{t.quantity || 1}</td>
+                      <td style={{ textAlign: 'right' }}>{peso(Number(t.products?.price || 0) * Number(t.quantity || 1))}</td>
+                    </tr>
+                  )
+                })
+              )}
             </tbody>
             <tfoot>
               <tr>
