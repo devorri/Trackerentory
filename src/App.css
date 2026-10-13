@@ -380,6 +380,25 @@ section {
   margin-bottom: 2.5rem;
 }
 
+.renter-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.85rem;
+  margin-bottom: 1.75rem;
+}
+
+@media (max-width: 1080px) {
+  .renter-stat-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .renter-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .stat {
   background: #f4f5f7;
   border-radius: 20px;
@@ -1455,5 +1474,29 @@ main section {
     padding: 2.5rem !important;
     margin: 0 auto !important;
     width: 100% !important;
+  }
+}
+
+/* ── Shopee-Style Product Gallery Modal ── */
+.product-gallery-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 1.75rem;
+  align-items: stretch;
+}
+
+.product-gallery-visual {
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-width: 768px) {
+  .product-gallery-grid {
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+  }
+
+  .product-gallery-stage {
+    height: 280px !important;
   }
 }

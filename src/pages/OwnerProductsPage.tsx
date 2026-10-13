@@ -1,17 +1,19 @@
 import { useEffect, useState, useMemo } from 'react'
 import { createPortal } from 'react-dom'
-import { Trash2, RotateCcw, X, ArrowUpDown } from 'lucide-react'
+import { Trash2, RotateCcw, X, ArrowUpDown, Camera, Search } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
-import { peso, type Cube, type Product } from '../lib/types'
+import { peso, type Cube, type Product, DEFAULT_PRODUCT_CATEGORIES } from '../lib/types'
 import { SkeletonTable } from '../components/Skeleton'
 import { uploadPublicImage } from '../lib/storage'
 import { BUCKET_PRODUCT_IMAGES } from '../lib/supabase'
 
 import ConfirmModal from '../components/ConfirmModal'
+import ProductGalleryModal from '../components/ProductGalleryModal'
 
 export default function OwnerProductsPage() {
   const { user } = useAuth()
+  const [galleryProduct, setGalleryProduct] = useState<Product | null>(null)
   const [products, setProducts] = useState<Product[]>([])
   const [cubes, setCubes] = useState<Cube[]>([])
   const [loading, setLoading] = useState(false)
@@ -19,6 +21,8 @@ export default function OwnerProductsPage() {
   const [editId, setEditId] = useState<number | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [tab, setTab] = useState<'active' | 'trash'>('active')
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('All')
+  const [searchQuery, setSearchQuery] = useState('')
   const [confirmAction, setConfirmAction] = useState<{
     title: string
     message: string
@@ -234,7 +238,14 @@ export default function OwnerProductsPage() {
     if (selected[0]) onImageFile(selected[0])
   }
 
-  const categories = useMemo(() => Array.from(new Set(products.map((p) => p.category?.trim()).filter(Boolean) as string[])).sort(), [products])
+  const categories = useMemo(() => {
+    const existing = products.map((p) => p.category?.trim()).filter(Boolean) as string[]
+    return Array.from(new Set([...DEFAULT_PRODUCT_CATEGORIES, ...existing])).sort()
+  }, [products])
+
+  const existingCategories = useMemo(() => {
+    return Array.from(new Set(products.map((p) => p.category?.trim()).filter(Boolean) as string[])).sort()
+  }, [products])
 
   const [sortConfig, setSortConfig] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'name', dir: 'asc' })
 
@@ -254,7 +265,23 @@ export default function OwnerProductsPage() {
   }
 
   const displayedList = useMemo(() => {
-    const list = [...(tab === 'active' ? activeProducts : trashProducts)]
+    let list = [...(tab === 'active' ? activeProducts : trashProducts)]
+    if (selectedCategoryFilter !== 'All') {
+      if (selectedCategoryFilter === 'Uncategorized') {
+        list = list.filter((p) => !p.category || !p.category.trim())
+      } else {
+        list = list.filter((p) => (p.category?.trim() || '') === selectedCategoryFilter)
+      }
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim()
+      list = list.filter((p) =>
+        p.product_name.toLowerCase().includes(q) ||
+        (p.category || '').toLowerCase().includes(q) ||
+        (p.variant || '').toLowerCase().includes(q) ||
+        (p.cubes?.cube_number || '').toLowerCase().includes(q)
+      )
+    }
     const { col, dir } = sortConfig
     list.sort((a, b) => {
       let vA: any = ''
@@ -263,12 +290,13 @@ export default function OwnerProductsPage() {
       else if (col === 'cube') { vA = a.cubes?.cube_number || ''; vB = b.cubes?.cube_number || '' }
       else if (col === 'price') { vA = Number(a.price || 0); vB = Number(b.price || 0) }
       else if (col === 'stock') { vA = Number(a.stock_quantity || 0); vB = Number(b.stock_quantity || 0) }
+      else if (col === 'category') { vA = a.category || ''; vB = b.category || '' }
       if (vA < vB) return dir === 'asc' ? -1 : 1
       if (vA > vB) return dir === 'asc' ? 1 : -1
       return 0
     })
     return list
-  }, [tab, activeProducts, trashProducts, sortConfig])
+  }, [tab, activeProducts, trashProducts, sortConfig, selectedCategoryFilter, searchQuery])
 
   return (
     <section>
@@ -301,6 +329,55 @@ export default function OwnerProductsPage() {
         </button>
       </div>
 
+      {/* SEARCH & CATEGORY FILTER TOOLBAR */}
+      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.25rem', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flex: 1, minWidth: 260, maxWidth: 420 }}>
+          <Search size={16} className="muted" />
+          <input
+            type="text"
+            placeholder="Search product, category, or cube…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{ margin: 0, padding: '0.5rem 0.85rem', fontSize: '0.88rem' }}
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              className="btn-ghost"
+              style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+              onClick={() => setSearchQuery('')}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <label style={{ fontSize: '0.8rem', fontWeight: 800, margin: 0, textTransform: 'uppercase', color: '#555', letterSpacing: '0.04em' }}>
+            Category Filter:
+          </label>
+          <select
+            value={selectedCategoryFilter}
+            onChange={(e) => setSelectedCategoryFilter(e.target.value)}
+            style={{ margin: 0, padding: '0.45rem 0.85rem', fontSize: '0.85rem', minWidth: 180 }}
+          >
+            <option value="All">All Categories ({tab === 'active' ? activeProducts.length : trashProducts.length})</option>
+            {existingCategories.map((cat) => {
+              const currentList = tab === 'active' ? activeProducts : trashProducts
+              const count = currentList.filter((p) => p.category?.trim() === cat).length
+              return (
+                <option key={cat} value={cat}>
+                  {cat} ({count})
+                </option>
+              )
+            })}
+            <option value="Uncategorized">
+              Uncategorized ({(tab === 'active' ? activeProducts : trashProducts).filter((p) => !p.category?.trim()).length})
+            </option>
+          </select>
+        </div>
+      </div>
+
       {/* Table */}
       {loading ? (
         <SkeletonTable rows={6} cols={6} />
@@ -322,7 +399,9 @@ export default function OwnerProductsPage() {
                 <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('stock')}>
                   Stock {renderSortIndicator('stock')}
                 </th>
-                <th>Category</th>
+                <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('category')}>
+                  Category {renderSortIndicator('category')}
+                </th>
                 <th>Variant / Details</th>
                 <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>
@@ -330,30 +409,52 @@ export default function OwnerProductsPage() {
             <tbody>
               {displayedList.map((p) => (
                 <tr key={p.product_id}>
-                  <td>
-                    {p.image_url ? (
-                      <img
-                        src={p.image_url}
-                        alt={p.product_name}
-                        style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 4 }}
-                      />
-                    ) : (
-                      <div
-                        style={{
-                          width: 48,
-                          height: 48,
-                          background: '#f0f0f0',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          borderRadius: 4,
-                          fontSize: '0.7rem',
-                          color: '#888',
-                        }}
-                      >
-                        No pic
-                      </div>
-                    )}
+                  <td style={{ cursor: 'pointer' }} onClick={() => setGalleryProduct(p)} title="Click to view product shots">
+                    <div style={{ position: 'relative', width: 48, height: 48 }}>
+                      {p.image_url ? (
+                        <img
+                          src={p.image_url}
+                          alt={p.product_name}
+                          style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 4 }}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            width: 48,
+                            height: 48,
+                            background: '#f0f0f0',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            borderRadius: 4,
+                            fontSize: '0.7rem',
+                            color: '#888',
+                          }}
+                        >
+                          No pic
+                        </div>
+                      )}
+                      {((p.image_urls && p.image_urls.length > 1) || (p.image_urls && p.image_urls.length === 1 && p.image_url)) && (
+                        <span
+                          style={{
+                            position: 'absolute',
+                            bottom: 1,
+                            right: 1,
+                            background: 'rgba(0,0,0,0.75)',
+                            color: '#fff',
+                            fontSize: '0.6rem',
+                            fontWeight: 700,
+                            padding: '1px 3px',
+                            borderRadius: 3,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 2,
+                          }}
+                        >
+                          <Camera size={9} /> {p.image_urls?.length || 1}
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td>
                     <strong>{p.product_name}</strong>
@@ -383,7 +484,24 @@ export default function OwnerProductsPage() {
                       {p.stock_quantity}
                     </span>
                   </td>
-                  <td>{p.category || '—'}</td>
+                  <td>
+                    {p.category ? (
+                      <span
+                        className="badge"
+                        style={{
+                          background: '#f1f5f9',
+                          color: '#1e293b',
+                          fontSize: '0.74rem',
+                          fontWeight: 700,
+                          letterSpacing: '0.02em',
+                        }}
+                      >
+                        {p.category}
+                      </span>
+                    ) : (
+                      <span className="muted" style={{ fontSize: '0.82rem' }}>—</span>
+                    )}
+                  </td>
                   <td>{p.variant || '—'}</td>
                   <td style={{ textAlign: 'right' }}>
                     {tab === 'trash' ? (
@@ -512,11 +630,21 @@ export default function OwnerProductsPage() {
                 </div>
 
                 <div className="field">
-                  <label>Category</label>
-                  <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-                    <option value="">Select an existing category…</option>
-                    {categories.map((category) => <option key={category} value={category}>{category}</option>)}
-                  </select>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                    <label>Category</label>
+                    <span className="muted" style={{ fontSize: '0.75rem' }}>Pick or type new</span>
+                  </div>
+                  <input
+                    list="category-options"
+                    value={form.category}
+                    onChange={(e) => setForm({ ...form, category: e.target.value })}
+                    placeholder="e.g. Cosmetics & Skincare"
+                  />
+                  <datalist id="category-options">
+                    {categories.map((category) => (
+                      <option key={category} value={category} />
+                    ))}
+                  </datalist>
                 </div>
 
                 <div className="field" style={{ gridColumn: 'span 2' }}>
@@ -569,6 +697,13 @@ export default function OwnerProductsPage() {
           onCancel={() => setConfirmAction(null)}
         />
       )}
+
+      <ProductGalleryModal
+        product={galleryProduct}
+        isOpen={Boolean(galleryProduct)}
+        onClose={() => setGalleryProduct(null)}
+        userRole="Owner"
+      />
     </section>
   )
 }

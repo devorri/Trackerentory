@@ -147,3 +147,16 @@ export function getReservationHoursLeft(r: { expiry_time: string }): number {
   return Math.max(0, Math.ceil(diff / (1000 * 60 * 60)))
 }
 
+export const DEFAULT_PRODUCT_CATEGORIES = [
+  'Cosmetics & Skincare',
+  'Fashion & Apparel',
+  'Accessories & Jewelry',
+  'Food & Snacks',
+  'Toys & Collectibles',
+  'Crafts & Handcrafted',
+  'Electronics & Gadgets',
+  'Home & Living',
+  'Stationery & Stickers',
+  'Health & Wellness',
+] as const
+

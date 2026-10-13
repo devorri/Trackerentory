@@ -1,10 +1,11 @@
 import { useMemo, useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { X, ArrowRight, Search, ChevronLeft, ChevronRight } from 'lucide-react'
+import { X, ArrowRight, Search, ChevronLeft, ChevronRight, Camera } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import { type Reservation, type Cube, type Product, peso, isReservationExpired, todayISO, addMonths } from '../lib/types'
 import { SkeletonCard } from '../components/Skeleton'
+import ProductGalleryModal from '../components/ProductGalleryModal'
 
 export default function ProductsPage() {
   const { user } = useAuth()
@@ -22,6 +23,7 @@ export default function ProductsPage() {
   const [selectedCategory, setSelectedCategory] = useState<string>('All')
   const [search, setSearch] = useState('')
   const [activeImage, setActiveImage] = useState<Record<number, number>>({})
+  const [galleryProduct, setGalleryProduct] = useState<Product | null>(null)
 
   useEffect(() => {
     const reserveId = searchParams.get('reserve')
@@ -195,14 +197,8 @@ export default function ProductsPage() {
 
   const availableCubes = cubes.filter((c) => c.status === 'Available')
 
-  function handleProductClick(productId: number) {
-    if (!user) {
-      nav(`/login?redirect=/`)
-      return
-    }
-    if (user.role === 'Customer') {
-      setReservingFor(productId)
-    }
+  function handleProductClick(p: Product) {
+    setGalleryProduct(p)
   }
 
   function handleCubeClick(cubeId: number) {
@@ -283,8 +279,8 @@ export default function ProductsPage() {
                   <article
                     key={p.product_id}
                     className={`card product-card ${isFullyReserved ? 'reserved-card' : 'clickable-card'}`}
-                    onClick={() => !isFullyReserved && handleProductClick(p.product_id)}
-                    style={{ cursor: isFullyReserved ? 'not-allowed' : 'pointer', opacity: isFullyReserved ? 0.65 : 1 }}
+                    onClick={() => handleProductClick(p)}
+                    style={{ cursor: 'pointer', opacity: isFullyReserved ? 0.7 : 1 }}
                   >
                     <div
                       className="card-media"
@@ -293,6 +289,7 @@ export default function ProductsPage() {
                         alignItems: 'center',
                         justifyContent: 'center',
                         background: '#f4f5f7',
+                        position: 'relative',
                       }}
                     >
                       {(p.image_urls?.length || p.image_url) ? (
@@ -303,10 +300,15 @@ export default function ProductsPage() {
                             return <img src={images[index]} alt={`${p.product_name} photo ${index + 1}`} />
                           })()}
                           {(p.image_urls?.length || 0) > 1 && (
-                            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 8 }}>
-                              <button type="button" className="btn-ghost" aria-label="Previous product photo" onClick={(e) => { e.stopPropagation(); setActiveImage((current) => ({ ...current, [p.product_id]: ((current[p.product_id] || 0) - 1 + p.image_urls!.length) % p.image_urls!.length })) }}><ChevronLeft size={16} /></button>
-                              <button type="button" className="btn-ghost" aria-label="Next product photo" onClick={(e) => { e.stopPropagation(); setActiveImage((current) => ({ ...current, [p.product_id]: ((current[p.product_id] || 0) + 1) % p.image_urls!.length })) }}><ChevronRight size={16} /></button>
-                            </div>
+                            <>
+                              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 8 }}>
+                                <button type="button" className="btn-ghost" aria-label="Previous product photo" onClick={(e) => { e.stopPropagation(); setActiveImage((current) => ({ ...current, [p.product_id]: ((current[p.product_id] || 0) - 1 + p.image_urls!.length) % p.image_urls!.length })) }}><ChevronLeft size={16} /></button>
+                                <button type="button" className="btn-ghost" aria-label="Next product photo" onClick={(e) => { e.stopPropagation(); setActiveImage((current) => ({ ...current, [p.product_id]: ((current[p.product_id] || 0) + 1) % p.image_urls!.length })) }}><ChevronRight size={16} /></button>
+                              </div>
+                              <div style={{ position: 'absolute', bottom: 8, right: 8, background: 'rgba(0,0,0,0.72)', color: '#fff', fontSize: '0.72rem', fontWeight: 800, padding: '2px 8px', borderRadius: 999, display: 'flex', alignItems: 'center', gap: 4, pointerEvents: 'none' }}>
+                                <Camera size={12} /> {p.image_urls!.length} shots
+                              </div>
+                            </>
                           )}
                         </>
                       ) : (
@@ -519,6 +521,28 @@ export default function ProductsPage() {
           )}
         </>
       )}
+      {/* Shopee-Style Product Gallery Modal */}
+      <ProductGalleryModal
+        product={galleryProduct}
+        isOpen={Boolean(galleryProduct)}
+        onClose={() => setGalleryProduct(null)}
+        userRole={user?.role}
+        availableCount={
+          galleryProduct
+            ? Math.max((galleryProduct.stock_quantity || 0) - (reservationMap.get(galleryProduct.product_id)?.length || 0), 0)
+            : 0
+        }
+        isReserved={
+          galleryProduct
+            ? Math.max((galleryProduct.stock_quantity || 0) - (reservationMap.get(galleryProduct.product_id)?.length || 0), 0) <= 0
+            : false
+        }
+        onReserve={(pid, h) => {
+          setHours(h)
+          createReservation(pid)
+        }}
+        onSignIn={() => nav('/login?redirect=/')}
+      />
     </section>
   )
 }
