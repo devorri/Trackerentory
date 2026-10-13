@@ -36,7 +36,9 @@ export type Product = {
   variant: string | null
   category?: string | null
   image_url: string | null
+  image_urls?: string[] | null
   deleted_at: string | null
+  created_at?: string
   cubes?: Pick<Cube, 'cube_number' | 'type'> | null
 }
 
@@ -61,6 +63,7 @@ export type Contract = {
   end_date: string
   status: 'Active' | 'Expired' | 'Pending'
   contract_text: string | null
+  created_at?: string
   cubes?: Cube | null
   users?: { full_name: string } | null
 }
@@ -116,7 +119,11 @@ export function addMonths(isoDate: string, months: number): string {
 }
 
 export function todayISO() {
-  return new Date().toISOString().slice(0, 10)
+  // Date inputs represent the visitor's calendar date, not UTC. Using
+  // toISOString here can shift the displayed date by a day in PH/Asia time.
+  const d = new Date()
+  const offset = d.getTimezoneOffset() * 60_000
+  return new Date(d.getTime() - offset).toISOString().slice(0, 10)
 }
 
 /** Safely parse expiry_time from PostgreSQL timestamp without timezone into proper Date */

@@ -234,6 +234,19 @@ export default function ReservationsPage() {
     void load()
   }
 
+  async function cancelCubeReservation(r: Reservation) {
+    setBusyId(r.reservation_id)
+    const { error } = await supabase.from('reservations').update({ status: 'Cancelled' }).eq('reservation_id', r.reservation_id)
+    if (!error && r.cube_id && r.customer_id) {
+      await supabase.from('contracts').delete().eq('cube_id', r.cube_id).eq('renter_id', r.customer_id).eq('status', 'Pending')
+      await supabase.from('cubes').update({ status: 'Available' }).eq('cube_id', r.cube_id)
+    }
+    setBusyId(null)
+    if (error) return alert(error.message)
+    alert('Cube reservation request cancelled.')
+    void load()
+  }
+
   async function confirmDeclineReservation() {
     if (!declineResTarget) return
     const r = declineResTarget

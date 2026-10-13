@@ -38,8 +38,10 @@ export default function OwnerProductsPage() {
   })
 
   const [imageFile, setImageFile] = useState<File | null>(null)
+  const [imageFiles, setImageFiles] = useState<File[]>([])
   const [imagePreview, setImagePreview] = useState<string | null>(null)
   const [currentImageUrl, setCurrentImageUrl] = useState<string | null>(null)
+  const [currentImageUrls, setCurrentImageUrls] = useState<string[]>([])
 
   async function load() {
     setLoading(true)
@@ -76,7 +78,9 @@ export default function OwnerProductsPage() {
       cube_id: String(p.cube_id || ''),
     })
     setCurrentImageUrl(p.image_url || null)
+    setCurrentImageUrls(p.image_urls?.length ? p.image_urls : p.image_url ? [p.image_url] : [])
     setImageFile(null)
+    setImageFiles([])
     setImagePreview(null)
     setIsModalOpen(true)
   }
@@ -93,8 +97,10 @@ export default function OwnerProductsPage() {
       cube_id: '',
     })
     setImageFile(null)
+    setImageFiles([])
     setImagePreview(null)
     setCurrentImageUrl(null)
+    setCurrentImageUrls([])
   }
 
   function closeModal() {
@@ -117,6 +123,14 @@ export default function OwnerProductsPage() {
       }
       finalImageUrl = up.url
     }
+    const extraUploads = await Promise.all(imageFiles.slice(imageFile ? 1 : 0).map((file) => uploadPublicImage(BUCKET_PRODUCT_IMAGES, file, String(user?.user_id || 'admin'))))
+    const uploadError = extraUploads.find((upload) => upload.error || !upload.url)
+    if (uploadError) {
+      setBusy(false)
+      return alert('One or more product photos could not be uploaded.')
+    }
+    const imageUrls = [...currentImageUrls, ...extraUploads.map((upload) => upload.url!)]
+    if (finalImageUrl && !imageUrls.includes(finalImageUrl)) imageUrls.unshift(finalImageUrl)
 
     const payload = {
       product_name: form.product_name.trim(),
@@ -126,6 +140,7 @@ export default function OwnerProductsPage() {
       variant: form.variant ? form.variant.trim() : null,
       category: form.category ? form.category.trim() : null,
       image_url: finalImageUrl || null,
+      image_urls: imageUrls,
       cube_id: Number(form.cube_id),
     }
 
@@ -213,6 +228,14 @@ export default function OwnerProductsPage() {
     reader.readAsDataURL(file)
   }
 
+  function onImageFiles(files: FileList | null) {
+    const selected = Array.from(files || [])
+    setImageFiles(selected)
+    if (selected[0]) onImageFile(selected[0])
+  }
+
+  const categories = useMemo(() => Array.from(new Set(products.map((p) => p.category?.trim()).filter(Boolean) as string[])).sort(), [products])
+
   const [sortConfig, setSortConfig] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'name', dir: 'asc' })
 
   function renderSortIndicator(col: string) {
@@ -299,6 +322,7 @@ export default function OwnerProductsPage() {
                 <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('stock')}>
                   Stock {renderSortIndicator('stock')}
                 </th>
+                <th>Category</th>
                 <th>Variant / Details</th>
                 <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>
@@ -359,6 +383,7 @@ export default function OwnerProductsPage() {
                       {p.stock_quantity}
                     </span>
                   </td>
+                  <td>{p.category || '—'}</td>
                   <td>{p.variant || '—'}</td>
                   <td style={{ textAlign: 'right' }}>
                     {tab === 'trash' ? (
@@ -487,22 +512,11 @@ export default function OwnerProductsPage() {
                 </div>
 
                 <div className="field">
-                  <label>Category (e.g. Perfumes, Dresses, Cosmetics)</label>
-                  <input
-                    list="product-categories"
-                    value={form.category}
-                    onChange={(e) => setForm({ ...form, category: e.target.value })}
-                    placeholder="Type or select category"
-                  />
-                  <datalist id="product-categories">
-                    <option value="Perfumes" />
-                    <option value="Dresses" />
-                    <option value="Cosmetics & Skincare" />
-                    <option value="Accessories" />
-                    <option value="Footwear" />
-                    <option value="Food & Treats" />
-                    <option value="Others" />
-                  </datalist>
+                  <label>Category</label>
+                  <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+                    <option value="">Select an existing category…</option>
+                    {categories.map((category) => <option key={category} value={category}>{category}</option>)}
+                  </select>
                 </div>
 
                 <div className="field" style={{ gridColumn: 'span 2' }}>
@@ -516,12 +530,8 @@ export default function OwnerProductsPage() {
                 </div>
 
                 <div className="field" style={{ gridColumn: 'span 2' }}>
-                  <label>Product Image</label>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => onImageFile(e.target.files?.[0] || null)}
-                  />
+                  <label>Product Photos</label>
+                  <input type="file" accept="image/*" multiple onChange={(e) => onImageFiles(e.target.files)} />
                   {(imagePreview || currentImageUrl) && (
                     <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                       <img
@@ -529,9 +539,7 @@ export default function OwnerProductsPage() {
                         alt="Preview"
                         style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 4, border: '1px solid #ddd' }}
                       />
-                      <span className="muted" style={{ fontSize: '0.8rem' }}>
-                        {imageFile ? imageFile.name : 'Current saved image'}
-                      </span>
+                      <span className="muted" style={{ fontSize: '0.8rem' }}>{imageFiles.length ? `${imageFiles.length} new photo(s) selected` : 'Current saved photos'}</span>
                     </div>
                   )}
                 </div>

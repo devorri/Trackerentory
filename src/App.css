@@ -283,6 +283,7 @@ section {
 }
 
 .card-media {
+  position: relative;
   height: 240px;
   background: #f4f5f7;
   overflow: hidden;

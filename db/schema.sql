@@ -39,7 +39,9 @@ create table if not exists products (
   price numeric(12,2) not null default 0,
   stock_quantity integer not null default 0,
   variant text,
+  category text,
   image_url text,
+  image_urls text[] not null default '{}',
   deleted_at timestamptz,
   created_at timestamptz default now()
 );

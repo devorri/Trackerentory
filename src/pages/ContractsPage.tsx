@@ -13,7 +13,7 @@ import {
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
-import { daysUntil, peso, type Contract, type Cube } from '../lib/types'
+import { addMonths, daysUntil, peso, todayISO, type Contract, type Cube } from '../lib/types'
 import { SkeletonTable } from '../components/Skeleton'
 import TablePagination, { DEFAULT_PAGE_SIZE } from '../components/TablePagination'
 import ConfirmModal from '../components/ConfirmModal'
@@ -31,6 +31,7 @@ export default function ContractsPage() {
   const [contracts, setContracts] = useState<Contract[]>([])
   const [cubes, setCubes] = useState<Cube[]>([])
   const [renters, setRenters] = useState<{ user_id: number; full_name: string; email?: string; phone_number?: string }[]>([])
+  const [ownerName, setOwnerName] = useState('Arce Concept Boutique')
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('All')
@@ -47,12 +48,8 @@ export default function ContractsPage() {
   const [createForm, setCreateForm] = useState({
     cube_id: '',
     renter_id: '',
-    start_date: new Date().toISOString().split('T')[0],
-    end_date: (() => {
-      const d = new Date()
-      d.setMonth(d.getMonth() + 1)
-      return d.toISOString().split('T')[0]
-    })(),
+    start_date: todayISO(),
+    end_date: addMonths(todayISO(), 1),
     status: 'Active' as Contract['status'],
     contract_text: DEFAULT_TERMS,
   })
@@ -71,16 +68,17 @@ export default function ContractsPage() {
     let q = supabase
       .from('contracts')
       .select('*, cubes(*), users!renter_id(full_name, email, phone_number)')
-      .order('end_date', { ascending: false })
+      .order('created_at', { ascending: false })
 
     if (user?.role === 'Renter') {
       q = q.eq('renter_id', user.user_id)
     }
 
-    const [cRes, cubeRes, renterRes] = await Promise.all([
+    const [cRes, cubeRes, renterRes, ownerRes] = await Promise.all([
       q,
       supabase.from('cubes').select('*').order('cube_number'),
       supabase.from('users').select('user_id, full_name, email, phone_number').eq('role', 'Renter').order('full_name'),
+      supabase.from('users').select('full_name').eq('role', 'Owner').limit(1).maybeSingle(),
     ])
 
     setLoading(false)
@@ -94,6 +92,7 @@ export default function ContractsPage() {
     if (!renterRes.error) {
       setRenters(renterRes.data || [])
     }
+    if (!ownerRes.error && ownerRes.data?.full_name) setOwnerName(ownerRes.data.full_name)
   }
 
   useEffect(() => {
@@ -120,12 +119,9 @@ export default function ContractsPage() {
 
   // Quick duration helper for new contracts
   function applyDuration(months: number) {
-    const start = createForm.start_date ? new Date(createForm.start_date) : new Date()
-    const end = new Date(start)
-    end.setMonth(end.getMonth() + months)
     setCreateForm({
       ...createForm,
-      end_date: end.toISOString().split('T')[0],
+      end_date: addMonths(createForm.start_date || todayISO(), months),
     })
   }
 
@@ -256,9 +252,16 @@ export default function ContractsPage() {
 
   // Print agreement in formal document format
   function printAgreement(c: Contract) {
-    const printWindow = window.open('', '_blank', 'width=950,height=950')
+    // A hidden frame keeps printing inside the application and avoids relying
+    // on a browser pop-up window, which is commonly blocked on mobile.
+    const printFrame = document.createElement('iframe')
+    printFrame.title = 'Rental agreement print preview'
+    printFrame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden'
+    document.body.appendChild(printFrame)
+    const printWindow = printFrame.contentWindow
     if (!printWindow) {
-      alert('Please allow pop-ups to open the print document.')
+      printFrame.remove()
+      alert('The agreement could not be prepared for printing. Please try again.')
       return
     }
 
@@ -379,9 +382,9 @@ export default function ContractsPage() {
         <body>
           <div class="paper">
             <div class="header-bar">
-              <div class="brand-title">TrackErentory</div>
-              <div class="brand-sub">Concept Hub & Cube Inventory Management System</div>
-              <div class="doc-title">OFFICIAL CUBE LEASE AGREEMENT</div>
+              <div class="brand-title">Arce Concept Boutique</div>
+              <div class="brand-sub">Cube Rental</div>
+              <div class="doc-title">Arce Concept Boutique Rental Agreement</div>
             </div>
 
             <div class="meta-grid">
@@ -396,7 +399,7 @@ export default function ContractsPage() {
                 </div>
                 <div class="meta-item">
                   <div class="meta-label">Lessor / Store Owner</div>
-                  <div class="meta-value">TrackErentory Management Hub</div>
+                  <div class="meta-value">${ownerName}</div>
                 </div>
               </div>
               <div>
@@ -421,7 +424,7 @@ export default function ContractsPage() {
             <div class="signature-grid">
               <div class="sig-block">
                 <div class="sig-line"></div>
-                <div class="sig-name">Store Representative</div>
+                <div class="sig-name">${ownerName}</div>
                 <div class="sig-role">Authorized Owner Signature</div>
               </div>
               <div class="sig-block">
@@ -437,14 +440,16 @@ export default function ContractsPage() {
     printWindow.document.open()
     printWindow.document.write(html)
     printWindow.document.close()
-    printWindow.focus()
     setTimeout(() => {
+      printWindow.focus()
       printWindow.print()
+      window.setTimeout(() => printFrame.remove(), 1_000)
     }, 400)
   }
 
   // Sorting State
-  const [sortConfig, setSortConfig] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'period', dir: 'desc' })
+  // Newly requested/reserved cubes belong at the top by default.
+  const [sortConfig, setSortConfig] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'created', dir: 'desc' })
 
   function renderSortIndicator(col: string) {
     if (sortConfig.col !== col) {
@@ -504,6 +509,9 @@ export default function ContractsPage() {
       } else if (col === 'period') {
         vA = a.end_date || ''
         vB = b.end_date || ''
+      } else if (col === 'created') {
+        vA = a.created_at || a.contract_id
+        vB = b.created_at || b.contract_id
       } else if (col === 'status') {
         vA = a.status || ''
         vB = b.status || ''
@@ -789,17 +797,17 @@ export default function ContractsPage() {
               }}
             >
               <div style={{ textAlign: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '1rem', marginBottom: '1.25rem' }}>
-                <h2 style={{ margin: 0, fontSize: '1.3rem', letterSpacing: '0.5px' }}>CUBE RENTAL AGREEMENT</h2>
+                <h2 style={{ margin: 0, fontSize: '1.3rem', letterSpacing: '0.5px' }}>Arce Concept Boutique Rental Agreement</h2>
                 <div style={{ fontSize: '0.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1px', marginTop: 4 }}>
-                  TrackErentory Consignment Hub
+                  Arce Concept Boutique
                 </div>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.25rem' }}>
                 <div style={{ background: '#fff', padding: '0.85rem', borderRadius: 8, border: '1px solid #e2e8f0' }}>
                   <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Lessor / Owner</div>
-                  <div style={{ fontWeight: 700, marginTop: 2 }}>TrackErentory Shop</div>
-                  <div className="muted" style={{ fontSize: '0.82rem' }}>Physical Concept & Rental Store</div>
+                  <div style={{ fontWeight: 700, marginTop: 2 }}>{ownerName}</div>
+                  <div className="muted" style={{ fontSize: '0.82rem' }}>Store Owner</div>
                 </div>
 
                 <div style={{ background: '#fff', padding: '0.85rem', borderRadius: 8, border: '1px solid #e2e8f0' }}>

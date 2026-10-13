@@ -7,7 +7,6 @@ import {
   addMonths,
   daysUntil,
   peso,
-  todayISO,
   type Contract,
   type Cube,
   type Product,
@@ -26,7 +25,6 @@ export default function RenterDashboard() {
   const [products, setProducts] = useState<Product[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [loading, setLoading] = useState(false)
-  const [months, setMonths] = useState(1)
   const [busy, setBusy] = useState(false)
   const [activeTab, setActiveTab] = useState<ViewMode>('display')
   const [previewReceipt, setPreviewReceipt] = useState<string | null>(null)
@@ -48,6 +46,7 @@ export default function RenterDashboard() {
   })
 
   const [imageFile, setImageFile] = useState<File | null>(null)
+  const [imageFiles, setImageFiles] = useState<File[]>([])
   const [imagePreview, setImagePreview] = useState<string | null>(null)
   const [pickupReceiptFile, setPickupReceiptFile] = useState<File | null>(null)
   const [pickupReceiptPreview, setPickupReceiptPreview] = useState<string | null>(null)
@@ -126,6 +125,11 @@ export default function RenterDashboard() {
   const pickupProducts = useMemo(
     () => products.filter((p) => p.cubes?.type === 'Pick-up'),
     [products]
+  )
+
+  const categories = useMemo(
+    () => Array.from(new Set(products.map((p) => p.category?.trim()).filter(Boolean) as string[])).sort(),
+    [products],
   )
 
   const hasDisplayCube = myCubes.some((cube) => cube.type === 'Display')
@@ -238,38 +242,6 @@ export default function RenterDashboard() {
     )
   }
 
-  async function reserveCube(cube: Cube) {
-    setBusy(true)
-    const start = todayISO()
-    const end = addMonths(start, months)
-    const { error } = await supabase.from('contracts').insert([{
-      renter_id: user!.user_id,
-      cube_id: cube.cube_id,
-      start_date: start,
-      end_date: end,
-      status: 'Pending',
-    }])
-    if (error) {
-      setBusy(false)
-      return alert(error.message)
-    }
-
-    // Also record in reservations table for tracking
-    const expiry = new Date(Date.now() + months * 30 * 24 * 60 * 60 * 1000).toISOString()
-    await supabase.from('reservations').insert([{
-      cube_id: cube.cube_id,
-      customer_id: user!.user_id,
-      expiry_time: expiry,
-      hours_valid: months * 720,
-      status: 'Pending',
-    }])
-
-    await supabase.from('cubes').update({ status: 'Occupied' }).eq('cube_id', cube.cube_id)
-    setBusy(false)
-    alert(`Cube ${cube.cube_number} reserved! Your agreement request is now Pending Owner approval.`)
-    void load()
-  }
-
   async function extendContract(c: Contract, extraMonths: number) {
     const nextEnd = addMonths(c.end_date, extraMonths)
     const { error } = await supabase
@@ -312,6 +284,14 @@ export default function RenterDashboard() {
       }
       imageUrl = up.url
     }
+    const extraUploads = await Promise.all(imageFiles.slice(imageFile ? 1 : 0).map((file) => uploadPublicImage(BUCKET_PRODUCT_IMAGES, file, String(user!.user_id))))
+    const uploadError = extraUploads.find((upload) => upload.error || !upload.url)
+    if (uploadError) {
+      setBusy(false)
+      return alert('One or more product photos could not be uploaded.')
+    }
+    const imageUrls = extraUploads.map((upload) => upload.url!)
+    if (imageUrl) imageUrls.unshift(imageUrl)
 
     const { data: createdProduct, error } = await supabase.from('products').insert([{
       renter_id: user!.user_id,
@@ -323,6 +303,7 @@ export default function RenterDashboard() {
       variant: productForm.variant ? productForm.variant.trim() : null,
       category: productForm.category ? productForm.category.trim() : null,
       image_url: imageUrl,
+      image_urls: imageUrls,
     }]).select('product_id').single()
 
     if (error) {
@@ -374,6 +355,7 @@ export default function RenterDashboard() {
       pickup_notes: '',
     })
     setImageFile(null)
+    setImageFiles([])
     setImagePreview(null)
     setPickupReceiptFile(null)
     setPickupReceiptPreview(null)
@@ -486,6 +468,12 @@ export default function RenterDashboard() {
     reader.readAsDataURL(file)
   }
 
+  function onProductImages(files: FileList | null) {
+    const selected = Array.from(files || [])
+    setImageFiles(selected)
+    onProductImage(selected[0] || null)
+  }
+
   async function uploadPickupReceipt(transaction: Transaction, file: File | null) {
     if (!file) return
     const upload = await uploadPublicImage(BUCKET_DOCUMENTS, file, 'receipts')
@@ -498,7 +486,6 @@ export default function RenterDashboard() {
     void load()
   }
 
-  const available = cubes.filter((c) => c.status === 'Available' && !c.deleted_at)
   const expiring = contracts.filter((c) => c.status === 'Active' && daysUntil(c.end_date) <= 7 && daysUntil(c.end_date) >= 0)
 
   return (
@@ -868,22 +855,11 @@ export default function RenterDashboard() {
               <input placeholder="e.g. Size M, Shade #2" value={productForm.variant} onChange={(e) => setProductForm({ ...productForm, variant: e.target.value })} />
             </div>
             <div className="field">
-              <label>Category (e.g. Perfumes, Dresses)</label>
-              <input
-                list="renter-categories"
-                placeholder="Type or select category"
-                value={productForm.category}
-                onChange={(e) => setProductForm({ ...productForm, category: e.target.value })}
-              />
-              <datalist id="renter-categories">
-                <option value="Perfumes" />
-                <option value="Dresses" />
-                <option value="Cosmetics & Skincare" />
-                <option value="Accessories" />
-                <option value="Footwear" />
-                <option value="Food & Treats" />
-                <option value="Others" />
-              </datalist>
+              <label>Category</label>
+              <select value={productForm.category} onChange={(e) => setProductForm({ ...productForm, category: e.target.value })}>
+                <option value="">Select an existing category…</option>
+                {categories.map((category) => <option key={category} value={category}>{category}</option>)}
+              </select>
             </div>
             <div className="field">
               <label>Assigned Cube *</label>
@@ -897,11 +873,12 @@ export default function RenterDashboard() {
               </select>
             </div>
             <div className="field">
-              <label>Photo</label>
+              <label>Photos</label>
               <input
                 type="file"
                 accept="image/*"
-                onChange={(e) => onProductImage(e.target.files?.[0] || null)}
+                multiple
+                onChange={(e) => onProductImages(e.target.files)}
               />
               {imagePreview && (
                 <img
@@ -1011,44 +988,8 @@ export default function RenterDashboard() {
       {/* ════════════ TAB 3: CUBES & CONTRACTS ════════════ */}
       {visibleTab === 'cubes_contracts' && (
         <div>
-          <h2>Available Cubes For Rent</h2>
-          <div className="field" style={{ maxWidth: 220, marginBottom: '1rem' }}>
-            <label>Reserve length (months)</label>
-            <select value={months} onChange={(e) => setMonths(Number(e.target.value))}>
-              {[1, 2, 3, 6, 12].map((m) => <option key={m} value={m}>{m} month(s)</option>)}
-            </select>
-          </div>
-
-          <div className="grid" style={{ marginBottom: '2.5rem' }}>
-            {available.map((c) => (
-              <div className="card" key={c.cube_id}>
-                {c.image_url && (
-                  <div className="card-media" style={{ height: 160 }}>
-                    <img src={c.image_url} alt={c.cube_number} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  </div>
-                )}
-                <div className="card-body">
-                  <h3>Cube {c.cube_number}</h3>
-                  <div className="meta-line">
-                    <span>{c.type} Cube</span>
-                    <span className="badge ok">{c.status}</span>
-                  </div>
-                  {c.width_cm && c.height_cm && (
-                    <div className="muted" style={{ fontSize: '0.8rem', marginTop: 4 }}>
-                      Size: {c.width_cm} × {c.height_cm} cm
-                    </div>
-                  )}
-                  <div className="price">{peso(c.price_per_month)}<span className="muted" style={{ fontSize: '0.85rem' }}> / mo</span></div>
-                  <button className="btn" type="button" disabled={busy} onClick={() => reserveCube(c)} style={{ marginTop: '0.75rem', width: '100%' }}>
-                    Reserve Cube
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-          {available.length === 0 && <div className="empty" style={{ padding: '2rem' }}>No available cubes right now.</div>}
-
           <h2>Your Active & Pending Contracts</h2>
+          <p className="muted">Browse and reserve available cubes from the public Catalogue.</p>
           <div className="table-wrap">
             <table className="table">
               <thead>

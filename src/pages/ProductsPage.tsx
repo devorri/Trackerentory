@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { X, ArrowRight } from 'lucide-react'
+import { X, ArrowRight, Search, ChevronLeft, ChevronRight } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import { type Reservation, type Cube, type Product, peso, isReservationExpired, todayISO, addMonths } from '../lib/types'
@@ -20,6 +20,8 @@ export default function ProductsPage() {
   const [cubeMonths, setCubeMonths] = useState<number>(1)
   const [tab, setTab] = useState<'products' | 'cubes'>('products')
   const [selectedCategory, setSelectedCategory] = useState<string>('All')
+  const [search, setSearch] = useState('')
+  const [activeImage, setActiveImage] = useState<Record<number, number>>({})
 
   useEffect(() => {
     const reserveId = searchParams.get('reserve')
@@ -80,6 +82,18 @@ export default function ProductsPage() {
         return
       }
 
+      const { data: existing, error: existingError } = await supabase
+        .from('contracts')
+        .select('contract_id')
+        .eq('cube_id', cube_id)
+        .in('status', ['Pending', 'Active'])
+        .limit(1)
+      if (existingError) throw existingError
+      if (existing?.length) {
+        setLoading(false)
+        return alert('This cube already has a pending or active rental agreement.')
+      }
+
       const expiry = new Date(Date.now() + cubeMonths * 30 * 24 * 60 * 60 * 1000).toISOString()
       const { error } = await supabase.from('reservations').insert([
         { cube_id, customer_id: user.user_id, expiry_time: expiry, hours_valid: cubeMonths * 720, status: 'Pending' },
@@ -92,7 +106,7 @@ export default function ProductsPage() {
       // Also create pending contract record for Contracts Management
       const start = todayISO()
       const end = addMonths(start, cubeMonths)
-      await supabase.from('contracts').insert([
+      const { error: contractError } = await supabase.from('contracts').insert([
         {
           renter_id: user.user_id,
           cube_id,
@@ -102,6 +116,7 @@ export default function ProductsPage() {
           contract_text: null,
         },
       ])
+      if (contractError) throw contractError
       await supabase.from('cubes').update({ status: 'Occupied' }).eq('cube_id', cube_id)
 
       setLoading(false)
@@ -119,7 +134,7 @@ export default function ProductsPage() {
     setLoading(true)
     await supabase.from('reservations').update({ status: 'Cancelled' }).eq('status', 'Pending').lt('expiry_time', new Date().toISOString())
     const [pRes, rRes, cRes] = await Promise.all([
-      supabase.from('products').select('*').is('deleted_at', null),
+      supabase.from('products').select('*').is('deleted_at', null).order('created_at', { ascending: false }),
       supabase.from('reservations').select('*, cubes(*)').in('status', ['Pending', 'Confirmed']),
       supabase.from('cubes').select('*').is('deleted_at', null).order('cube_number'),
     ])
@@ -162,9 +177,13 @@ export default function ProductsPage() {
   }, [products])
 
   const filteredProducts = useMemo(() => {
-    if (selectedCategory === 'All') return products
-    return products.filter((p) => (p.category || 'General').toLowerCase() === selectedCategory.toLowerCase())
-  }, [products, selectedCategory])
+    const query = search.trim().toLowerCase()
+    return products.filter((p) => {
+      const categoryMatch = selectedCategory === 'All' || (p.category || 'General').toLowerCase() === selectedCategory.toLowerCase()
+      const searchMatch = !query || [p.product_name, p.description, p.variant, p.category].some((value) => value?.toLowerCase().includes(query))
+      return categoryMatch && searchMatch
+    })
+  }, [products, selectedCategory, search])
 
   const cubeReservationSet = useMemo(() => {
     const set = new Set<number>()
@@ -220,6 +239,13 @@ export default function ProductsPage() {
         <>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', marginBottom: '1rem' }}>
             <h2 style={{ margin: 0 }}>NEW ARRIVALS & PRODUCTS</h2>
+            <div className="field no-gap" style={{ minWidth: 'min(100%, 260px)' }}>
+              <label htmlFor="catalog-search" className="sr-only">Search catalogue</label>
+              <div style={{ position: 'relative' }}>
+                <Search size={16} aria-hidden="true" style={{ position: 'absolute', left: 10, top: 11, color: '#64748b' }} />
+                <input id="catalog-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search catalogue" style={{ paddingLeft: 34 }} />
+              </div>
+            </div>
             {categories.length > 1 && (
               <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
                 <span className="muted" style={{ fontSize: '0.82rem', fontWeight: 600, marginRight: '0.25rem' }}>Category:</span>
@@ -269,8 +295,20 @@ export default function ProductsPage() {
                         background: '#f4f5f7',
                       }}
                     >
-                      {p.image_url ? (
-                        <img src={p.image_url} alt={p.product_name} />
+                      {(p.image_urls?.length || p.image_url) ? (
+                        <>
+                          {(() => {
+                            const images = p.image_urls?.length ? p.image_urls : [p.image_url!]
+                            const index = Math.min(activeImage[p.product_id] || 0, images.length - 1)
+                            return <img src={images[index]} alt={`${p.product_name} photo ${index + 1}`} />
+                          })()}
+                          {(p.image_urls?.length || 0) > 1 && (
+                            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 8 }}>
+                              <button type="button" className="btn-ghost" aria-label="Previous product photo" onClick={(e) => { e.stopPropagation(); setActiveImage((current) => ({ ...current, [p.product_id]: ((current[p.product_id] || 0) - 1 + p.image_urls!.length) % p.image_urls!.length })) }}><ChevronLeft size={16} /></button>
+                              <button type="button" className="btn-ghost" aria-label="Next product photo" onClick={(e) => { e.stopPropagation(); setActiveImage((current) => ({ ...current, [p.product_id]: ((current[p.product_id] || 0) + 1) % p.image_urls!.length })) }}><ChevronRight size={16} /></button>
+                            </div>
+                          )}
+                        </>
                       ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.4rem', color: '#888' }}>
                           <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
