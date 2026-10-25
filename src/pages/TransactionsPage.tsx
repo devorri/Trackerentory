@@ -56,7 +56,6 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
   const [filter, setFilter] = useState<'All' | 'Display' | 'Pick-up'>(defaultFilter)
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [editId, setEditId] = useState<number | null>(null)
   const [previewReceipt, setPreviewReceipt] = useState<string | null>(null)
 
   // Update filter when prop changes
@@ -236,7 +235,26 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
 
     setBusy(false)
     if (error) return alert(error.message)
-    setEditId(null)
+    void load()
+  }
+
+  async function confirmTransaction(t: Transaction) {
+    await updateRow(t, { payment_status: 'Paid', pickup_status: 'Picked-up' })
+  }
+
+  async function cancelTransaction(t: Transaction) {
+    if (!window.confirm(`Are you sure you want to cancel this transaction for ${t.product_name || 'this item'}?`)) return
+    setBusy(true)
+    if (t.payment_status === 'Paid' && t.product_id) {
+      const prod = products.find((p) => p.product_id === t.product_id)
+      if (prod) {
+        const qty = t.quantity || 1
+        await supabase.from('products').update({ stock_quantity: prod.stock_quantity + qty }).eq('product_id', prod.product_id)
+      }
+    }
+    const { error } = await supabase.from('transactions').delete().eq('transaction_id', t.transaction_id)
+    setBusy(false)
+    if (error) return alert(error.message)
     void load()
   }
 
@@ -448,8 +466,231 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
 
       {/* TRANSACTIONS TABLE */}
       {loading ? (
-        <SkeletonTable rows={5} cols={8} />
+        <SkeletonTable rows={5} cols={filter === 'Display' ? 9 : filter === 'Pick-up' ? 9 : 8} />
+      ) : filter === 'Display' ? (
+        /* ══════════ DISPLAY TRACKING TABLE (Image 2) ══════════ */
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Buyer Name</th>
+                <th>Product</th>
+                <th>Price</th>
+                <th>Quantity</th>
+                <th>Renter Name</th>
+                <th>Cube Number</th>
+                <th>Payment Status</th>
+                <th>Mode of Payment</th>
+                <th className="no-print" style={{ textAlign: 'right' }}>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((t) => {
+                const prod = t.products
+                const renterId = prod?.renter_id || t.renter_id
+                const rName = renterId ? renterMap.get(renterId) : '—'
+                const cubeNum = prod?.cubes?.cube_number || t.cubes?.cube_number || '—'
+                const isConfirmed = t.pickup_status === 'Picked-up' && t.payment_status === 'Paid'
+
+                return (
+                  <tr key={t.transaction_id}>
+                    <td><strong>{t.buyer_name || '—'}</strong></td>
+                    <td>
+                      <strong>{prod?.product_name || t.product_name || '—'}</strong>
+                      {prod?.variant && <div className="muted" style={{ fontSize: '0.78rem' }}>Variant: {prod.variant}</div>}
+                    </td>
+                    <td>{peso(prod?.price)}</td>
+                    <td>{t.quantity || 1}</td>
+                    <td><strong>{rName}</strong></td>
+                    <td>
+                      <span className="badge info">{cubeNum}</span>
+                    </td>
+                    <td>
+                      <select
+                        value={t.payment_status}
+                        onChange={(e) => void updateRow(t, { payment_status: e.target.value as 'Pending' | 'Paid' })}
+                        style={{
+                          padding: '0.25rem 0.5rem',
+                          fontSize: '0.8rem',
+                          borderRadius: 6,
+                          fontWeight: 700,
+                          color: t.payment_status === 'Paid' ? '#166534' : '#92400e',
+                          background: t.payment_status === 'Paid' ? '#dcfce7' : '#fef3c7',
+                          border: '1px solid #cbd5e1',
+                        }}
+                      >
+                        <option value="Pending">Pending</option>
+                        <option value="Paid">Paid</option>
+                      </select>
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <select
+                          value={t.payment_method || 'Cash'}
+                          onChange={(e) => void updateRow(t, { payment_method: e.target.value as 'Cash' | 'Online' })}
+                          style={{ padding: '0.25rem 0.45rem', fontSize: '0.78rem', borderRadius: 6 }}
+                        >
+                          <option value="Cash">Cash</option>
+                          <option value="Online">Online</option>
+                        </select>
+                        {t.payment_method === 'Online' && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {t.receipt_image_url ? (
+                              <img
+                                src={t.receipt_image_url}
+                                alt="Receipt"
+                                style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid #cbd5e1' }}
+                                onClick={() => setPreviewReceipt(t.receipt_image_url)}
+                                title="Click to view receipt"
+                              />
+                            ) : null}
+                            <label style={{ fontSize: '0.72rem', cursor: 'pointer', color: '#2563eb', textDecoration: 'underline' }}>
+                              {t.receipt_image_url ? 'Change image' : 'Attach image'}
+                              <input
+                                type="file"
+                                accept="image/*"
+                                style={{ display: 'none' }}
+                                onChange={(e) => void onReceiptFile(e.target.files?.[0] || null, (url) => void updateRow(t, { receipt_image_url: url, payment_method: 'Online' }))}
+                              />
+                            </label>
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                    <td className="no-print" style={{ textAlign: 'right' }}>
+                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+                        {isConfirmed ? (
+                          <span className="badge ok" style={{ fontSize: '0.72rem', padding: '0.2rem 0.5rem' }}>Confirmed</span>
+                        ) : (
+                          <button
+                            className="btn"
+                            type="button"
+                            style={{ padding: '0.25rem 0.55rem', fontSize: '0.74rem', background: '#10b981', color: '#fff', border: 'none' }}
+                            onClick={() => void confirmTransaction(t)}
+                          >
+                            Confirm
+                          </button>
+                        )}
+                        <button
+                          className="btn-ghost"
+                          type="button"
+                          style={{ padding: '0.25rem 0.55rem', fontSize: '0.74rem', color: '#dc2626' }}
+                          onClick={() => void cancelTransaction(t)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          {visible.length === 0 && <div className="empty" style={{ padding: '2rem' }}>No display tracking records found.</div>}
+        </div>
+      ) : filter === 'Pick-up' ? (
+        /* ══════════ PICK UP TRACKING TABLE (Image 2) ══════════ */
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Buyer Name</th>
+                <th>Product</th>
+                <th>Product Info</th>
+                <th>Price</th>
+                <th>Authorized Alternate</th>
+                <th>Payment Status</th>
+                <th>Cube #</th>
+                <th>Notes</th>
+                <th className="no-print" style={{ textAlign: 'right' }}>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((t) => {
+                const prod = t.products
+                const cubeNum = prod?.cubes?.cube_number || t.cubes?.cube_number || '—'
+                const isPickedUp = t.pickup_status === 'Picked-up'
+
+                return (
+                  <tr key={t.transaction_id}>
+                    <td><strong>{t.buyer_name || '—'}</strong></td>
+                    <td><strong>{prod?.product_name || t.product_name || '—'}</strong></td>
+                    <td style={{ maxWidth: 200 }}>
+                      <div style={{ fontSize: '0.82rem', color: '#444' }}>
+                        {prod?.description || prod?.variant || t.notes || '—'}
+                      </div>
+                    </td>
+                    <td>{peso(prod?.price)}</td>
+                    <td>{t.authorized_pickup_name || <span className="muted">—</span>}</td>
+                    <td>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <select
+                          value={t.payment_status}
+                          onChange={(e) => void updateRow(t, { payment_status: e.target.value as 'Pending' | 'Paid' })}
+                          style={{
+                            padding: '0.25rem 0.5rem',
+                            fontSize: '0.8rem',
+                            borderRadius: 6,
+                            fontWeight: 700,
+                            color: t.payment_status === 'Paid' ? '#166534' : '#92400e',
+                            background: t.payment_status === 'Paid' ? '#dcfce7' : '#fef3c7',
+                            border: '1px solid #cbd5e1',
+                          }}
+                        >
+                          <option value="Pending">Pending</option>
+                          <option value="Paid">Paid</option>
+                        </select>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          {t.receipt_image_url ? (
+                            <img
+                              src={t.receipt_image_url}
+                              alt="Receipt"
+                              style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid #cbd5e1' }}
+                              onClick={() => setPreviewReceipt(t.receipt_image_url)}
+                              title="Click to view receipt proof"
+                            />
+                          ) : null}
+                          <label style={{ fontSize: '0.72rem', cursor: 'pointer', color: '#2563eb', textDecoration: 'underline' }}>
+                            {t.receipt_image_url ? 'Change receipt' : 'Attach receipt'}
+                            <input
+                              type="file"
+                              accept="image/*"
+                              style={{ display: 'none' }}
+                              onChange={(e) => void onReceiptFile(e.target.files?.[0] || null, (url) => void updateRow(t, { receipt_image_url: url }))}
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <span className="badge info">{cubeNum}</span>
+                    </td>
+                    <td style={{ maxWidth: 160 }}>
+                      <span style={{ fontSize: '0.82rem', color: '#444' }}>{t.notes || '—'}</span>
+                    </td>
+                    <td className="no-print" style={{ textAlign: 'right' }}>
+                      {isPickedUp ? (
+                        <span className="badge ok" style={{ fontSize: '0.74rem' }}>Picked Up</span>
+                      ) : (
+                        <button
+                          className="btn"
+                          type="button"
+                          style={{ padding: '0.25rem 0.55rem', fontSize: '0.74rem', background: '#2563eb', color: '#fff', border: 'none' }}
+                          onClick={() => void updateRow(t, { pickup_status: 'Picked-up' })}
+                        >
+                          Mark Picked-up
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          {visible.length === 0 && <div className="empty" style={{ padding: '2rem' }}>No pick-up tracking records found.</div>}
+        </div>
       ) : (
+        /* ══════════ GENERAL / MIXED FALLBACK TABLE ══════════ */
         <div className="table-wrap">
           <table className="table">
             <thead>
@@ -477,11 +718,6 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                       {prod?.variant && <div className="muted" style={{ fontSize: '0.8rem' }}>Variant: {prod.variant}</div>}
                       <div className="muted" style={{ fontSize: '0.8rem' }}>
                         Cube: {prod?.cubes?.cube_number || t.cubes?.cube_number || '—'} ({prod?.cubes?.type || t.cubes?.type || '—'}) · {peso(prod?.price)}
-                      </div>
-                      {prod?.description && <div className="muted" style={{ fontSize: '0.78rem' }}>{prod.description}</div>}
-                      {(t.listed_quantity ?? prod?.stock_quantity) != null && <div className="muted" style={{ fontSize: '0.78rem' }}>Quantity left in cube: {t.listed_quantity ?? prod?.stock_quantity}</div>}
-                      <div className="muted" style={{ fontSize: '0.75rem' }}>
-                        Created {new Date(t.transaction_date).toLocaleString('en-PH')}<br />Updated {new Date(t.updated_at || t.transaction_date).toLocaleString('en-PH')}
                       </div>
                     </td>
                     <td><strong>{rName}</strong></td>
@@ -519,12 +755,7 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                       <div style={{ fontSize: '0.82rem', color: '#444' }}>{t.notes || '—'}</div>
                     </td>
                     <td>
-                      {t.users?.role === 'Renter' ? (
-                        <div>
-                          <span className="badge warn" style={{ fontSize: '0.72rem', padding: '0.12rem 0.45rem' }}>Awaiting Counter</span>
-                          <div className="muted" style={{ fontSize: '0.74rem', marginTop: 3 }}>Submitted by {t.users.full_name}</div>
-                        </div>
-                      ) : t.users ? (
+                      {t.users ? (
                         <div>
                           <strong>{t.users.full_name}</strong>
                           <div className="muted" style={{ fontSize: '0.74rem' }}>{t.users.role}</div>
@@ -534,86 +765,36 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                       )}
                     </td>
                     <td className="no-print" style={{ textAlign: 'right' }}>
-                      {editId === t.transaction_id ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 140 }}>
-                          {filter !== 'Pick-up' && <input
-                            aria-label="Buyer name"
-                            placeholder="Buyer name"
-                            defaultValue={t.buyer_name || ''}
-                            onBlur={(e) => {
-                              if (e.target.value !== (t.buyer_name || '')) void updateRow(t, { buyer_name: e.target.value || null })
-                            }}
-                          />}
-                          {filter !== 'Pick-up' && <input
-                            aria-label="Authorized pickup person"
-                            placeholder="Authorized pickup person"
-                            defaultValue={t.authorized_pickup_name || ''}
-                            onBlur={(e) => {
-                              if (e.target.value !== (t.authorized_pickup_name || '')) void updateRow(t, { authorized_pickup_name: e.target.value || null })
-                            }}
-                          />}
-                          <select
-                            defaultValue={t.payment_status}
-                            onChange={(e) => void updateRow(t, { payment_status: e.target.value as 'Pending' | 'Paid' })}
+                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                        {t.payment_status === 'Pending' && (
+                          <button
+                            className="btn"
+                            type="button"
+                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.74rem', background: '#10b981', color: '#fff', border: 'none' }}
+                            onClick={() => void updateRow(t, { payment_status: 'Paid' })}
                           >
-                            <option value="Pending">Payment: Pending</option>
-                            <option value="Paid">Payment: Paid</option>
-                          </select>
-                          {t.payment_method === 'Online' && (
-                            <input
-                              type="file"
-                              accept="image/*"
-                              aria-label="Attach online payment receipt"
-                              onChange={(e) => void onReceiptFile(e.target.files?.[0] || null, (url) => void updateRow(t, { receipt_image_url: url, payment_method: 'Online' }))}
-                            />
-                          )}
-                          <select
-                            defaultValue={t.pickup_status}
-                            onChange={(e) => void updateRow(t, { pickup_status: e.target.value as 'Waiting' | 'Picked-up' })}
+                            Paid
+                          </button>
+                        )}
+                        {t.pickup_status === 'Waiting' && (
+                          <button
+                            className="btn"
+                            type="button"
+                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.74rem', background: '#2563eb', color: '#fff', border: 'none' }}
+                            onClick={() => void updateRow(t, { pickup_status: 'Picked-up' })}
                           >
-                            <option value="Waiting">Pickup: Waiting</option>
-                            <option value="Picked-up">Pickup: Picked-up</option>
-                          </select>
-                          <button className="btn-ghost" type="button" onClick={() => setEditId(null)}>Done</button>
-                        </div>
-                      ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
-                          {t.payment_status === 'Pending' && (
-                            <button
-                              className="btn"
-                              type="button"
-                              style={{ padding: '0.25rem 0.55rem', fontSize: '0.74rem', background: '#10b981', color: '#fff', border: 'none' }}
-                              onClick={() => void updateRow(t, { payment_status: 'Paid' })}
-                              title="Verify customer payment"
-                            >
-                              Verify Paid
-                            </button>
-                          )}
-                          {t.pickup_status === 'Waiting' && (
-                            <button
-                              className="btn"
-                              type="button"
-                              style={{ padding: '0.25rem 0.55rem', fontSize: '0.74rem', background: '#2563eb', color: '#fff', border: 'none' }}
-                              onClick={() => void updateRow(t, { pickup_status: 'Picked-up' })}
-                              title="Confirm customer received item"
-                            >
-                              Confirm Claimed
-                            </button>
-                          )}
-                          {t.payment_status === 'Paid' && t.pickup_status === 'Picked-up' ? (
-                            <span className="badge ok" style={{ fontSize: '0.72rem' }}>Verified & Claimed</span>
-                          ) : (
-                            <button
-                              className="btn-ghost"
-                              type="button"
-                              style={{ padding: '0.2rem 0.5rem', fontSize: '0.74rem' }}
-                              onClick={() => setEditId(t.transaction_id)}
-                            >
-                              Edit Details
-                            </button>
-                          )}
-                        </div>
-                      )}
+                            Claimed
+                          </button>
+                        )}
+                        <button
+                          className="btn-ghost"
+                          type="button"
+                          style={{ padding: '0.2rem 0.5rem', fontSize: '0.74rem', color: '#dc2626' }}
+                          onClick={() => void cancelTransaction(t)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 )

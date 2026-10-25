@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { X, ArrowRight, Search, ChevronLeft, ChevronRight, Camera } from 'lucide-react'
+import { X, ArrowRight, Search, ChevronLeft, ChevronRight, Camera, CheckCircle2 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import { type Reservation, type Cube, type Product, peso, isReservationExpired, todayISO, addMonths } from '../lib/types'
@@ -24,6 +24,7 @@ export default function ProductsPage() {
   const [search, setSearch] = useState('')
   const [activeImage, setActiveImage] = useState<Record<number, number>>({})
   const [galleryProduct, setGalleryProduct] = useState<Product | null>(null)
+  const [reservedModalOpen, setReservedModalOpen] = useState(false)
 
   useEffect(() => {
     const reserveId = searchParams.get('reserve')
@@ -39,7 +40,7 @@ export default function ProductsPage() {
     }
   }, [searchParams, user])
 
-  async function createReservation(product_id: number) {
+  async function createReservation(product_id: number, reservationHours?: number) {
     try {
       setLoading(true)
       if (!user) {
@@ -53,15 +54,16 @@ export default function ProductsPage() {
         return
       }
 
+      const activeHours = reservationHours ?? hours
       const { error } = await supabase.rpc('reserve_product_for_customer', {
         p_product_id: product_id,
         p_customer_id: user.user_id,
-        p_hours: hours,
+        p_hours: activeHours,
       })
       setLoading(false)
       if (error) return alert('Reservation failed: ' + error.message)
-      alert('Reserved successfully')
       setReservingFor(null)
+      setReservedModalOpen(true)
       await loadProducts()
     } catch (err) {
       setLoading(false)
@@ -368,7 +370,7 @@ export default function ProductsPage() {
                             style={{ width: '100%', justifyContent: 'space-between' }}
                             onClick={(e) => { e.stopPropagation(); setReservingFor(p.product_id) }}
                           >
-                            <span>Reserve Item</span>
+                            <span>Reserve</span>
                             <span>→</span>
                           </button>
                         ) : (
@@ -539,10 +541,81 @@ export default function ProductsPage() {
         }
         onReserve={(pid, h) => {
           setHours(h)
-          createReservation(pid)
+          createReservation(pid, h)
         }}
         onSignIn={() => nav('/login?redirect=/')}
       />
+
+      {/* Reservation Confirmed Modal Pop-up */}
+      {reservedModalOpen && (
+        <div
+          className="modal-overlay"
+          onClick={() => setReservedModalOpen(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 100001,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1.25rem',
+            background: 'rgba(0, 0, 0, 0.5)',
+            backdropFilter: 'blur(4px)',
+          }}
+        >
+          <div
+            className="modal-card"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: 440,
+              width: '92vw',
+              padding: '2rem 1.75rem',
+              borderRadius: 24,
+              background: '#ffffff',
+              boxShadow: '0 25px 60px rgba(0, 0, 0, 0.28)',
+              border: '1px solid #e2e8f0',
+              textAlign: 'center',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '1.25rem',
+            }}
+          >
+            <div
+              style={{
+                width: 62,
+                height: 62,
+                borderRadius: '50%',
+                background: 'rgba(16, 185, 129, 0.12)',
+                color: '#10b981',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <CheckCircle2 size={34} />
+            </div>
+
+            <div>
+              <h3 style={{ fontSize: '1.3rem', fontWeight: 800, margin: '0 0 0.5rem', color: '#0f172a' }}>
+                Reservation Confirmed!
+              </h3>
+              <p style={{ margin: 0, fontSize: '0.96rem', color: '#475569', lineHeight: 1.6 }}>
+                Your product has been reserved! Claim it before the reservation period expires.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              className="btn"
+              style={{ width: '100%', justifyContent: 'center', padding: '0.8rem 1.25rem', fontSize: '0.95rem', fontWeight: 700 }}
+              onClick={() => setReservedModalOpen(false)}
+            >
+              Okay
+            </button>
+          </div>
+        </div>
+      )}
     </section>
   )
 }

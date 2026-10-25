@@ -61,6 +61,7 @@ function InnerApp() {
     void supabase
       .from('reservations')
       .select('reservation_id', { count: 'exact', head: true })
+      .is('product_id', null)
       .eq('status', 'Pending')
       .then(({ count }) => setPendingReservationsCount(count || 0))
   }, [isAdmin, user])

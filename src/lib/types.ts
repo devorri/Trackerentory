@@ -40,6 +40,7 @@ export type Product = {
   deleted_at: string | null
   created_at?: string
   cubes?: Pick<Cube, 'cube_number' | 'type'> | null
+  renter?: Pick<UserRow, 'user_id' | 'full_name' | 'username'> | null
 }
 
 export type Reservation = {
@@ -66,6 +67,21 @@ export type Contract = {
   created_at?: string
   cubes?: Cube | null
   users?: { full_name: string } | null
+}
+
+export type ContractExtension = {
+  extension_id: number
+  contract_id: number | null
+  renter_id: number | null
+  cube_id: number | null
+  requested_months: number
+  notes: string | null
+  status: 'Pending' | 'Approved' | 'Declined'
+  created_at?: string
+  updated_at?: string
+  contracts?: Contract | null
+  cubes?: Cube | null
+  users?: { full_name: string; email?: string; phone_number?: string } | null
 }
 
 export type Transaction = {

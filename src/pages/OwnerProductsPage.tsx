@@ -50,7 +50,7 @@ export default function OwnerProductsPage() {
   async function load() {
     setLoading(true)
     const [pRes, cRes] = await Promise.all([
-      supabase.from('products').select('*, cubes(cube_number, type)').order('product_name'),
+      supabase.from('products').select('*, cubes(cube_number, type), renter:users!renter_id(user_id, full_name, username)').order('product_name'),
       supabase.from('cubes').select('*').order('cube_number'),
     ])
     setLoading(false)
@@ -279,7 +279,9 @@ export default function OwnerProductsPage() {
         p.product_name.toLowerCase().includes(q) ||
         (p.category || '').toLowerCase().includes(q) ||
         (p.variant || '').toLowerCase().includes(q) ||
-        (p.cubes?.cube_number || '').toLowerCase().includes(q)
+        (p.cubes?.cube_number || '').toLowerCase().includes(q) ||
+        (p.renter?.full_name || '').toLowerCase().includes(q) ||
+        (p.renter?.username || '').toLowerCase().includes(q)
       )
     }
     const { col, dir } = sortConfig
@@ -288,6 +290,7 @@ export default function OwnerProductsPage() {
       let vB: any = ''
       if (col === 'name') { vA = a.product_name; vB = b.product_name }
       else if (col === 'cube') { vA = a.cubes?.cube_number || ''; vB = b.cubes?.cube_number || '' }
+      else if (col === 'renter') { vA = a.renter?.full_name || ''; vB = b.renter?.full_name || '' }
       else if (col === 'price') { vA = Number(a.price || 0); vB = Number(b.price || 0) }
       else if (col === 'stock') { vA = Number(a.stock_quantity || 0); vB = Number(b.stock_quantity || 0) }
       else if (col === 'category') { vA = a.category || ''; vB = b.category || '' }
@@ -335,7 +338,7 @@ export default function OwnerProductsPage() {
           <Search size={16} className="muted" />
           <input
             type="text"
-            placeholder="Search product, category, or cube…"
+            placeholder="Search product, category, cube, or renter name…"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             style={{ margin: 0, padding: '0.5rem 0.85rem', fontSize: '0.88rem' }}
@@ -380,7 +383,7 @@ export default function OwnerProductsPage() {
 
       {/* Table */}
       {loading ? (
-        <SkeletonTable rows={6} cols={6} />
+        <SkeletonTable rows={6} cols={7} />
       ) : (
         <div className="table-wrap">
           <table className="table">
@@ -392,6 +395,9 @@ export default function OwnerProductsPage() {
                 </th>
                 <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('cube')}>
                   Assigned Cube {renderSortIndicator('cube')}
+                </th>
+                <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('renter')}>
+                  Renter {renderSortIndicator('renter')}
                 </th>
                 <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('price')}>
                   Price {renderSortIndicator('price')}
@@ -469,6 +475,20 @@ export default function OwnerProductsPage() {
                       <span className="badge info">
                         {p.cubes.cube_number} ({p.cubes.type})
                       </span>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                  <td>
+                    {p.renter?.full_name ? (
+                      <div>
+                        <strong>{p.renter.full_name}</strong>
+                        {p.renter.username && (
+                          <div className="muted" style={{ fontSize: '0.74rem' }}>
+                            @{p.renter.username}
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <span className="muted">—</span>
                     )}

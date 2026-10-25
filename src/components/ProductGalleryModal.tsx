@@ -404,7 +404,7 @@ export default function ProductGalleryModal({
                     style={{ width: '100%', justifyContent: 'center', padding: '0.85rem 1.25rem' }}
                     onClick={() => setIsReserving(true)}
                   >
-                    <span>Reserve for Store Pick-up</span>
+                    <span>Reserve</span>
                     <ArrowRight size={16} />
                   </button>
                 )

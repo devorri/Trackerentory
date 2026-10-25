@@ -87,6 +87,18 @@ create table if not exists transactions (
   processed_by integer references users(user_id) on delete set null
 );
 
+create table if not exists contract_extensions (
+  extension_id serial primary key,
+  contract_id integer references contracts(contract_id) on delete cascade,
+  renter_id integer references users(user_id) on delete cascade,
+  cube_id integer references cubes(cube_id) on delete cascade,
+  requested_months integer not null default 1,
+  notes text,
+  status text not null check (status in ('Pending', 'Approved', 'Declined')) default 'Pending',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists otp_codes (
   id serial primary key,
   user_id integer references users(user_id) on delete cascade,
@@ -164,6 +176,7 @@ grant select, insert, update, delete on cubes to authenticated;
 grant select, insert, update, delete on products to authenticated;
 grant select, insert, update, delete on reservations to authenticated;
 grant select, insert, update, delete on contracts to authenticated;
+grant select, insert, update, delete on contract_extensions to authenticated;
 grant select, insert, update, delete on transactions to authenticated;
 grant select, insert, update, delete on otp_codes to authenticated;
 revoke all on function public.reserve_product_for_customer(integer, integer, integer) from public;

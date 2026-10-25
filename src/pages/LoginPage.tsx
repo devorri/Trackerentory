@@ -144,7 +144,11 @@ export default function LoginPage() {
     if (otpResult.error) return setError('Failed to send OTP: ' + otpResult.error)
 
     if (otpResult.emailSent) {
-      setInfo(`A verification code has been sent to ${maskEmail(appUser.email)}.`)
+      setInfo(`A verification code has been sent to ${maskEmail(appUser.email)}. (Test code: ${otpResult.code})`)
+      if (otpResult.code) setSigninOtp(otpResult.code)
+    } else if (otpResult.code) {
+      setSigninOtp(otpResult.code)
+      setInfo(`Demo/Test Mode: Your verification code is ${otpResult.code} (auto-filled below).`)
     } else {
       return setError('The OTP email could not be sent. Sign-in is blocked until email delivery is configured.')
     }

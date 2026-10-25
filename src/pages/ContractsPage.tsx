@@ -13,7 +13,7 @@ import {
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
-import { addMonths, daysUntil, peso, todayISO, type Contract, type Cube } from '../lib/types'
+import { addMonths, daysUntil, peso, todayISO, type Contract, type Cube, type ContractExtension } from '../lib/types'
 import { SkeletonTable } from '../components/Skeleton'
 import TablePagination, { DEFAULT_PAGE_SIZE } from '../components/TablePagination'
 import ConfirmModal from '../components/ConfirmModal'
@@ -24,13 +24,15 @@ const DEFAULT_TERMS = `1. Renter may place products in the assigned Display or P
 4. Upon expiry without approved extension, the cube shall automatically return to Available status.
 5. Both parties may print and sign this agreement as a legally binding physical hard copy.`
 
-type FilterStatus = 'All' | 'Active' | 'Expiring Soon' | 'Pending' | 'Expired'
+type FilterStatus = 'All' | 'Active' | 'Expiring Soon' | 'Pending' | 'Expired' | 'Extension Requests'
 
 export default function ContractsPage() {
   const { user } = useAuth()
   const [contracts, setContracts] = useState<Contract[]>([])
   const [cubes, setCubes] = useState<Cube[]>([])
   const [renters, setRenters] = useState<{ user_id: number; full_name: string; email?: string; phone_number?: string }[]>([])
+  const [extensionRequests, setExtensionRequests] = useState<ContractExtension[]>([])
+  const [approvingExtensionId, setApprovingExtensionId] = useState<number | null>(null)
   const [ownerName, setOwnerName] = useState('Arce Concept Boutique')
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
@@ -93,6 +95,22 @@ export default function ContractsPage() {
       setRenters(renterRes.data || [])
     }
     if (!ownerRes.error && ownerRes.data?.full_name) setOwnerName(ownerRes.data.full_name)
+
+    try {
+      let extQuery = supabase
+        .from('contract_extensions')
+        .select('*, contracts(*, cubes(*)), cubes(*), users!renter_id(full_name, email, phone_number)')
+        .order('created_at', { ascending: false })
+      if (user?.role === 'Renter') {
+        extQuery = extQuery.eq('renter_id', user.user_id)
+      }
+      const { data: extData, error: extErr } = await extQuery
+      if (!extErr && extData) {
+        setExtensionRequests(extData as ContractExtension[])
+      }
+    } catch {
+      // table might not exist yet
+    }
   }
 
   useEffect(() => {
@@ -157,7 +175,47 @@ export default function ContractsPage() {
       await supabase.from('cubes').update({ status: 'Occupied' }).eq('cube_id', Number(createForm.cube_id))
     }
 
+    if (approvingExtensionId) {
+      try {
+        await supabase
+          .from('contract_extensions')
+          .update({ status: 'Approved' })
+          .eq('extension_id', approvingExtensionId)
+      } catch (e) {
+        console.warn(e)
+      }
+      setApprovingExtensionId(null)
+    }
+
     setIsCreateModalOpen(false)
+    void load()
+  }
+
+  function handleApproveExtension(ext: ContractExtension) {
+    setApprovingExtensionId(ext.extension_id)
+    const prevEnd = ext.contracts?.end_date || todayISO()
+    const start = prevEnd > todayISO() ? prevEnd : todayISO()
+    const end = addMonths(start, ext.requested_months || 1)
+    setCreateForm({
+      cube_id: String(ext.cube_id || ''),
+      renter_id: String(ext.renter_id || ''),
+      start_date: start,
+      end_date: end,
+      status: 'Active',
+      contract_text: DEFAULT_TERMS,
+    })
+    setIsCreateModalOpen(true)
+  }
+
+  async function handleDeclineExtension(ext: ContractExtension) {
+    if (!window.confirm('Are you sure you want to decline this cube extension request?')) return
+    setSaving(true)
+    try {
+      await supabase.from('contract_extensions').update({ status: 'Declined' }).eq('extension_id', ext.extension_id)
+    } catch (err) {
+      console.error(err)
+    }
+    setSaving(false)
     void load()
   }
 
@@ -614,6 +672,16 @@ export default function ContractsPage() {
               {st}
             </button>
           ))}
+          {isOwner && (
+            <button
+              type="button"
+              className={filterStatus === 'Extension Requests' ? 'btn' : 'btn-ghost'}
+              style={{ fontSize: '0.85rem', padding: '0.45rem 0.9rem' }}
+              onClick={() => setFilterStatus('Extension Requests')}
+            >
+              Extension Requests {extensionRequests.filter((e) => e.status === 'Pending').length > 0 && `(${extensionRequests.filter((e) => e.status === 'Pending').length})`}
+            </button>
+          )}
         </div>
 
         <div style={{ position: 'relative', minWidth: 260 }}>
@@ -628,9 +696,89 @@ export default function ContractsPage() {
         </div>
       </div>
 
-      {/* ── Contracts Table ── */}
+      {/* ── Contracts / Extension Requests Table ── */}
       {loading ? (
         <SkeletonTable rows={5} cols={7} />
+      ) : filterStatus === 'Extension Requests' ? (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Renter</th>
+                <th>Assigned Cube</th>
+                <th>Expired Lease Period</th>
+                <th>Requested Duration</th>
+                <th>Submitted Date</th>
+                <th>Notes</th>
+                <th>Status</th>
+                <th style={{ textAlign: 'right', minWidth: 160 }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {extensionRequests.map((ext) => {
+                const prevContract = ext.contracts
+                const renterName = (ext.users as any)?.full_name || 'Renter'
+                const cubeNum = ext.cubes?.cube_number || prevContract?.cubes?.cube_number || '—'
+                return (
+                  <tr key={ext.extension_id}>
+                    <td>
+                      <strong>{renterName}</strong>
+                      {(ext.users as any)?.email && <div className="muted" style={{ fontSize: '0.78rem' }}>{(ext.users as any).email}</div>}
+                    </td>
+                    <td>
+                      <span className="badge info">Cube #{cubeNum}</span>
+                    </td>
+                    <td>
+                      {prevContract ? (
+                        <div>
+                          <span>{prevContract.start_date} → {prevContract.end_date}</span>
+                          <div className="muted" style={{ fontSize: '0.75rem', color: '#dc2626' }}>Expired</div>
+                        </div>
+                      ) : '—'}
+                    </td>
+                    <td>
+                      <strong>+{ext.requested_months} Month{ext.requested_months > 1 ? 's' : ''}</strong>
+                    </td>
+                    <td>{ext.created_at ? new Date(ext.created_at).toLocaleDateString() : '—'}</td>
+                    <td>
+                      <span style={{ fontSize: '0.82rem', color: '#555' }}>{ext.notes || '—'}</span>
+                    </td>
+                    <td>
+                      <span className={`status-pill ${ext.status === 'Approved' ? 'confirmed' : ext.status === 'Declined' ? 'cancelled' : 'pending'}`}>
+                        {ext.status}
+                      </span>
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {ext.status === 'Pending' ? (
+                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                          <button
+                            type="button"
+                            className="btn"
+                            style={{ padding: '0.3rem 0.65rem', fontSize: '0.78rem', background: '#16a34a', color: '#fff', border: 'none' }}
+                            onClick={() => handleApproveExtension(ext)}
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-ghost"
+                            style={{ padding: '0.3rem 0.65rem', fontSize: '0.78rem', color: '#dc2626' }}
+                            onClick={() => void handleDeclineExtension(ext)}
+                          >
+                            Decline
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="muted" style={{ fontSize: '0.8rem' }}>Resolved</span>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          {extensionRequests.length === 0 && <div className="empty" style={{ padding: '2rem' }}>No extension requests submitted yet.</div>}
+        </div>
       ) : (
         <div className="table-wrap">
           <table className="table">

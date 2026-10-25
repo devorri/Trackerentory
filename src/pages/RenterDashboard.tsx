@@ -5,360 +5,478 @@ import {
   Package,
   KeyRound,
   X,
-  ArrowUpDown,
   Plus,
   Search,
   BarChart3,
-  ExternalLink,
   FileText,
-  ChevronDown,
-  ChevronUp,
-  Camera,
+  CalendarCheck,
+  RotateCcw,
+  Trash2,
 } from 'lucide-react'
 import ProductGalleryModal from '../components/ProductGalleryModal'
+import ConfirmModal from '../components/ConfirmModal'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import {
   addMonths,
   daysUntil,
   peso,
+  todayISO,
+  isReservationExpired,
+  parseReservationExpiry,
   type Contract,
   type Cube,
   type Product,
   type Transaction,
+  type Reservation,
+  type ContractExtension,
   DEFAULT_PRODUCT_CATEGORIES,
 } from '../lib/types'
-import { expireContracts } from '../lib/maintenance'
+import { expireContracts, cancelExpiredReservations } from '../lib/maintenance'
 import { uploadPublicImage } from '../lib/storage'
 import { BUCKET_DOCUMENTS, BUCKET_PRODUCT_IMAGES } from '../lib/supabase'
-import TablePagination, { DEFAULT_PAGE_SIZE } from '../components/TablePagination'
-import { SkeletonStat } from '../components/Skeleton'
+import { SkeletonTable } from '../components/Skeleton'
 
-type ViewTab = 'overview' | 'display' | 'pickup' | 'cubes_contracts'
+type RenterSection =
+  | 'add-product'
+  | 'product-reservations'
+  | 'pickup-tracking'
+  | 'my-cube-contract'
+  | 'product-management'
+  | 'income'
 
 export default function RenterDashboard() {
-  const { user } = useAuth()
+  const { user, signOut } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [cubes, setCubes] = useState<Cube[]>([])
   const [contracts, setContracts] = useState<Contract[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
+  const [reservations, setReservations] = useState<Reservation[]>([])
+  const [extensionRequests, setExtensionRequests] = useState<ContractExtension[]>([])
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [showOverviewStats, setShowOverviewStats] = useState(true)
+  const [showSignOutConfirm, setShowSignOutConfirm] = useState(false)
 
-  // Tab State (synced with URL ?tab=)
-  const paramTab = searchParams.get('tab') as ViewTab | null
-  const [activeTab, setActiveTab] = useState<ViewTab>(() => {
-    if (paramTab === 'display' || paramTab === 'pickup' || paramTab === 'cubes_contracts') {
-      return paramTab
-    }
-    return 'overview'
+  // Active section (synced with URL ?section=)
+  const paramSection = searchParams.get('section') as RenterSection | null
+  const [activeSection, setActiveSection] = useState<RenterSection>(() => {
+    const valid: RenterSection[] = [
+      'add-product',
+      'product-reservations',
+      'pickup-tracking',
+      'my-cube-contract',
+      'product-management',
+      'income',
+    ]
+    if (paramSection && valid.includes(paramSection)) return paramSection
+    return 'add-product'
   })
 
-  useEffect(() => {
-    if (paramTab && (paramTab === 'overview' || paramTab === 'display' || paramTab === 'pickup' || paramTab === 'cubes_contracts')) {
-      setActiveTab(paramTab)
-    }
-  }, [paramTab])
-
-  function handleTabChange(tab: ViewTab) {
-    setActiveTab(tab)
-    setSearchParams(tab === 'overview' ? {} : { tab })
+  function handleSectionChange(sec: RenterSection) {
+    setActiveSection(sec)
+    setSearchParams({ section: sec })
   }
 
-  // Modals state
-  const [isAddProductModalOpen, setIsAddProductModalOpen] = useState(false)
+  // ════════════ MODALS STATE ════════════
   const [previewReceipt, setPreviewReceipt] = useState<string | null>(null)
-  const [isNewHandoverModalOpen, setIsNewHandoverModalOpen] = useState(false)
-  const [editingTx, setEditingTx] = useState<Transaction | null>(null)
+  const [galleryProduct, setGalleryProduct] = useState<Product | null>(null)
+  const [viewingContract, setViewingContract] = useState<Contract | null>(null)
+  const [extendingContract, setExtendingContract] = useState<Contract | null>(null)
+  const [extensionMonths, setExtensionMonths] = useState<number>(1)
+  const [extensionNotes, setExtensionNotes] = useState<string>('')
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null)
 
-  // Sub-view filters & pagination
-  const [displaySubView, setDisplaySubView] = useState<'products' | 'sales'>('products')
-  const [displaySearch, setDisplaySearch] = useState('')
-  const [displayStockFilter, setDisplayStockFilter] = useState<'all' | 'in_stock' | 'sold_out'>('all')
-  const [displayCategoryFilter, setDisplayCategoryFilter] = useState('All')
-  const [displaySalesFilter, setDisplaySalesFilter] = useState<'all' | 'Paid' | 'Pending'>('all')
-  const [displayProductsPage, setDisplayProductsPage] = useState(1)
-  const [displaySalesPage, setDisplaySalesPage] = useState(1)
+  // ════════════ ADD PRODUCT DUAL FORM (Image 2) ════════════
+  const [addProductType, setAddProductType] = useState<'display' | 'pickup'>('display')
+  const [displayForm, setDisplayForm] = useState({
+    product_name: '',
+    price: '',
+    quantity: '1',
+    variant: '',
+    category: '',
+    description: '',
+    cube_id: '',
+  })
+  const [displayImages, setDisplayImages] = useState<File[]>([])
+  const [displayImagePreviews, setDisplayImagePreviews] = useState<string[]>([])
 
-  const [pickupSearch, setPickupSearch] = useState('')
-  const [pickupStatusFilter, setPickupStatusFilter] = useState<'all' | 'Waiting' | 'Picked-up'>('all')
-  const [pickupPage, setPickupPage] = useState(1)
+  const [pickupForm, setPickupForm] = useState({
+    product: '',
+    product_info: '',
+    price: '',
+    buyer_name: '',
+    authorized_alternate: '',
+    payment_status: 'Pending' as 'Pending' | 'Paid',
+    payment_method: 'Cash' as 'Cash' | 'Online',
+    cube_id: '',
+    notes: '',
+  })
+  const [pickupReceiptFile, setPickupReceiptFile] = useState<File | null>(null)
+  const [pickupReceiptPreview, setPickupReceiptPreview] = useState<string | null>(null)
 
-  // Product Form State
-  const [productForm, setProductForm] = useState({
+  // Edit Product Modal Form
+  const [editProductForm, setEditProductForm] = useState({
     product_name: '',
     description: '',
     price: '',
     stock_quantity: '1',
     variant: '',
     category: '',
-    image_url: '',
     cube_id: '',
-    buyer_name: '',
-    authorized_pickup_name: '',
-    payment_status: 'Pending' as 'Pending' | 'Paid',
-    payment_method: 'Cash' as 'Cash' | 'Online',
-    pickup_notes: '',
   })
-  const [imageFiles, setImageFiles] = useState<File[]>([])
-  const [imagePreviews, setImagePreviews] = useState<string[]>([])
-  const [galleryProduct, setGalleryProduct] = useState<Product | null>(null)
-  const [pickupReceiptFile, setPickupReceiptFile] = useState<File | null>(null)
-  const [pickupReceiptPreview, setPickupReceiptPreview] = useState<string | null>(null)
 
-  // Edit Handover Form State
-  const [editTxForm, setEditTxForm] = useState({
-    buyer_name: '',
-    authorized_pickup_name: '',
-    payment_status: 'Pending' as 'Pending' | 'Paid',
-    payment_method: 'Cash' as 'Cash' | 'Online',
-    notes: '',
-  })
-  const [editTxReceiptFile, setEditTxReceiptFile] = useState<File | null>(null)
+  // ════════════ SUB-FILTERS & SEARCH ════════════
+  const [reservationStatusFilter, setReservationStatusFilter] = useState<'All' | 'Pending' | 'Confirmed' | 'Cancelled' | 'Expired'>('All')
+  const [reservationSearch, setReservationSearch] = useState('')
+  const [pickupSearch, setPickupSearch] = useState('')
+  const [pickupStatusFilter, setPickupStatusFilter] = useState<'All' | 'Waiting' | 'Picked-up'>('All')
 
-  // New Handover Form State
-  const [newHandoverForm, setNewHandoverForm] = useState({
-    product_id: '',
-    buyer_name: '',
-    authorized_pickup_name: '',
-    quantity: '1',
-    payment_status: 'Pending' as 'Pending' | 'Paid',
-    payment_method: 'Cash' as 'Cash' | 'Online',
-    notes: '',
-  })
-  const [newHandoverReceiptFile, setNewHandoverReceiptFile] = useState<File | null>(null)
+  const [pmTab, setPmTab] = useState<'active' | 'trash'>('active')
+  const [pmSearch, setPmSearch] = useState('')
+  const [pmCategory, setPmCategory] = useState('All')
 
-  // Sorting
-  const [sortDisplayTx, setSortDisplayTx] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'date', dir: 'desc' })
-  const [sortPickupTx, setSortPickupTx] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'date', dir: 'desc' })
-  const [sortContracts, setSortContracts] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'days', dir: 'asc' })
-
-  // Data Loading
+  // ════════════ DATA LOADING ════════════
   async function load(silent = false) {
     if (!user) return
     if (!silent) setLoading(true)
-    if (!silent) await expireContracts()
-    const [cRes, conRes, pRes, tRes] = await Promise.all([
+    if (!silent) {
+      await expireContracts()
+      await cancelExpiredReservations()
+    }
+
+    const [cRes, conRes, pRes, tRes, rRes, extRes] = await Promise.all([
       supabase.from('cubes').select('*').order('cube_number'),
       supabase.from('contracts').select('*, cubes(*)').eq('renter_id', user.user_id).order('end_date'),
       supabase.from('products').select('*, cubes(cube_number, type)').eq('renter_id', user.user_id),
       supabase
         .from('transactions')
-        .select('*, products(*, cubes(cube_number, type)), users!processed_by(full_name, role)')
+        .select('*, products(*, cubes(cube_number, type)), cubes(cube_number, type), users!processed_by(full_name, role)')
         .order('updated_at', { ascending: false }),
+      supabase
+        .from('reservations')
+        .select('*, products(*, cubes(*)), cubes(*), customer:users!customer_id(full_name, email, phone_number)')
+        .order('expiry_time', { ascending: false }),
+      supabase
+        .from('contract_extensions')
+        .select('*, contracts(*, cubes(*)), cubes(*)')
+        .eq('renter_id', user.user_id)
+        .order('created_at', { ascending: false }),
     ])
+
     if (!silent) setLoading(false)
     if (!cRes.error) setCubes((cRes.data || []) as Cube[])
     if (!conRes.error) setContracts((conRes.data || []) as Contract[])
     if (!pRes.error) setProducts((pRes.data || []) as Product[])
+    if (!extRes.error && extRes.data) setExtensionRequests(extRes.data as ContractExtension[])
+
     if (!tRes.error) {
       const myProds = (pRes.data || []) as Product[]
       const myProdIds = new Set(myProds.map((p) => p.product_id))
-      const renterTx = ((tRes.data || []) as Transaction[]).filter((t) => t.product_id && myProdIds.has(t.product_id))
+      const renterTx = ((tRes.data || []) as Transaction[]).filter(
+        (t) => (t.product_id && myProdIds.has(t.product_id)) || t.renter_id === user.user_id,
+      )
       setTransactions(renterTx)
+    }
+
+    if (!rRes.error) {
+      const myProds = (pRes.data || []) as Product[]
+      const myProdIds = new Set(myProds.map((p) => p.product_id))
+      const renterRes = ((rRes.data || []) as Reservation[]).filter(
+        (r) => r.product_id && myProdIds.has(r.product_id),
+      )
+      setReservations(renterRes)
     }
   }
 
   useEffect(() => {
     void load()
-    const refreshTimer = window.setInterval(() => void load(true), 15000)
-    return () => window.clearInterval(refreshTimer)
+    const timer = window.setInterval(() => void load(true), 15000)
+    return () => window.clearInterval(timer)
   }, [user])
 
-  const myActiveCubeIds = useMemo(
-    () => new Set(contracts.filter((c) => c.status === 'Active' || c.status === 'Pending').map((c) => c.cube_id)),
-    [contracts],
-  )
+  // Renter's assigned active / pending cubes
+  const myActiveCubes = useMemo(() => {
+    const activeCubeIds = new Set(
+      contracts
+        .filter((c) => c.status === 'Active' || c.status === 'Pending')
+        .map((c) => c.cube_id)
+        .filter(Boolean),
+    )
+    return cubes.filter((c) => activeCubeIds.has(c.cube_id))
+  }, [contracts, cubes])
 
-  const myCubes = useMemo(
-    () => cubes.filter((c) => myActiveCubeIds.has(c.cube_id)),
-    [cubes, myActiveCubeIds],
-  )
+  const myDisplayCubes = useMemo(() => myActiveCubes.filter((c) => c.type === 'Display'), [myActiveCubes])
+  const myPickupCubes = useMemo(() => myActiveCubes.filter((c) => c.type === 'Pick-up'), [myActiveCubes])
 
-  const displayProducts = useMemo(
-    () => products.filter((p) => p.cubes?.type === 'Display'),
-    [products],
-  )
+  // Set default cube_id for forms
+  useEffect(() => {
+    if (!displayForm.cube_id && myDisplayCubes.length > 0) {
+      setDisplayForm((prev) => ({ ...prev, cube_id: String(myDisplayCubes[0].cube_id) }))
+    }
+    if (!pickupForm.cube_id && myPickupCubes.length > 0) {
+      setPickupForm((prev) => ({ ...prev, cube_id: String(myPickupCubes[0].cube_id) }))
+    }
+  }, [myDisplayCubes, myPickupCubes])
 
-  const pickupProducts = useMemo(
-    () => products.filter((p) => p.cubes?.type === 'Pick-up'),
-    [products],
-  )
-
-  const categories = useMemo(() => {
-    const existing = products.map((p) => p.category?.trim()).filter(Boolean) as string[]
-    return Array.from(new Set([...DEFAULT_PRODUCT_CATEGORIES, ...existing])).sort()
-  }, [products])
+  // Active vs Trash products
+  const activeProducts = useMemo(() => products.filter((p) => !p.deleted_at), [products])
+  const trashProducts = useMemo(() => products.filter((p) => Boolean(p.deleted_at)), [products])
 
   const existingCategories = useMemo(() => {
     return Array.from(new Set(products.map((p) => p.category?.trim()).filter(Boolean) as string[])).sort()
   }, [products])
 
-  // Key KPI stats
-  const displaySalesTotal = useMemo(() => {
-    return transactions
-      .filter((t) => t.products?.cubes?.type === 'Display' && t.payment_status === 'Paid')
-      .reduce((sum, t) => sum + Number(t.products?.price || 0) * Number(t.quantity || 1), 0)
+  // ════════════ ADD PRODUCT HANDLERS ════════════
+  function handleDisplayPhotoFiles(files: FileList | null) {
+    const list = Array.from(files || [])
+    setDisplayImages(list)
+    const previews = list.map((file) => URL.createObjectURL(file))
+    setDisplayImagePreviews(previews)
+  }
+
+  async function handleAddDisplayProduct(e: React.FormEvent) {
+    e.preventDefault()
+    if (!displayForm.product_name.trim() || !displayForm.price || !displayForm.cube_id) {
+      return alert('Product Name, Price, and Assigned Cube are required.')
+    }
+    setBusy(true)
+
+    let imageUrls: string[] = []
+    if (displayImages.length > 0) {
+      const uploads = await Promise.all(
+        displayImages.map((f) => uploadPublicImage(BUCKET_PRODUCT_IMAGES, f, String(user!.user_id))),
+      )
+      const err = uploads.find((u) => u.error || !u.url)
+      if (err) {
+        setBusy(false)
+        return alert('Failed uploading photos: ' + (err.error || 'unknown error'))
+      }
+      imageUrls = uploads.map((u) => u.url!)
+    }
+
+    const { error } = await supabase.from('products').insert([
+      {
+        renter_id: user!.user_id,
+        cube_id: Number(displayForm.cube_id),
+        product_name: displayForm.product_name.trim(),
+        price: Number(displayForm.price),
+        stock_quantity: Math.max(1, Number(displayForm.quantity) || 1),
+        variant: displayForm.variant.trim() || null,
+        category: displayForm.category.trim() || null,
+        description: displayForm.description.trim() || null,
+        image_url: imageUrls[0] || null,
+        image_urls: imageUrls,
+      },
+    ])
+
+    setBusy(false)
+    if (error) return alert('Failed adding display product: ' + error.message)
+
+    alert('Product added for display successfully!')
+    setDisplayForm({
+      product_name: '',
+      price: '',
+      quantity: '1',
+      variant: '',
+      category: '',
+      description: '',
+      cube_id: myDisplayCubes[0] ? String(myDisplayCubes[0].cube_id) : '',
+    })
+    setDisplayImages([])
+    setDisplayImagePreviews([])
+    void load()
+    handleSectionChange('product-management')
+  }
+
+  async function handleAddPickupProduct(e: React.FormEvent) {
+    e.preventDefault()
+    if (!pickupForm.product.trim() || !pickupForm.price || !pickupForm.buyer_name.trim() || !pickupForm.cube_id) {
+      return alert('Product Name, Price, Buyer Name, and Assigned Cube are required.')
+    }
+    setBusy(true)
+
+    let receiptUrl: string | null = null
+    if (pickupReceiptFile) {
+      const up = await uploadPublicImage(BUCKET_DOCUMENTS, pickupReceiptFile, 'receipts')
+      if (up.url) receiptUrl = up.url
+    }
+
+    // 1. Create product row
+    const { data: prodData, error: prodErr } = await supabase
+      .from('products')
+      .insert([
+        {
+          renter_id: user!.user_id,
+          cube_id: Number(pickupForm.cube_id),
+          product_name: pickupForm.product.trim(),
+          description: pickupForm.product_info.trim() || null,
+          price: Number(pickupForm.price),
+          stock_quantity: 1,
+        },
+      ])
+      .select('product_id')
+      .single()
+
+    if (prodErr || !prodData) {
+      setBusy(false)
+      return alert('Failed creating pick-up item: ' + (prodErr?.message || 'unknown error'))
+    }
+
+    // 2. Create handover tracking record
+    const { error: txErr } = await supabase.from('transactions').insert([
+      {
+        product_id: prodData.product_id,
+        product_name: pickupForm.product.trim(),
+        cube_id: Number(pickupForm.cube_id),
+        renter_id: user!.user_id,
+        buyer_name: pickupForm.buyer_name.trim(),
+        authorized_pickup_name: pickupForm.authorized_alternate.trim() || null,
+        payment_status: pickupForm.payment_status,
+        payment_method: pickupForm.payment_method,
+        pickup_status: 'Waiting',
+        quantity: 1,
+        notes: pickupForm.notes.trim() || null,
+        receipt_image_url: receiptUrl,
+        processed_by: user!.user_id,
+        updated_at: new Date().toISOString(),
+      },
+    ])
+
+    setBusy(false)
+    if (txErr) return alert('Failed creating pick-up tracking record: ' + txErr.message)
+
+    alert('Product added for pick-up and registered in Pick-up Tracking!')
+    setPickupForm({
+      product: '',
+      product_info: '',
+      price: '',
+      buyer_name: '',
+      authorized_alternate: '',
+      payment_status: 'Pending',
+      payment_method: 'Cash',
+      cube_id: myPickupCubes[0] ? String(myPickupCubes[0].cube_id) : '',
+      notes: '',
+    })
+    setPickupReceiptFile(null)
+    setPickupReceiptPreview(null)
+    void load()
+    handleSectionChange('pickup-tracking')
+  }
+
+  // ════════════ EXTENSION REQUEST (Only when expired) ════════════
+  async function submitExtensionRequest() {
+    if (!extendingContract) return
+    setBusy(true)
+    try {
+      const { error } = await supabase.from('contract_extensions').insert([
+        {
+          contract_id: extendingContract.contract_id,
+          renter_id: user!.user_id,
+          cube_id: extendingContract.cube_id,
+          requested_months: extensionMonths,
+          notes: extensionNotes.trim() || null,
+          status: 'Pending',
+        },
+      ])
+
+      if (error) {
+        // Fallback: create pending contract row
+        console.warn('Fallback to pending contract row:', error.message)
+        const start = extendingContract.end_date > todayISO() ? extendingContract.end_date : todayISO()
+        await supabase.from('contracts').insert([
+          {
+            renter_id: user!.user_id,
+            cube_id: extendingContract.cube_id,
+            start_date: start,
+            end_date: addMonths(start, extensionMonths),
+            status: 'Pending',
+            contract_text: `Extension request: +${extensionMonths} month(s). Notes: ${extensionNotes}`,
+          },
+        ])
+      }
+      setBusy(false)
+      alert('Extension request submitted! The store owner will review and create your new contract.')
+      setExtendingContract(null)
+      setExtensionNotes('')
+      void load()
+    } catch (err) {
+      setBusy(false)
+      console.error(err)
+      alert('Failed submitting extension request.')
+    }
+  }
+
+  // ════════════ PRODUCT MANAGEMENT ACTIONS ════════════
+  async function saveEditedProduct() {
+    if (!editingProduct) return
+    setBusy(true)
+    const { error } = await supabase
+      .from('products')
+      .update({
+        product_name: editProductForm.product_name.trim(),
+        description: editProductForm.description.trim() || null,
+        price: Number(editProductForm.price),
+        stock_quantity: Number(editProductForm.stock_quantity || 1),
+        variant: editProductForm.variant.trim() || null,
+        category: editProductForm.category.trim() || null,
+        cube_id: Number(editProductForm.cube_id) || editingProduct.cube_id,
+      })
+      .eq('product_id', editingProduct.product_id)
+
+    setBusy(false)
+    if (error) return alert(error.message)
+    setEditingProduct(null)
+    void load()
+  }
+
+  async function softDeleteProduct(productId: number) {
+    if (!window.confirm('Move this product to Trash? You can restore it anytime.')) return
+    setBusy(true)
+    const { error } = await supabase
+      .from('products')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('product_id', productId)
+    setBusy(false)
+    if (error) return alert(error.message)
+    void load()
+  }
+
+  async function restoreProduct(productId: number) {
+    setBusy(true)
+    const { error } = await supabase.from('products').update({ deleted_at: null }).eq('product_id', productId)
+    setBusy(false)
+    if (error) return alert(error.message)
+    void load()
+  }
+
+  async function permanentDeleteProduct(productId: number) {
+    if (!window.confirm('Permanently delete this product? This action cannot be undone.')) return
+    setBusy(true)
+    const { error } = await supabase.from('products').delete().eq('product_id', productId)
+    setBusy(false)
+    if (error) return alert(error.message)
+    void load()
+  }
+
+  // ════════════ INCOME TOTALS ════════════
+  const completedSales = useMemo(() => {
+    return transactions.filter((t) => t.payment_status === 'Paid')
   }, [transactions])
 
-  const pickupSalesTotal = useMemo(() => {
-    return transactions
-      .filter((t) => t.products?.cubes?.type === 'Pick-up' && t.payment_status === 'Paid')
-      .reduce((sum, t) => sum + Number(t.products?.price || 0) * Number(t.quantity || 1), 0)
-  }, [transactions])
+  const totalEarned = useMemo(() => {
+    return completedSales.reduce((sum, t) => sum + Number(t.products?.price || 0) * Number(t.quantity || 1), 0)
+  }, [completedSales])
 
-  const totalEarnings = displaySalesTotal + pickupSalesTotal
+  const pendingProductResCount = useMemo(() => {
+    return reservations.filter((r) => r.status === 'Pending' && !isReservationExpired(r)).length
+  }, [reservations])
 
   const waitingPickupsCount = useMemo(() => {
     return transactions.filter(
-      (t) => t.products?.cubes?.type === 'Pick-up' && (t.pickup_status === 'Waiting' || !t.pickup_status),
+      (t) => (t.products?.cubes?.type === 'Pick-up' || t.cubes?.type === 'Pick-up') && t.pickup_status === 'Waiting',
     ).length
-  }, [transactions])
-
-  const expiring = useMemo(
-    () => contracts.filter((c) => c.status === 'Active' && daysUntil(c.end_date) <= 7 && daysUntil(c.end_date) >= 0),
-    [contracts],
-  )
-
-  // Auto-set cube_id when opening product modal
-  useEffect(() => {
-    if (isAddProductModalOpen && !productForm.cube_id && myCubes.length > 0) {
-      setProductForm((prev) => ({ ...prev, cube_id: String(myCubes[0].cube_id) }))
-    }
-  }, [isAddProductModalOpen, myCubes, productForm.cube_id])
-
-  // Sort indicators
-  function renderSortIndicator(currentCol: string, sortState: { col: string; dir: 'asc' | 'desc' }) {
-    if (sortState.col !== currentCol) {
-      return <ArrowUpDown size={12} style={{ opacity: 0.35, marginLeft: 4, verticalAlign: 'middle', display: 'inline' }} />
-    }
-    return <span style={{ marginLeft: 4, fontSize: '0.72rem' }}>{sortState.dir === 'asc' ? '▲' : '▼'}</span>
-  }
-
-  function toggleSort(
-    state: { col: string; dir: 'asc' | 'desc' },
-    setState: React.Dispatch<React.SetStateAction<{ col: string; dir: 'asc' | 'desc' }>>,
-    col: string,
-  ) {
-    if (state.col === col) {
-      setState({ col, dir: state.dir === 'asc' ? 'desc' : 'asc' })
-    } else {
-      setState({ col, dir: 'asc' })
-    }
-  }
-
-  // Filtered & Sorted Display Transactions
-  const displayTransactions = useMemo(() => {
-    let list = transactions.filter((t) => t.products?.cubes?.type === 'Display')
-    if (displaySalesFilter !== 'all') {
-      list = list.filter((t) => t.payment_status === displaySalesFilter)
-    }
-    if (displaySearch.trim()) {
-      const q = displaySearch.toLowerCase()
-      list = list.filter((t) =>
-        (t.products?.product_name || '').toLowerCase().includes(q) ||
-        (t.products?.variant || '').toLowerCase().includes(q)
-      )
-    }
-    const { col, dir } = sortDisplayTx
-    list.sort((a, b) => {
-      let vA: any = ''
-      let vB: any = ''
-      if (col === 'product') { vA = a.products?.product_name || ''; vB = b.products?.product_name || '' }
-      else if (col === 'variant') { vA = a.products?.variant || ''; vB = b.products?.variant || '' }
-      else if (col === 'date') { vA = new Date(a.transaction_date).getTime(); vB = new Date(b.transaction_date).getTime() }
-      else if (col === 'price') { vA = Number(a.products?.price || 0); vB = Number(b.products?.price || 0) }
-      else if (col === 'payment') { vA = a.payment_status; vB = b.payment_status }
-      else if (col === 'qty') { vA = Number(a.quantity || 1); vB = Number(b.quantity || 1) }
-      if (vA < vB) return dir === 'asc' ? -1 : 1
-      if (vA > vB) return dir === 'asc' ? 1 : -1
-      return 0
-    })
-    return list
-  }, [transactions, sortDisplayTx, displaySalesFilter, displaySearch])
-
-  // Filtered Display Products
-  const filteredDisplayProducts = useMemo(() => {
-    let list = displayProducts
-    if (displayStockFilter === 'in_stock') {
-      list = list.filter((p) => p.stock_quantity > 0)
-    } else if (displayStockFilter === 'sold_out') {
-      list = list.filter((p) => p.stock_quantity <= 0)
-    }
-    if (displayCategoryFilter !== 'All') {
-      list = list.filter((p) => (p.category?.trim() || '') === displayCategoryFilter)
-    }
-    if (displaySearch.trim()) {
-      const q = displaySearch.toLowerCase()
-      list = list.filter((p) =>
-        p.product_name.toLowerCase().includes(q) ||
-        (p.variant || '').toLowerCase().includes(q) ||
-        (p.category || '').toLowerCase().includes(q)
-      )
-    }
-    return list
-  }, [displayProducts, displayStockFilter, displayCategoryFilter, displaySearch])
-
-  // Filtered & Sorted Pickup Transactions
-  const pickupTransactions = useMemo(() => {
-    let list = transactions.filter((t) => t.products?.cubes?.type === 'Pick-up')
-    if (pickupStatusFilter !== 'all') {
-      list = list.filter((t) => {
-        const s = t.pickup_status || 'Waiting'
-        return s === pickupStatusFilter
-      })
-    }
-    if (pickupSearch.trim()) {
-      const q = pickupSearch.toLowerCase()
-      list = list.filter((t) =>
-        (t.products?.product_name || t.product_name || '').toLowerCase().includes(q) ||
-        (t.buyer_name || '').toLowerCase().includes(q) ||
-        (t.authorized_pickup_name || '').toLowerCase().includes(q)
-      )
-    }
-    const { col, dir } = sortPickupTx
-    list.sort((a, b) => {
-      let vA: any = ''
-      let vB: any = ''
-      if (col === 'product') { vA = a.products?.product_name || a.product_name || ''; vB = b.products?.product_name || b.product_name || '' }
-      else if (col === 'buyer') { vA = a.buyer_name || ''; vB = b.buyer_name || '' }
-      else if (col === 'pickup') { vA = a.pickup_status || ''; vB = b.pickup_status || '' }
-      else if (col === 'payment') { vA = a.payment_status; vB = b.payment_status }
-      else if (col === 'date') { vA = new Date(a.updated_at || a.transaction_date).getTime(); vB = new Date(b.updated_at || b.transaction_date).getTime() }
-      if (vA < vB) return dir === 'asc' ? -1 : 1
-      if (vA > vB) return dir === 'asc' ? 1 : -1
-      return 0
-    })
-    return list
-  }, [transactions, sortPickupTx, pickupStatusFilter, pickupSearch])
-
-  // Sorted Contracts
-  const contractsSorted = useMemo(() => {
-    const list = [...contracts]
-    const { col, dir } = sortContracts
-    list.sort((a, b) => {
-      let vA: any = ''
-      let vB: any = ''
-      if (col === 'cube') { vA = a.cubes?.cube_number || ''; vB = b.cubes?.cube_number || '' }
-      else if (col === 'type') { vA = a.cubes?.type || ''; vB = b.cubes?.type || '' }
-      else if (col === 'period') { vA = a.end_date || ''; vB = b.end_date || '' }
-      else if (col === 'days') { vA = daysUntil(a.end_date); vB = daysUntil(b.end_date) }
-      else if (col === 'status') { vA = a.status; vB = b.status }
-      if (vA < vB) return dir === 'asc' ? -1 : 1
-      if (vA > vB) return dir === 'asc' ? 1 : -1
-      return 0
-    })
-    return list
-  }, [contracts, sortContracts])
-
-  // Recent 6 transactions for Overview
-  const recentTransactions = useMemo(() => {
-    return [...transactions]
-      .sort((a, b) => new Date(b.updated_at || b.transaction_date).getTime() - new Date(a.updated_at || a.transaction_date).getTime())
-      .slice(0, 6)
   }, [transactions])
 
   if (!user || user.role !== 'Renter') {
@@ -378,1715 +496,1209 @@ export default function RenterDashboard() {
     )
   }
 
-  // Contract actions
-  async function extendContract(c: Contract, extraMonths: number) {
-    const nextEnd = addMonths(c.end_date, extraMonths)
-    const { error } = await supabase
-      .from('contracts')
-      .update({ end_date: nextEnd, status: 'Active' })
-      .eq('contract_id', c.contract_id)
-    if (error) return alert(error.message)
-    alert(`Contract for Cube ${c.cubes?.cube_number || c.cube_id} extended to ${nextEnd}!`)
-    void load()
-  }
-
-  async function activateContract(c: Contract) {
-    const { error } = await supabase
-      .from('contracts')
-      .update({ status: 'Active' })
-      .eq('contract_id', c.contract_id)
-    if (error) return alert(error.message)
-    void load()
-  }
-
-  // Add Product action
-  async function addProduct() {
-    if (!productForm.product_name || !productForm.price || !productForm.cube_id) {
-      return alert('Product Name, Price, and Assigned Cube are required.')
-    }
-
-    const selectedCube = myCubes.find((cube) => cube.cube_id === Number(productForm.cube_id))
-    const isPickup = selectedCube?.type === 'Pick-up'
-    if (isPickup && !productForm.buyer_name.trim()) {
-      return alert('Buyer / Customer Name is required for pick-up items so staff can verify the claimant at the counter.')
-    }
-
-    setBusy(true)
-
-    let imageUrls: string[] = []
-    if (imageFiles.length > 0) {
-      const extraUploads = await Promise.all(
-        imageFiles.map((file) => uploadPublicImage(BUCKET_PRODUCT_IMAGES, file, String(user!.user_id)))
-      )
-      const uploadError = extraUploads.find((upload) => upload.error || !upload.url)
-      if (uploadError) {
-        setBusy(false)
-        return alert('One or more product photos could not be uploaded.')
-      }
-      imageUrls = extraUploads.map((upload) => upload.url!)
-    }
-    const primaryUrl = imageUrls[0] || productForm.image_url || null
-
-    const { data: createdProduct, error } = await supabase
-      .from('products')
-      .insert([{
-        renter_id: user!.user_id,
-        cube_id: Number(productForm.cube_id),
-        product_name: productForm.product_name.trim(),
-        description: productForm.description ? productForm.description.trim() : null,
-        price: Number(productForm.price),
-        stock_quantity: Number(productForm.stock_quantity || 1),
-        variant: productForm.variant ? productForm.variant.trim() : null,
-        category: productForm.category ? productForm.category.trim() : null,
-        image_url: primaryUrl,
-        image_urls: imageUrls,
-      }])
-      .select('product_id')
-      .single()
-
-    if (error) {
-      setBusy(false)
-      return alert(error.message)
-    }
-
-    if (isPickup && createdProduct) {
-      let pickupReceiptUrl = null
-      if (pickupReceiptFile) {
-        const up = await uploadPublicImage(BUCKET_DOCUMENTS, pickupReceiptFile, 'receipts')
-        if (up.url) pickupReceiptUrl = up.url
-      }
-
-      const { error: trackingError } = await supabase.from('transactions').insert([{
-        product_id: createdProduct.product_id,
-        product_name: `${productForm.product_name.trim()}${productForm.variant ? ` (${productForm.variant.trim()})` : ''}`,
-        cube_id: Number(productForm.cube_id),
-        renter_id: user!.user_id,
-        buyer_name: productForm.buyer_name.trim(),
-        authorized_pickup_name: productForm.authorized_pickup_name.trim() || null,
-        payment_status: productForm.payment_status,
-        payment_method: productForm.payment_method,
-        pickup_status: 'Waiting',
-        quantity: Math.min(Number(productForm.stock_quantity || 1), 1),
-        listed_quantity: Number(productForm.stock_quantity || 1),
-        notes: productForm.pickup_notes.trim() || productForm.description.trim() || null,
-        receipt_image_url: pickupReceiptUrl,
-        processed_by: user!.user_id,
-        updated_at: new Date().toISOString(),
-      }])
-      if (trackingError) alert(`Product saved, but pickup tracking could not be created: ${trackingError.message}`)
-    }
-
-    setBusy(false)
-    setIsAddProductModalOpen(false)
-    setProductForm({
-      product_name: '',
-      description: '',
-      price: '',
-      stock_quantity: '1',
-      variant: '',
-      category: '',
-      image_url: '',
-      cube_id: productForm.cube_id,
-      buyer_name: '',
-      authorized_pickup_name: '',
-      payment_status: 'Pending',
-      payment_method: 'Cash',
-      pickup_notes: '',
-    })
-    setImageFiles([])
-    setImagePreviews([])
-    setPickupReceiptFile(null)
-    setPickupReceiptPreview(null)
-    alert(isPickup ? 'Pick-up item and claimant recorded! Counter staff can now verify this item.' : 'Product listed successfully!')
-    void load()
-  }
-
-  // Add New Handover Entry for Existing Product
-  async function addNewHandover() {
-    if (!newHandoverForm.product_id || !newHandoverForm.buyer_name.trim()) {
-      return alert('Please select a product and enter the buyer name.')
-    }
-    const prod = pickupProducts.find((p) => p.product_id === Number(newHandoverForm.product_id))
-    if (!prod) return alert('Selected product not found.')
-    const qty = Math.max(1, Number(newHandoverForm.quantity || 1))
-    if (qty > prod.stock_quantity) {
-      return alert(`Cannot allocate ${qty} unit(s). Only ${prod.stock_quantity} left in stock.`)
-    }
-    setBusy(true)
-
-    let receiptUrl = null
-    if (newHandoverReceiptFile) {
-      const up = await uploadPublicImage(BUCKET_DOCUMENTS, newHandoverReceiptFile, 'receipts')
-      if (up.url) receiptUrl = up.url
-    }
-
-    const { error } = await supabase.from('transactions').insert([{
-      product_id: prod.product_id,
-      product_name: `${prod.product_name}${prod.variant ? ` (${prod.variant})` : ''}`,
-      cube_id: prod.cube_id,
-      renter_id: user!.user_id,
-      buyer_name: newHandoverForm.buyer_name.trim(),
-      authorized_pickup_name: newHandoverForm.authorized_pickup_name.trim() || null,
-      payment_status: newHandoverForm.payment_status,
-      payment_method: newHandoverForm.payment_method,
-      pickup_status: 'Waiting',
-      quantity: qty,
-      listed_quantity: prod.stock_quantity,
-      receipt_image_url: receiptUrl,
-      notes: newHandoverForm.notes.trim() || null,
-      processed_by: user!.user_id,
-      updated_at: new Date().toISOString(),
-    }])
-
-    setBusy(false)
-    if (error) return alert('Failed to create handover record: ' + error.message)
-    setIsNewHandoverModalOpen(false)
-    setNewHandoverForm({
-      product_id: '',
-      buyer_name: '',
-      authorized_pickup_name: '',
-      quantity: '1',
-      payment_status: 'Pending',
-      payment_method: 'Cash',
-      notes: '',
-    })
-    setNewHandoverReceiptFile(null)
-    alert('Pick-up handover entry added! Staff can verify the buyer upon pickup.')
-    void load()
-  }
-
-  // Edit Handover
-  function openEditTx(t: Transaction) {
-    setEditingTx(t)
-    setEditTxForm({
-      buyer_name: t.buyer_name || '',
-      authorized_pickup_name: t.authorized_pickup_name || '',
-      payment_status: t.payment_status === 'Paid' ? 'Paid' : 'Pending',
-      payment_method: t.payment_method === 'Online' ? 'Online' : 'Cash',
-      notes: t.notes || '',
-    })
-    setEditTxReceiptFile(null)
-  }
-
-  async function updateHandover() {
-    if (!editingTx) return
-    if (!editTxForm.buyer_name.trim()) return alert('Buyer name cannot be empty.')
-    setBusy(true)
-
-    let receiptUrl = editingTx.receipt_image_url
-    if (editTxReceiptFile) {
-      const up = await uploadPublicImage(BUCKET_DOCUMENTS, editTxReceiptFile, 'receipts')
-      if (up.url) receiptUrl = up.url
-    }
-
-    const { error } = await supabase.from('transactions').update({
-      buyer_name: editTxForm.buyer_name.trim(),
-      authorized_pickup_name: editTxForm.authorized_pickup_name.trim() || null,
-      payment_status: editTxForm.payment_status,
-      payment_method: editTxForm.payment_method,
-      receipt_image_url: receiptUrl,
-      notes: editTxForm.notes.trim() || null,
-      updated_at: new Date().toISOString(),
-    }).eq('transaction_id', editingTx.transaction_id)
-
-    setBusy(false)
-    if (error) return alert('Failed to update: ' + error.message)
-    setEditingTx(null)
-    setEditTxReceiptFile(null)
-    alert('Pick-up handover details updated successfully!')
-    void load()
-  }
-
-  // Inline receipt upload
-  async function uploadPickupReceipt(transaction: Transaction, file: File | null) {
-    if (!file) return
-    const upload = await uploadPublicImage(BUCKET_DOCUMENTS, file, 'receipts')
-    if (!upload.url) return alert('Receipt upload failed: ' + (upload.error || 'unknown error'))
-    const { error } = await supabase
-      .from('transactions')
-      .update({ receipt_image_url: upload.url, payment_method: 'Online', processed_by: user!.user_id, updated_at: new Date().toISOString() })
-      .eq('transaction_id', transaction.transaction_id)
-    if (error) return alert(error.message)
-    void load()
-  }
-
-  function onProductImages(files: FileList | null) {
-    if (!files || files.length === 0) return
-    const incoming = Array.from(files)
-    setImageFiles((prev) => [...prev, ...incoming])
-    incoming.forEach((file) => {
-      const reader = new FileReader()
-      reader.onload = () => {
-        setImagePreviews((prev) => [...prev, String(reader.result || '')])
-      }
-      reader.readAsDataURL(file)
-    })
-  }
-
-  function removeProductImage(index: number) {
-    setImageFiles((prev) => prev.filter((_, i) => i !== index))
-    setImagePreviews((prev) => prev.filter((_, i) => i !== index))
-  }
-
-  const selectedCubeForAdd = myCubes.find((c) => String(c.cube_id) === String(productForm.cube_id))
-  const isSelectedCubePickup = selectedCubeForAdd?.type === 'Pick-up'
-
   return (
-    <section>
-      {/* ════════════ PAGE HEADER ════════════ */}
-      <div className="page-header" style={{ marginBottom: '1.5rem' }}>
-        <div>
-          <h1 style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-            Renter Workspace
-          </h1>
-          <p className="lede">
-            Overview of your rented cubes, monitor sales earnings, and track live counter customer pick-up handovers.
-          </p>
+    <div className="renter-shell">
+      {/* ════════════ SIDE PANEL (Image 3) ════════════ */}
+      <aside className="renter-sidebar no-print">
+        <div className="renter-sidebar-header">
+          <h3>TrackErentory</h3>
+          <span>Renter Workspace</span>
+          <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#111827', marginTop: 4 }}>
+            {user.full_name}
+          </div>
         </div>
-        <div className="row" style={{ gap: '0.65rem', flexWrap: 'wrap' }}>
+
+        <nav className="renter-nav-list">
           <button
             type="button"
-            className="btn"
-            onClick={() => setIsAddProductModalOpen(true)}
+            className={`renter-nav-btn ${activeSection === 'add-product' ? 'active' : ''}`}
+            onClick={() => handleSectionChange('add-product')}
           >
-            <Plus size={16} /> Add Product
+            <Plus size={18} />
+            <span>Add Product</span>
           </button>
-          {pickupProducts.length > 0 && (
-            <button
-              type="button"
-              className="btn-ghost"
-              onClick={() => {
-                setNewHandoverForm({
-                  product_id: String(pickupProducts[0].product_id),
-                  buyer_name: '',
-                  authorized_pickup_name: '',
-                  quantity: '1',
-                  payment_status: 'Pending',
-                  payment_method: 'Cash',
-                  notes: '',
-                })
-                setNewHandoverReceiptFile(null)
-                setIsNewHandoverModalOpen(true)
-              }}
-            >
-              <Package size={16} /> Add Pick-up Entry
-            </button>
-          )}
-        </div>
-      </div>
 
-      {/* ════════════ EXPIRY NOTICE BANNER ════════════ */}
-      {expiring.length > 0 && (
-        <div className="alert warn" style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
-          <div>
-            <strong>Contract Expiry Notice</strong>
-            <ul style={{ margin: '0.35rem 0 0', paddingLeft: 18, fontSize: '0.88rem' }}>
-              {expiring.map((c) => (
-                <li key={c.contract_id}>
-                  Cube #{c.cubes?.cube_number} ({c.cubes?.type}): {daysUntil(c.end_date)} day(s) left (ends {c.end_date})
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div className="row" style={{ gap: '0.5rem' }}>
-            {expiring.map((c) => (
-              <button
-                key={c.contract_id}
-                type="button"
-                className="btn"
-                style={{ padding: '0.4rem 0.85rem', fontSize: '0.82rem' }}
-                onClick={() => extendContract(c, 1)}
-              >
-                +1 Mo (Cube {c.cubes?.cube_number})
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+          <button
+            type="button"
+            className={`renter-nav-btn ${activeSection === 'product-reservations' ? 'active' : ''}`}
+            onClick={() => handleSectionChange('product-reservations')}
+          >
+            <CalendarCheck size={18} />
+            <span style={{ flex: 1 }}>Product Reservations</span>
+            {pendingProductResCount > 0 && (
+              <span className="badge warn" style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem' }}>
+                {pendingProductResCount}
+              </span>
+            )}
+          </button>
 
-      {/* ════════════ KPI STAT CARDS COLLAPSIBLE DROPDOWN & 1-ROW GRID ════════════ */}
-      <div style={{ marginBottom: '1.5rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showOverviewStats ? '0.65rem' : '0' }}>
-          <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#666666', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Overview & Metrics
-          </span>
+          <button
+            type="button"
+            className={`renter-nav-btn ${activeSection === 'pickup-tracking' ? 'active' : ''}`}
+            onClick={() => handleSectionChange('pickup-tracking')}
+          >
+            <Package size={18} />
+            <span style={{ flex: 1 }}>Pick-up Tracking</span>
+            {waitingPickupsCount > 0 && (
+              <span className="badge info" style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem' }}>
+                {waitingPickupsCount}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            className={`renter-nav-btn ${activeSection === 'my-cube-contract' ? 'active' : ''}`}
+            onClick={() => handleSectionChange('my-cube-contract')}
+          >
+            <KeyRound size={18} />
+            <span>My Cube and Contract</span>
+          </button>
+
+          <button
+            type="button"
+            className={`renter-nav-btn ${activeSection === 'product-management' ? 'active' : ''}`}
+            onClick={() => handleSectionChange('product-management')}
+          >
+            <Store size={18} />
+            <span>Product Management</span>
+          </button>
+
+          <button
+            type="button"
+            className={`renter-nav-btn ${activeSection === 'income' ? 'active' : ''}`}
+            onClick={() => handleSectionChange('income')}
+          >
+            <BarChart3 size={18} />
+            <span>Income</span>
+          </button>
+        </nav>
+
+        <div style={{ marginTop: 'auto', paddingTop: '1.25rem', borderTop: '1px solid #e5e7eb' }}>
           <button
             type="button"
             className="btn-ghost"
-            style={{ padding: '0.25rem 0.75rem', fontSize: '0.78rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', borderRadius: 999 }}
-            onClick={() => setShowOverviewStats(!showOverviewStats)}
-            aria-label={showOverviewStats ? 'Hide overview metrics' : 'Show overview metrics'}
+            style={{ width: '100%', justifyContent: 'center', color: '#dc2626' }}
+            onClick={() => setShowSignOutConfirm(true)}
           >
-            {showOverviewStats ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            <span>{showOverviewStats ? 'Hide Overview' : 'Show Overview'}</span>
+            Sign Out
           </button>
         </div>
+      </aside>
 
-        {showOverviewStats && (
-          loading ? (
-            <div className="renter-stat-grid">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <SkeletonStat key={i} />
-              ))}
-            </div>
-          ) : (
-            <div className="renter-stat-grid">
-              <div className="stat" style={{ padding: '1.1rem 1.15rem' }}>
-                <div className="label" style={{ fontSize: '0.72rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Total Sales Earnings</div>
-                <div className="value" style={{ fontSize: '1.65rem' }}>{peso(totalEarnings)}</div>
-                <div className="muted" style={{ fontSize: '0.72rem', marginTop: '0.2rem', whiteSpace: 'nowrap' }}>
-                  Display + Pick-up collected
-                </div>
-              </div>
-              <div className="stat" style={{ padding: '1.1rem 1.15rem' }}>
-                <div className="label" style={{ fontSize: '0.72rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Display Cube Sales</div>
-                <div className="value" style={{ fontSize: '1.65rem' }}>{peso(displaySalesTotal)}</div>
-                <div className="muted" style={{ fontSize: '0.72rem', marginTop: '0.2rem', whiteSpace: 'nowrap' }}>
-                  {displayTransactions.filter((t) => t.payment_status === 'Paid').length} paid transaction(s)
-                </div>
-              </div>
-              <div className="stat" style={{ padding: '1.1rem 1.15rem' }}>
-                <div className="label" style={{ fontSize: '0.72rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Pick-up Sales</div>
-                <div className="value" style={{ fontSize: '1.65rem' }}>{peso(pickupSalesTotal)}</div>
-                <div className="muted" style={{ fontSize: '0.72rem', marginTop: '0.2rem', whiteSpace: 'nowrap' }}>
-                  {transactions.filter((t) => t.products?.cubes?.type === 'Pick-up' && t.payment_status === 'Paid').length} paid item(s)
-                </div>
-              </div>
-              <div className="stat" style={{ padding: '1.1rem 1.15rem' }}>
-                <div className="label" style={{ fontSize: '0.72rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Rented Cubes</div>
-                <div className="value" style={{ fontSize: '1.65rem' }}>{myCubes.length}</div>
-                <div className="muted" style={{ fontSize: '0.72rem', marginTop: '0.2rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={myCubes.map((c) => `#${c.cube_number}`).join(', ')}>
-                  {myCubes.map((c) => `#${c.cube_number}`).join(', ') || 'None'}
-                </div>
-              </div>
-              <div className="stat" style={{ padding: '1.1rem 1.15rem' }}>
-                <div className="label" style={{ fontSize: '0.72rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Waiting Pick-ups</div>
-                <div className="value" style={{ fontSize: '1.65rem', color: waitingPickupsCount > 0 ? '#b45309' : '#000000' }}>
-                  {waitingPickupsCount}
-                </div>
-                <div className="muted" style={{ fontSize: '0.72rem', marginTop: '0.2rem', whiteSpace: 'nowrap' }}>
-                  Awaiting counter release
-                </div>
+      {/* ════════════ MAIN CONTENT AREA ════════════ */}
+      <main className="renter-main">
+        {/* ────────────────────────────────────────────────────────
+            SECTION 1: ADD PRODUCT (Image 2)
+           ──────────────────────────────────────────────────────── */}
+        {activeSection === 'add-product' && (
+          <div>
+            <div className="page-header" style={{ marginBottom: '1.5rem' }}>
+              <div>
+                <h1>Add Product</h1>
+                <p className="lede">
+                  Add products to display inside your rented cubes, or log packages left at the store for customer pick-up.
+                </p>
               </div>
             </div>
-          )
-        )}
-      </div>
 
-      {/* ════════════ DASHBOARD SECTION NAVIGATION (ADMIN STYLE) ════════════ */}
-      <nav aria-label="Renter sections" className="report-section-nav no-print">
-        <button
-          type="button"
-          className={activeTab === 'overview' ? 'active' : ''}
-          onClick={() => handleTabChange('overview')}
-        >
-          <BarChart3 size={15} style={{ verticalAlign: 'middle', marginRight: 4 }} />
-          Overview & Quick Actions
-        </button>
-        <button
-          type="button"
-          className={activeTab === 'display' ? 'active' : ''}
-          onClick={() => handleTabChange('display')}
-        >
-          <Store size={15} style={{ verticalAlign: 'middle', marginRight: 4 }} />
-          Display Products & Sales ({displayProducts.length})
-        </button>
-        <button
-          type="button"
-          className={activeTab === 'pickup' ? 'active' : ''}
-          onClick={() => handleTabChange('pickup')}
-        >
-          <Package size={15} style={{ verticalAlign: 'middle', marginRight: 4 }} />
-          Pick-up Tracking & Handovers ({pickupTransactions.length})
-          {waitingPickupsCount > 0 && (
-            <span className="badge warn" style={{ marginLeft: 6, fontSize: '0.7rem', padding: '0.1rem 0.4rem' }}>
-              {waitingPickupsCount} waiting
-            </span>
-          )}
-        </button>
-        <button
-          type="button"
-          className={activeTab === 'cubes_contracts' ? 'active' : ''}
-          onClick={() => handleTabChange('cubes_contracts')}
-        >
-          <KeyRound size={15} style={{ verticalAlign: 'middle', marginRight: 4 }} />
-          My Cubes & Contracts ({contracts.length})
-        </button>
-      </nav>
-
-      {/* ════════════ TAB 1: OVERVIEW & QUICK ACTIONS ════════════ */}
-      {activeTab === 'overview' && (
-        <div>
-          {/* Quick Actions Row */}
-          <div className="panel" style={{ padding: '1.25rem 1.5rem', marginBottom: '2rem' }}>
-            <h3 style={{ margin: '0 0 0.85rem', fontSize: '1rem', fontWeight: 800 }}>Quick Actions</h3>
-            <div style={{ display: 'flex', gap: '0.85rem', flexWrap: 'wrap' }}>
+            {/* Sub-tabs for Add Product */}
+            <div style={{ display: 'flex', gap: '0.65rem', marginBottom: '1.5rem', borderBottom: '2px solid #efefef', paddingBottom: '0.5rem' }}>
               <button
                 type="button"
-                className="btn"
-                onClick={() => setIsAddProductModalOpen(true)}
+                className={addProductType === 'display' ? 'btn' : 'btn-ghost'}
+                onClick={() => setAddProductType('display')}
               >
-                <Plus size={16} /> List New Product
+                Add Product for Display
               </button>
-              {pickupProducts.length > 0 && (
-                <button
-                  type="button"
-                  className="btn-ghost"
-                  onClick={() => {
-                    setNewHandoverForm({
-                      product_id: String(pickupProducts[0].product_id),
-                      buyer_name: '',
-                      authorized_pickup_name: '',
-                      quantity: '1',
-                      payment_status: 'Pending',
-                      payment_method: 'Cash',
-                      notes: '',
-                    })
-                    setNewHandoverReceiptFile(null)
-                    setIsNewHandoverModalOpen(true)
-                  }}
-                >
-                  <Package size={16} /> Add Pick-up Entry
-                </button>
-              )}
-              <Link to="/contracts" className="btn-ghost">
-                <FileText size={16} /> View Contracts Hub
-              </Link>
-              <Link to="/" className="btn-ghost">
-                <ExternalLink size={16} /> Browse Available Cubes
-              </Link>
+              <button
+                type="button"
+                className={addProductType === 'pickup' ? 'btn' : 'btn-ghost'}
+                onClick={() => setAddProductType('pickup')}
+              >
+                Add Product for Pick-up
+              </button>
             </div>
-          </div>
 
-          {/* Rented Cubes Summary */}
-          <div style={{ marginBottom: '2.5rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <div>
-                <h2 style={{ margin: 0 }}>Rented Cubes Status</h2>
-                <p className="muted" style={{ margin: '0.2rem 0 0' }}>Current lease status, days until renewal, and monthly rates.</p>
-              </div>
-              <button type="button" className="btn-ghost" style={{ fontSize: '0.82rem' }} onClick={() => handleTabChange('cubes_contracts')}>
-                Manage All Contracts →
-              </button>
-            </div>
-            {myCubes.length === 0 ? (
-              <div className="empty" style={{ padding: '2.5rem', textAlign: 'center' }}>
-                <p>You have no active cube rentals yet.</p>
-                <Link to="/" className="btn" style={{ marginTop: '0.5rem' }}>Reserve a Cube in Catalogue</Link>
-              </div>
-            ) : (
-              <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '1rem', marginBottom: 0 }}>
-                {contracts.map((c) => {
-                  const left = daysUntil(c.end_date)
-                  const isExpiringSoon = left <= 7 && left >= 0
-                  return (
-                    <div key={c.contract_id} className="card" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <strong style={{ fontSize: '1.1rem' }}>Cube #{c.cubes?.cube_number}</strong>
-                        <span className={`status-pill ${c.status === 'Active' ? 'confirmed' : 'pending'}`}>
-                          {c.status}
-                        </span>
-                      </div>
-                      <div className="muted" style={{ fontSize: '0.82rem' }}>
-                        Type: <strong>{c.cubes?.type}</strong> • {peso(c.cubes?.price_per_month)} / mo
-                      </div>
-                      <div style={{ fontSize: '0.82rem' }}>
-                        <span>Lease: {c.start_date} → {c.end_date}</span>
-                      </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'auto', paddingTop: '0.5rem', borderTop: '1px solid #f0f0f0' }}>
-                        <span className={`badge ${isExpiringSoon ? 'warn' : 'info'}`} style={{ fontSize: '0.75rem' }}>
-                          {left < 0 ? 'Expired' : `${left} day(s) left`}
-                        </span>
-                        {(c.status === 'Active' || c.status === 'Pending') && (
-                          <button
-                            type="button"
-                            className="btn-ghost"
-                            style={{ padding: '0.25rem 0.65rem', fontSize: '0.78rem' }}
-                            onClick={() => extendContract(c, 1)}
-                          >
-                            +1 Mo
-                          </button>
-                        )}
-                      </div>
+            {/* FORM A: ADD PRODUCT FOR DISPLAY (Image 2) */}
+            {addProductType === 'display' && (
+              <div className="panel" style={{ maxWidth: 720 }}>
+                <h3 style={{ margin: '0 0 1rem' }}>Display Product Details</h3>
+                {myDisplayCubes.length === 0 ? (
+                  <div className="alert warn" style={{ marginBottom: '1.25rem' }}>
+                    You currently have no active <strong>Display Cubes</strong>. You can reserve one in the{' '}
+                    <Link to="/" style={{ fontWeight: 700, textDecoration: 'underline' }}>Catalogue</Link> or wait for owner approval.
+                  </div>
+                ) : null}
+
+                <form onSubmit={handleAddDisplayProduct}>
+                  <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
+                    <div className="field">
+                      <label>Product Name *</label>
+                      <input
+                        placeholder="e.g. Glad2Glow Lip Serum"
+                        value={displayForm.product_name}
+                        onChange={(e) => setDisplayForm({ ...displayForm, product_name: e.target.value })}
+                        required
+                      />
                     </div>
-                  )
-                })}
+
+                    <div className="field">
+                      <label>Price (₱) *</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        placeholder="120.00"
+                        value={displayForm.price}
+                        onChange={(e) => setDisplayForm({ ...displayForm, price: e.target.value })}
+                        required
+                      />
+                    </div>
+
+                    <div className="field">
+                      <label>Quantity *</label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={displayForm.quantity}
+                        onChange={(e) => setDisplayForm({ ...displayForm, quantity: e.target.value })}
+                        required
+                      />
+                    </div>
+
+                    <div className="field">
+                      <label>Variant / Shade</label>
+                      <input
+                        placeholder="e.g. Berry Pink, Shade 02, Large"
+                        value={displayForm.variant}
+                        onChange={(e) => setDisplayForm({ ...displayForm, variant: e.target.value })}
+                      />
+                    </div>
+
+                    <div className="field">
+                      <label>Category</label>
+                      <input
+                        list="display-categories"
+                        placeholder="Select or enter category"
+                        value={displayForm.category}
+                        onChange={(e) => setDisplayForm({ ...displayForm, category: e.target.value })}
+                      />
+                      <datalist id="display-categories">
+                        {DEFAULT_PRODUCT_CATEGORIES.map((cat) => (
+                          <option key={cat} value={cat} />
+                        ))}
+                      </datalist>
+                    </div>
+
+                    <div className="field">
+                      <label>Assigned Cube *</label>
+                      <select
+                        value={displayForm.cube_id}
+                        onChange={(e) => setDisplayForm({ ...displayForm, cube_id: e.target.value })}
+                        required
+                      >
+                        <option value="">Select your display cube…</option>
+                        {myDisplayCubes.map((c) => (
+                          <option key={c.cube_id} value={c.cube_id}>
+                            Cube #{c.cube_number} ({peso(c.price_per_month)}/mo)
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="field" style={{ marginTop: '1rem' }}>
+                    <label>Description</label>
+                    <textarea
+                      rows={3}
+                      placeholder="Product benefits, ingredients, or notes for browsing customers…"
+                      value={displayForm.description}
+                      onChange={(e) => setDisplayForm({ ...displayForm, description: e.target.value })}
+                    />
+                  </div>
+
+                  {/* Photo uploads */}
+                  <div className="field" style={{ marginTop: '1rem' }}>
+                    <label>Product Photos</label>
+                    <input type="file" accept="image/*" multiple onChange={(e) => handleDisplayPhotoFiles(e.target.files)} />
+                    {displayImagePreviews.length > 0 && (
+                      <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginTop: '0.75rem' }}>
+                        {displayImagePreviews.map((src, i) => (
+                          <img key={i} src={src} alt="Preview" style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, border: '1px solid #cbd5e1' }} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <button className="btn" type="submit" disabled={busy || myDisplayCubes.length === 0} style={{ marginTop: '1.25rem' }}>
+                    {busy ? 'Saving…' : 'Save Display Product'}
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {/* FORM B: ADD PRODUCT FOR PICKUP (Image 2) */}
+            {addProductType === 'pickup' && (
+              <div className="panel" style={{ maxWidth: 720 }}>
+                <h3 style={{ margin: '0 0 1rem' }}>Pick-up Item Handover Details</h3>
+                {myPickupCubes.length === 0 ? (
+                  <div className="alert warn" style={{ marginBottom: '1.25rem' }}>
+                    You currently have no active <strong>Pick-up Cubes</strong>. You can reserve one in the{' '}
+                    <Link to="/?type=cube" style={{ fontWeight: 700, textDecoration: 'underline' }}>Catalogue</Link> or wait for owner approval.
+                  </div>
+                ) : null}
+
+                <form onSubmit={handleAddPickupProduct}>
+                  <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
+                    <div className="field">
+                      <label>Product *</label>
+                      <input
+                        placeholder="e.g. Floral Summer Dress"
+                        value={pickupForm.product}
+                        onChange={(e) => setPickupForm({ ...pickupForm, product: e.target.value })}
+                        required
+                      />
+                    </div>
+
+                    <div className="field">
+                      <label>Price (₱) *</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        placeholder="450.00"
+                        value={pickupForm.price}
+                        onChange={(e) => setPickupForm({ ...pickupForm, price: e.target.value })}
+                        required
+                      />
+                    </div>
+
+                    <div className="field">
+                      <label>Buyer Name *</label>
+                      <input
+                        placeholder="Name of customer claiming this item"
+                        value={pickupForm.buyer_name}
+                        onChange={(e) => setPickupForm({ ...pickupForm, buyer_name: e.target.value })}
+                        required
+                      />
+                    </div>
+
+                    <div className="field">
+                      <label>Authorized Alternate</label>
+                      <input
+                        placeholder="Alternate person authorized to claim"
+                        value={pickupForm.authorized_alternate}
+                        onChange={(e) => setPickupForm({ ...pickupForm, authorized_alternate: e.target.value })}
+                      />
+                    </div>
+
+                    <div className="field">
+                      <label>Payment Status</label>
+                      <select
+                        value={pickupForm.payment_status}
+                        onChange={(e) => setPickupForm({ ...pickupForm, payment_status: e.target.value as 'Pending' | 'Paid' })}
+                      >
+                        <option value="Pending">Pending (to be collected at counter)</option>
+                        <option value="Paid">Paid (already paid online)</option>
+                      </select>
+                    </div>
+
+                    <div className="field">
+                      <label>Payment Method</label>
+                      <select
+                        value={pickupForm.payment_method}
+                        onChange={(e) => setPickupForm({ ...pickupForm, payment_method: e.target.value as 'Cash' | 'Online' })}
+                      >
+                        <option value="Cash">Cash</option>
+                        <option value="Online">Online / GCash / Transfer</option>
+                      </select>
+                    </div>
+
+                    <div className="field">
+                      <label>Cube # *</label>
+                      <select
+                        value={pickupForm.cube_id}
+                        onChange={(e) => setPickupForm({ ...pickupForm, cube_id: e.target.value })}
+                        required
+                      >
+                        <option value="">Select your pick-up cube…</option>
+                        {myPickupCubes.map((c) => (
+                          <option key={c.cube_id} value={c.cube_id}>
+                            Cube #{c.cube_number} ({peso(c.price_per_month)}/mo)
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="field" style={{ marginTop: '1rem' }}>
+                    <label>Product Info (Item details, size, shade)</label>
+                    <textarea
+                      rows={2}
+                      placeholder="Size M, color beige, live stream item #4…"
+                      value={pickupForm.product_info}
+                      onChange={(e) => setPickupForm({ ...pickupForm, product_info: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="field" style={{ marginTop: '1rem' }}>
+                    <label>Notes (e.g. handle with care, buyer phone, claim date)</label>
+                    <textarea
+                      rows={2}
+                      placeholder="Additional notes for store staff at the counter…"
+                      value={pickupForm.notes}
+                      onChange={(e) => setPickupForm({ ...pickupForm, notes: e.target.value })}
+                    />
+                  </div>
+
+                  {pickupForm.payment_method === 'Online' && (
+                    <div className="field" style={{ marginTop: '1rem' }}>
+                      <label>Receipt Proof (Online Payment)</label>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0] || null
+                          setPickupReceiptFile(file)
+                          if (file) setPickupReceiptPreview(URL.createObjectURL(file))
+                        }}
+                      />
+                      {pickupReceiptPreview && (
+                        <div style={{ marginTop: '0.5rem' }}>
+                          <img src={pickupReceiptPreview} alt="Receipt Preview" style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 8, border: '1px solid #cbd5e1' }} />
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <button className="btn" type="submit" disabled={busy || myPickupCubes.length === 0} style={{ marginTop: '1.25rem' }}>
+                    {busy ? 'Submitting…' : 'Submit Pick-up Record'}
+                  </button>
+                </form>
               </div>
             )}
           </div>
+        )}
 
-          {/* Recent Activity Feed */}
+        {/* ────────────────────────────────────────────────────────
+            SECTION 2: PRODUCT RESERVATIONS (Image 3)
+           ──────────────────────────────────────────────────────── */}
+        {activeSection === 'product-reservations' && (
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem' }}>
+            <div className="page-header">
               <div>
-                <h2 style={{ margin: 0 }}>Recent Sales & Handovers</h2>
-                <p className="muted" style={{ margin: '0.2rem 0 0' }}>Latest customer transactions and counter pick-ups.</p>
+                <h1>Product Reservations</h1>
+                <p className="lede">
+                  Live tracking of customer reservations placed on your display items. Shows pending holds, confirmed sales, cancellations, and expirations.
+                </p>
               </div>
             </div>
-            {recentTransactions.length === 0 ? (
-              <div className="empty" style={{ padding: '2rem' }}>No recent activity records yet.</div>
+
+            {/* Filter toolbar */}
+            <div style={{ display: 'flex', gap: '0.65rem', marginBottom: '1.25rem', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                {(['All', 'Pending', 'Confirmed', 'Cancelled', 'Expired'] as const).map((st) => (
+                  <button
+                    key={st}
+                    type="button"
+                    className={reservationStatusFilter === st ? 'btn' : 'btn-ghost'}
+                    style={{ fontSize: '0.82rem', padding: '0.4rem 0.8rem' }}
+                    onClick={() => setReservationStatusFilter(st)}
+                  >
+                    {st}
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ position: 'relative', minWidth: 220 }}>
+                <Search size={15} color="#94a3b8" style={{ position: 'absolute', left: 10, top: 11 }} />
+                <input
+                  type="text"
+                  placeholder="Search reservation…"
+                  value={reservationSearch}
+                  onChange={(e) => setReservationSearch(e.target.value)}
+                  style={{ paddingLeft: '2.1rem', margin: 0, height: 38, fontSize: '0.82rem' }}
+                />
+              </div>
+            </div>
+
+            {/* Reservations Table */}
+            {loading ? (
+              <SkeletonTable rows={5} cols={6} />
             ) : (
               <div className="table-wrap">
                 <table className="table">
                   <thead>
                     <tr>
                       <th>Product</th>
-                      <th>Type</th>
-                      <th>Date</th>
-                      <th>Amount</th>
-                      <th>Payment</th>
-                      <th>Claim / Status</th>
-                      <th>Receipt</th>
+                      <th>Variant</th>
+                      <th>Customer / Buyer</th>
+                      <th>Price</th>
+                      <th>Validity / Expiry</th>
+                      <th>Status</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {recentTransactions.map((t) => {
-                      const isPickup = (t.products?.cubes?.type || t.cubes?.type) === 'Pick-up'
-                      const amt = Number(t.products?.price || 0) * Number(t.quantity || 1)
-                      return (
-                        <tr key={t.transaction_id}>
-                          <td>
-                            <strong>{t.products?.product_name || t.product_name || '—'}</strong>
-                            {t.products?.variant && <div className="muted" style={{ fontSize: '0.75rem' }}>{t.products.variant}</div>}
-                          </td>
-                          <td>
-                            <span className="badge" style={{ fontSize: '0.72rem' }}>{isPickup ? 'Pick-up' : 'Display'}</span>
-                          </td>
-                          <td>{new Date(t.transaction_date).toLocaleDateString('en-PH')}</td>
-                          <td>{peso(amt)}</td>
-                          <td>
-                            <span className={`status-pill ${t.payment_status === 'Paid' ? 'confirmed' : 'pending'}`}>
-                              {t.payment_status}
-                            </span>
-                          </td>
-                          <td>
-                            {isPickup ? (
-                              <div>
-                                <span className={`status-pill ${t.pickup_status === 'Picked-up' ? 'confirmed' : 'pending'}`}>
-                                  {t.pickup_status || 'Waiting'}
-                                </span>
-                                {t.buyer_name && <div className="muted" style={{ fontSize: '0.72rem' }}>{t.buyer_name}</div>}
-                              </div>
-                            ) : (
-                              <span className="muted">Display Sale</span>
-                            )}
-                          </td>
-                          <td>
-                            {t.receipt_image_url ? (
-                              <img
-                                src={t.receipt_image_url}
-                                alt="Receipt"
-                                style={{ width: 36, height: 36, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid #ddd' }}
-                                onClick={() => setPreviewReceipt(t.receipt_image_url)}
-                                title="Zoom receipt"
-                              />
-                            ) : (
-                              <span className="muted" style={{ fontSize: '0.75rem' }}>None</span>
-                            )}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ════════════ TAB 2: DISPLAY PRODUCTS & SALES ════════════ */}
-      {activeTab === 'display' && (
-        <div>
-          {/* Sub Navigation Bar */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button
-                type="button"
-                className={displaySubView === 'products' ? 'btn' : 'btn-ghost'}
-                style={{ fontSize: '0.85rem', padding: '0.5rem 1rem' }}
-                onClick={() => setDisplaySubView('products')}
-              >
-                Products Grid ({displayProducts.length})
-              </button>
-              <button
-                type="button"
-                className={displaySubView === 'sales' ? 'btn' : 'btn-ghost'}
-                style={{ fontSize: '0.85rem', padding: '0.5rem 1rem' }}
-                onClick={() => setDisplaySubView('sales')}
-              >
-                Sales History ({displayTransactions.length})
-              </button>
-            </div>
-            <button
-              type="button"
-              className="btn"
-              style={{ fontSize: '0.85rem' }}
-              onClick={() => {
-                const dCube = myCubes.find((c) => c.type === 'Display')
-                if (dCube) setProductForm((prev) => ({ ...prev, cube_id: String(dCube.cube_id) }))
-                setIsAddProductModalOpen(true)
-              }}
-            >
-              <Plus size={15} /> Add Display Product
-            </button>
-          </div>
-
-          {/* ── Subview A: Display Products Grid ── */}
-          {displaySubView === 'products' && (
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: 240, maxWidth: 400 }}>
-                  <Search size={16} className="muted" />
-                  <input
-                    type="text"
-                    placeholder="Search product name, variant, or category…"
-                    value={displaySearch}
-                    onChange={(e) => {
-                      setDisplaySearch(e.target.value)
-                      setDisplayProductsPage(1)
-                    }}
-                    style={{ margin: 0, padding: '0.5rem 0.85rem', fontSize: '0.88rem' }}
-                  />
-                </div>
-                <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                  <select
-                    value={displayCategoryFilter}
-                    onChange={(e) => {
-                      setDisplayCategoryFilter(e.target.value)
-                      setDisplayProductsPage(1)
-                    }}
-                    style={{ margin: 0, padding: '0.35rem 0.75rem', fontSize: '0.78rem', height: 32 }}
-                  >
-                    <option value="All">All Categories ({displayProducts.length})</option>
-                    {existingCategories.map((cat) => {
-                      const count = displayProducts.filter((p) => p.category?.trim() === cat).length
-                      return (
-                        <option key={cat} value={cat}>
-                          {cat} ({count})
-                        </option>
-                      )
-                    })}
-                  </select>
-                  {(['all', 'in_stock', 'sold_out'] as const).map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      className={displayStockFilter === s ? 'btn' : 'btn-ghost'}
-                      style={{ padding: '0.35rem 0.75rem', fontSize: '0.78rem' }}
-                      onClick={() => {
-                        setDisplayStockFilter(s)
-                        setDisplayProductsPage(1)
-                      }}
-                    >
-                      {s === 'all' ? 'All Stock' : s === 'in_stock' ? 'In Stock' : 'Sold Out'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {filteredDisplayProducts.length === 0 ? (
-                <div className="empty" style={{ padding: '3rem', textAlign: 'center' }}>
-                  <p>No display products match your search or filter.</p>
-                  <button
-                    type="button"
-                    className="btn"
-                    style={{ marginTop: '0.5rem' }}
-                    onClick={() => setIsAddProductModalOpen(true)}
-                  >
-                    + Add New Display Product
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <div className="grid">
-                    {filteredDisplayProducts
-                      .slice((displayProductsPage - 1) * DEFAULT_PAGE_SIZE, displayProductsPage * DEFAULT_PAGE_SIZE)
-                      .map((p) => {
-                        const isAvailable = p.stock_quantity > 0
+                    {reservations
+                      .filter((r) => {
+                        const expired = isReservationExpired(r)
+                        if (reservationStatusFilter === 'Pending') {
+                          if (r.status !== 'Pending' || expired) return false
+                        } else if (reservationStatusFilter === 'Confirmed') {
+                          if (r.status !== 'Confirmed') return false
+                        } else if (reservationStatusFilter === 'Cancelled') {
+                          if (r.status !== 'Cancelled') return false
+                        } else if (reservationStatusFilter === 'Expired') {
+                          if (!expired && r.status !== 'Cancelled') return false
+                        }
+                        if (reservationSearch.trim()) {
+                          const q = reservationSearch.toLowerCase()
+                          const pName = r.products?.product_name?.toLowerCase() || ''
+                          const cName = r.customer?.full_name?.toLowerCase() || ''
+                          if (!pName.includes(q) && !cName.includes(q)) return false
+                        }
+                        return true
+                      })
+                      .map((r) => {
+                        const expired = isReservationExpired(r)
+                        const hoursLeft = Math.max(0, Math.ceil((parseReservationExpiry(r.expiry_time).getTime() - Date.now()) / (1000 * 60 * 60)))
                         return (
-                          <div
-                            className="card"
-                            key={p.product_id}
-                            style={{ cursor: 'pointer' }}
-                            onClick={() => setGalleryProduct(p)}
-                          >
-                            <div className="card-media" style={{ background: '#f5f5f5', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
-                              {p.image_url ? (
-                                <img src={p.image_url} alt={p.product_name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                              ) : (
-                                <div className="muted" style={{ fontSize: '0.8rem' }}>No Photo</div>
-                              )}
-                              {((p.image_urls && p.image_urls.length > 1) || (p.image_urls && p.image_urls.length === 1 && p.image_url)) && (
-                                <span
-                                  style={{
-                                    position: 'absolute',
-                                    top: 8,
-                                    right: 8,
-                                    background: 'rgba(0, 0, 0, 0.72)',
-                                    color: '#fff',
-                                    fontSize: '0.72rem',
-                                    fontWeight: 600,
-                                    padding: '2px 7px',
-                                    borderRadius: 12,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: 4,
-                                    backdropFilter: 'blur(4px)',
-                                  }}
-                                >
-                                  <Camera size={11} /> {(p.image_urls?.length || 1)} shots
-                                </span>
-                              )}
-                            </div>
-                            <div className="card-body">
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                <h3 style={{ margin: 0 }}>{p.product_name}</h3>
-                                <span className={`status-pill ${isAvailable ? 'confirmed' : 'pending'}`}>
-                                  {isAvailable ? `${p.stock_quantity} In Stock` : 'Sold Out'}
-                                </span>
-                              </div>
-                              {p.description && <p className="muted" style={{ fontSize: '0.82rem', margin: '0.2rem 0 0' }}>{p.description}</p>}
-                              <div className="price" style={{ margin: '0.4rem 0' }}>{peso(p.price)}</div>
-                              <div className="meta-line" style={{ marginTop: 'auto' }}>
-                                <span>{p.variant ? `Variant: ${p.variant}` : 'Standard'}</span>
-                                <span>Cube #{p.cubes?.cube_number || '—'}</span>
-                                {p.category && <span>{p.category}</span>}
-                              </div>
-                            </div>
-                          </div>
-                        )
-                      })}
-                  </div>
-                  <TablePagination
-                    page={displayProductsPage}
-                    totalItems={filteredDisplayProducts.length}
-                    pageSize={DEFAULT_PAGE_SIZE}
-                    onPageChange={setDisplayProductsPage}
-                  />
-                </>
-              )}
-            </div>
-          )}
-
-          {/* ── Subview B: Display Sales Transactions ── */}
-          {displaySubView === 'sales' && (
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: 220, maxWidth: 380 }}>
-                  <Search size={16} className="muted" />
-                  <input
-                    type="text"
-                    placeholder="Search sales transactions…"
-                    value={displaySearch}
-                    onChange={(e) => {
-                      setDisplaySearch(e.target.value)
-                      setDisplaySalesPage(1)
-                    }}
-                    style={{ margin: 0, padding: '0.5rem 0.85rem', fontSize: '0.88rem' }}
-                  />
-                </div>
-                <div style={{ display: 'flex', gap: '0.4rem' }}>
-                  {(['all', 'Paid', 'Pending'] as const).map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      className={displaySalesFilter === s ? 'btn' : 'btn-ghost'}
-                      style={{ padding: '0.35rem 0.75rem', fontSize: '0.78rem' }}
-                      onClick={() => {
-                        setDisplaySalesFilter(s)
-                        setDisplaySalesPage(1)
-                      }}
-                    >
-                      {s === 'all' ? 'All Payments' : s}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="table-wrap">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortDisplayTx, setSortDisplayTx, 'product')}>
-                        Product {renderSortIndicator('product', sortDisplayTx)}
-                      </th>
-                      <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortDisplayTx, setSortDisplayTx, 'variant')}>
-                        Variant {renderSortIndicator('variant', sortDisplayTx)}
-                      </th>
-                      <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortDisplayTx, setSortDisplayTx, 'date')}>
-                        Date {renderSortIndicator('date', sortDisplayTx)}
-                      </th>
-                      <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortDisplayTx, setSortDisplayTx, 'price')}>
-                        Unit Price {renderSortIndicator('price', sortDisplayTx)}
-                      </th>
-                      <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortDisplayTx, setSortDisplayTx, 'qty')}>
-                        Qty {renderSortIndicator('qty', sortDisplayTx)}
-                      </th>
-                      <th>Total</th>
-                      <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortDisplayTx, setSortDisplayTx, 'payment')}>
-                        Payment Status {renderSortIndicator('payment', sortDisplayTx)}
-                      </th>
-                      <th>Payment Method</th>
-                      <th>Receipt Proof</th>
-                      <th>Staff</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {displayTransactions
-                      .slice((displaySalesPage - 1) * DEFAULT_PAGE_SIZE, displaySalesPage * DEFAULT_PAGE_SIZE)
-                      .map((t) => {
-                        const total = Number(t.products?.price || 0) * Number(t.quantity || 1)
-                        return (
-                          <tr key={t.transaction_id}>
-                            <td><strong>{t.products?.product_name || '—'}</strong></td>
-                            <td>{t.products?.variant || 'Standard'}</td>
-                            <td>{new Date(t.transaction_date).toLocaleString('en-PH')}</td>
-                            <td>{peso(t.products?.price)}</td>
-                            <td>{t.quantity || 1}</td>
-                            <td><strong>{peso(total)}</strong></td>
+                          <tr key={r.reservation_id}>
                             <td>
-                              <span className={`status-pill ${t.payment_status === 'Paid' ? 'confirmed' : 'pending'}`}>
-                                {t.payment_status}
+                              <strong>{r.products?.product_name || 'Product'}</strong>
+                              {r.products?.cubes && (
+                                <div className="muted" style={{ fontSize: '0.78rem' }}>
+                                  Cube #{r.products.cubes.cube_number}
+                                </div>
+                              )}
+                            </td>
+                            <td>{r.products?.variant || <span className="muted">—</span>}</td>
+                            <td>
+                              <strong>{r.customer?.full_name || 'Customer'}</strong>
+                              {r.customer?.phone_number && (
+                                <div className="muted" style={{ fontSize: '0.75rem' }}>{r.customer.phone_number}</div>
+                              )}
+                            </td>
+                            <td>{peso(r.products?.price)}</td>
+                            <td>
+                              {r.status === 'Confirmed' ? (
+                                <span className="badge ok">Claimed / Purchased</span>
+                              ) : expired ? (
+                                <span className="badge bad">Expired hold</span>
+                              ) : (
+                                <span className="badge warn">{hoursLeft} hour(s) left</span>
+                              )}
+                            </td>
+                            <td>
+                              <span
+                                className={`status-pill ${
+                                  r.status === 'Confirmed' ? 'confirmed' : expired || r.status === 'Cancelled' ? 'cancelled' : 'pending'
+                                }`}
+                              >
+                                {expired ? 'Expired' : r.status}
                               </span>
                             </td>
-                            <td>{t.payment_method || 'Cash'}</td>
-                            <td>
-                              {t.receipt_image_url ? (
-                                <img
-                                  src={t.receipt_image_url}
-                                  alt="Receipt proof"
-                                  style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid #ddd' }}
-                                  onClick={() => setPreviewReceipt(t.receipt_image_url)}
-                                  title="Click to zoom receipt"
-                                />
-                              ) : (
-                                <span className="muted">None</span>
-                              )}
-                            </td>
-                            <td>{t.users ? `${t.users.full_name}` : '—'}</td>
                           </tr>
                         )
                       })}
                   </tbody>
                 </table>
-                {displayTransactions.length === 0 && (
-                  <div className="empty" style={{ padding: '2rem' }}>No display sales records match this criteria.</div>
+                {reservations.length === 0 && (
+                  <div className="empty" style={{ padding: '2rem' }}>No customer reservations placed yet.</div>
                 )}
               </div>
-              <TablePagination
-                page={displaySalesPage}
-                totalItems={displayTransactions.length}
-                pageSize={DEFAULT_PAGE_SIZE}
-                onPageChange={setDisplaySalesPage}
-              />
-            </div>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        )}
 
-      {/* ════════════ TAB 3: PICK-UP ITEMS & HANDOVERS ════════════ */}
-      {activeTab === 'pickup' && (
-        <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-            <div>
-              <h2 style={{ margin: 0 }}>Pick-up Tracking & Handovers</h2>
-              <p className="muted" style={{ margin: '0.2rem 0 0' }}>
-                Items placed in Pick-up cubes. Staff verify customer claimants and confirm payments at the counter.
-              </p>
-            </div>
-            {pickupProducts.length > 0 && (
-              <button
-                type="button"
-                className="btn"
-                onClick={() => {
-                  setNewHandoverForm({
-                    product_id: String(pickupProducts[0].product_id),
-                    buyer_name: '',
-                    authorized_pickup_name: '',
-                    quantity: '1',
-                    payment_status: 'Pending',
-                    payment_method: 'Cash',
-                    notes: '',
-                  })
-                  setNewHandoverReceiptFile(null)
-                  setIsNewHandoverModalOpen(true)
-                }}
-              >
-                <Plus size={16} /> Add Pick-up Entry
+        {/* ────────────────────────────────────────────────────────
+            SECTION 3: PICK-UP TRACKING (Image 3)
+           ──────────────────────────────────────────────────────── */}
+        {activeSection === 'pickup-tracking' && (
+          <div>
+            <div className="page-header">
+              <div>
+                <h1>Pick-up Tracking</h1>
+                <p className="lede">
+                  Status of products and customer packages handed over to the store for buyer counter pick-up.
+                </p>
+              </div>
+              <button className="btn" type="button" onClick={() => handleSectionChange('add-product')}>
+                + New Pick-up Parcel
               </button>
-            )}
-          </div>
-
-          {/* Search & Status Filters */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: 220, maxWidth: 380 }}>
-              <Search size={16} className="muted" />
-              <input
-                type="text"
-                placeholder="Search buyer name, alternate, or product…"
-                value={pickupSearch}
-                onChange={(e) => {
-                  setPickupSearch(e.target.value)
-                  setPickupPage(1)
-                }}
-                style={{ margin: 0, padding: '0.5rem 0.85rem', fontSize: '0.88rem' }}
-              />
             </div>
-            <div style={{ display: 'flex', gap: '0.4rem' }}>
-              {(['all', 'Waiting', 'Picked-up'] as const).map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  className={pickupStatusFilter === s ? 'btn' : 'btn-ghost'}
-                  style={{ padding: '0.35rem 0.75rem', fontSize: '0.78rem' }}
-                  onClick={() => {
-                    setPickupStatusFilter(s)
-                    setPickupPage(1)
-                  }}
-                >
-                  {s === 'all' ? 'All Handovers' : s === 'Waiting' ? 'Waiting Claim' : 'Picked-up'}
-                </button>
-              ))}
-            </div>
-          </div>
 
-          {/* Live Handover Table */}
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortPickupTx, setSortPickupTx, 'product')}>
-                    Product {renderSortIndicator('product', sortPickupTx)}
-                  </th>
-                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortPickupTx, setSortPickupTx, 'buyer')}>
-                    Buyer Name {renderSortIndicator('buyer', sortPickupTx)}
-                  </th>
-                  <th>Authorized Alternate</th>
-                  <th>Qty</th>
-                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortPickupTx, setSortPickupTx, 'pickup')}>
-                    Pickup Status {renderSortIndicator('pickup', sortPickupTx)}
-                  </th>
-                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortPickupTx, setSortPickupTx, 'payment')}>
-                    Payment Status {renderSortIndicator('payment', sortPickupTx)}
-                  </th>
-                  <th>Receipt Proof</th>
-                  <th>Notes</th>
-                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortPickupTx, setSortPickupTx, 'date')}>
-                    Updated {renderSortIndicator('date', sortPickupTx)}
-                  </th>
-                  <th className="no-print" style={{ textAlign: 'right' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pickupTransactions
-                  .slice((pickupPage - 1) * DEFAULT_PAGE_SIZE, pickupPage * DEFAULT_PAGE_SIZE)
-                  .map((t) => (
-                    <tr key={t.transaction_id}>
-                      <td>
-                        <strong>{t.products?.product_name || t.product_name || '—'}</strong>
-                        {t.products?.variant && <div className="muted" style={{ fontSize: '0.75rem' }}>{t.products.variant}</div>}
-                      </td>
-                      <td><strong>{t.buyer_name || '—'}</strong></td>
-                      <td>{t.authorized_pickup_name || <span className="muted">—</span>}</td>
-                      <td>{t.quantity ?? 1}</td>
-                      <td>
-                        <span className={`status-pill ${t.pickup_status === 'Picked-up' ? 'confirmed' : 'pending'}`}>
-                          {t.pickup_status || 'Waiting'}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`status-pill ${t.payment_status === 'Paid' ? 'confirmed' : 'pending'}`}>
-                          {t.payment_status}
-                        </span>
-                      </td>
-                      <td>
-                        {t.receipt_image_url ? (
-                          <img
-                            src={t.receipt_image_url}
-                            alt="Receipt proof"
-                            style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid #ddd' }}
-                            onClick={() => setPreviewReceipt(t.receipt_image_url)}
-                            title="Click to zoom receipt"
-                          />
-                        ) : (
-                          <span className="muted">—</span>
-                        )}
-                        <input
-                          className="no-print"
-                          type="file"
-                          accept="image/*"
-                          aria-label="Upload payment receipt"
-                          onChange={(event) => void uploadPickupReceipt(t, event.target.files?.[0] || null)}
-                          style={{ display: 'block', maxWidth: 140, marginTop: 4, fontSize: '0.72rem' }}
-                        />
-                      </td>
-                      <td><div style={{ fontSize: '0.78rem', color: '#555', maxWidth: 160 }}>{t.notes || '—'}</div></td>
-                      <td>
-                        <div style={{ fontSize: '0.78rem' }}>{new Date(t.updated_at || t.transaction_date).toLocaleString('en-PH')}</div>
-                        <div className="muted" style={{ fontSize: '0.72rem' }}>{t.users?.full_name || 'Staff'}</div>
-                      </td>
-                      <td className="no-print" style={{ textAlign: 'right' }}>
-                        {t.pickup_status === 'Picked-up' ? (
-                          <span className="badge ok" style={{ fontSize: '0.75rem' }}>Completed</span>
-                        ) : (
-                          <button
-                            className="btn-ghost"
-                            type="button"
-                            style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem' }}
-                            onClick={() => openEditTx(t)}
-                          >
-                            Edit Info
-                          </button>
-                        )}
-                      </td>
+            {/* Filter Toolbar */}
+            <div style={{ display: 'flex', gap: '0.65rem', marginBottom: '1.25rem', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                {(['All', 'Waiting', 'Picked-up'] as const).map((st) => (
+                  <button
+                    key={st}
+                    type="button"
+                    className={pickupStatusFilter === st ? 'btn' : 'btn-ghost'}
+                    style={{ fontSize: '0.82rem', padding: '0.4rem 0.8rem' }}
+                    onClick={() => setPickupStatusFilter(st)}
+                  >
+                    {st === 'All' ? 'All Hand-overs' : st === 'Waiting' ? 'Waiting for Buyer' : 'Claimed / Picked Up'}
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ position: 'relative', minWidth: 220 }}>
+                <Search size={15} color="#94a3b8" style={{ position: 'absolute', left: 10, top: 11 }} />
+                <input
+                  type="text"
+                  placeholder="Search buyer, item…"
+                  value={pickupSearch}
+                  onChange={(e) => setPickupSearch(e.target.value)}
+                  style={{ paddingLeft: '2.1rem', margin: 0, height: 38, fontSize: '0.82rem' }}
+                />
+              </div>
+            </div>
+
+            {/* Table */}
+            {loading ? (
+              <SkeletonTable rows={5} cols={8} />
+            ) : (
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Buyer Name</th>
+                      <th>Product</th>
+                      <th>Product Info</th>
+                      <th>Price</th>
+                      <th>Authorized Alternate</th>
+                      <th>Payment Status</th>
+                      <th>Cube #</th>
+                      <th>Notes</th>
+                      <th>Status</th>
                     </tr>
-                  ))}
-              </tbody>
-            </table>
-            {pickupTransactions.length === 0 && (
-              <div className="empty" style={{ padding: '2rem' }}>No pick-up transaction records found.</div>
+                  </thead>
+                  <tbody>
+                    {transactions
+                      .filter((t) => {
+                        const isPickup = (t.products?.cubes?.type || t.cubes?.type) === 'Pick-up'
+                        if (!isPickup) return false
+                        if (pickupStatusFilter !== 'All' && t.pickup_status !== pickupStatusFilter) return false
+                        if (pickupSearch.trim()) {
+                          const q = pickupSearch.toLowerCase()
+                          const bName = t.buyer_name?.toLowerCase() || ''
+                          const pName = (t.products?.product_name || t.product_name || '').toLowerCase()
+                          if (!bName.includes(q) && !pName.includes(q)) return false
+                        }
+                        return true
+                      })
+                      .map((t) => {
+                        const prod = t.products
+                        const cubeNum = prod?.cubes?.cube_number || t.cubes?.cube_number || '—'
+                        return (
+                          <tr key={t.transaction_id}>
+                            <td><strong>{t.buyer_name || '—'}</strong></td>
+                            <td><strong>{prod?.product_name || t.product_name || '—'}</strong></td>
+                            <td>
+                              <span style={{ fontSize: '0.82rem', color: '#444' }}>
+                                {prod?.description || prod?.variant || '—'}
+                              </span>
+                            </td>
+                            <td>{peso(prod?.price)}</td>
+                            <td>{t.authorized_pickup_name || <span className="muted">—</span>}</td>
+                            <td>
+                              <span className={`status-pill ${t.payment_status === 'Paid' ? 'confirmed' : 'pending'}`}>
+                                {t.payment_status}
+                              </span>
+                              {t.receipt_image_url && (
+                                <div style={{ marginTop: 4 }}>
+                                  <img
+                                    src={t.receipt_image_url}
+                                    alt="Receipt"
+                                    style={{ width: 32, height: 32, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid #cbd5e1' }}
+                                    onClick={() => setPreviewReceipt(t.receipt_image_url)}
+                                    title="Click to view receipt"
+                                  />
+                                </div>
+                              )}
+                            </td>
+                            <td><span className="badge info">{cubeNum}</span></td>
+                            <td><span style={{ fontSize: '0.82rem', color: '#555' }}>{t.notes || '—'}</span></td>
+                            <td>
+                              <span className={`badge ${t.pickup_status === 'Picked-up' ? 'ok' : 'warn'}`}>
+                                {t.pickup_status === 'Picked-up' ? 'Claimed' : 'Waiting for Buyer'}
+                              </span>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                  </tbody>
+                </table>
+                {transactions.filter((t) => (t.products?.cubes?.type || t.cubes?.type) === 'Pick-up').length === 0 && (
+                  <div className="empty" style={{ padding: '2rem' }}>No pick-up products logged yet.</div>
+                )}
+              </div>
             )}
           </div>
-          <TablePagination
-            page={pickupPage}
-            totalItems={pickupTransactions.length}
-            pageSize={DEFAULT_PAGE_SIZE}
-            onPageChange={setPickupPage}
-          />
+        )}
 
-          {/* Pick-up Inventory Stock Cards */}
-          <div style={{ marginTop: '2.5rem' }}>
-            <h3 style={{ margin: '0 0 0.85rem' }}>Pick-up Cube Inventory</h3>
-            <div className="grid">
-              {pickupProducts.map((p) => (
-                <div
-                  className="card"
-                  key={p.product_id}
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => setGalleryProduct(p)}
-                >
-                  <div className="card-media" style={{ background: '#f5f5f5', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
-                    {p.image_url ? (
-                      <img src={p.image_url} alt={p.product_name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    ) : (
-                      <div className="muted" style={{ fontSize: '0.8rem' }}>No Photo</div>
-                    )}
-                    {((p.image_urls && p.image_urls.length > 1) || (p.image_urls && p.image_urls.length === 1 && p.image_url)) && (
-                      <span
-                        style={{
-                          position: 'absolute',
-                          top: 8,
-                          right: 8,
-                          background: 'rgba(0, 0, 0, 0.72)',
-                          color: '#fff',
-                          fontSize: '0.72rem',
-                          fontWeight: 600,
-                          padding: '2px 7px',
-                          borderRadius: 12,
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 4,
-                          backdropFilter: 'blur(4px)',
-                        }}
-                      >
-                        <Camera size={11} /> {(p.image_urls?.length || 1)} shots
-                      </span>
-                    )}
-                  </div>
-                  <div className="card-body">
-                    <h3 style={{ margin: 0 }}>{p.product_name}</h3>
-                    {p.description && <p className="muted" style={{ fontSize: '0.82rem', margin: '0.2rem 0 0' }}>{p.description}</p>}
-                    <div className="price" style={{ margin: '0.4rem 0' }}>{peso(p.price)}</div>
-                    <div className="meta-line">
-                      <span><strong>{p.stock_quantity}</strong> available</span>
-                      <span>{p.variant ? `Variant: ${p.variant}` : 'Standard'}</span>
-                      <span>Cube #{p.cubes?.cube_number || '—'}</span>
-                    </div>
-                  </div>
-                </div>
-              ))}
+        {/* ────────────────────────────────────────────────────────
+            SECTION 4: MY CUBE AND CONTRACT (Image 3 & 4)
+           ──────────────────────────────────────────────────────── */}
+        {activeSection === 'my-cube-contract' && (
+          <div>
+            <div className="page-header">
+              <div>
+                <h1>My Cubes & Lease Contracts</h1>
+                <p className="lede">
+                  Overview of your rented cubes, terms agreed upon with the store owner, and contract renewal options.
+                </p>
+              </div>
             </div>
-            {pickupProducts.length === 0 && (
-              <div className="empty" style={{ padding: '1.5rem' }}>No pick-up products listed yet.</div>
-            )}
-          </div>
-        </div>
-      )}
 
-      {/* ════════════ TAB 4: MY CUBES & CONTRACTS ════════════ */}
-      {activeTab === 'cubes_contracts' && (
-        <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-            <div>
-              <h2 style={{ margin: 0 }}>Your Active & Pending Contracts</h2>
-              <p className="muted" style={{ margin: '0.2rem 0 0' }}>
-                Manage your cube leases, renew active agreements, or reserve additional cubes.
-              </p>
-            </div>
-            <Link to="/" className="btn">
-              <Plus size={16} /> Reserve Another Cube
-            </Link>
-          </div>
+            {contracts.length === 0 ? (
+              <div className="empty" style={{ padding: '2.5rem', textAlign: 'center' }}>
+                <p>You do not have any registered cube rental contracts yet.</p>
+                <Link to="/" className="btn" style={{ marginTop: '0.5rem' }}>Browse and Reserve a Cube</Link>
+              </div>
+            ) : (
+              <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.25rem', marginBottom: '2rem' }}>
+                {contracts.map((c) => {
+                  const daysLeft = daysUntil(c.end_date)
+                  const isExpired = c.status === 'Expired' || daysLeft < 0
+                  const hasPendingExtension = extensionRequests.some(
+                    (ext) => ext.contract_id === c.contract_id && ext.status === 'Pending',
+                  )
 
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortContracts, setSortContracts, 'cube')}>
-                    Cube {renderSortIndicator('cube', sortContracts)}
-                  </th>
-                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortContracts, setSortContracts, 'type')}>
-                    Type {renderSortIndicator('type', sortContracts)}
-                  </th>
-                  <th>Monthly Rate</th>
-                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortContracts, setSortContracts, 'period')}>
-                    Period {renderSortIndicator('period', sortContracts)}
-                  </th>
-                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortContracts, setSortContracts, 'days')}>
-                    Days Left {renderSortIndicator('days', sortContracts)}
-                  </th>
-                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortContracts, setSortContracts, 'status')}>
-                    Status {renderSortIndicator('status', sortContracts)}
-                  </th>
-                  <th className="no-print" style={{ textAlign: 'right' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {contractsSorted.map((c) => {
-                  const left = daysUntil(c.end_date)
                   return (
-                    <tr key={c.contract_id}>
-                      <td><strong>Cube #{c.cubes?.cube_number}</strong></td>
-                      <td>
-                        <span className="badge" style={{ fontSize: '0.75rem' }}>{c.cubes?.type}</span>
-                      </td>
-                      <td>{peso(c.cubes?.price_per_month)}</td>
-                      <td>{c.start_date} → {c.end_date}</td>
-                      <td>
-                        <span className={`status-pill ${left <= 7 && left >= 0 ? 'pending' : left < 0 ? 'pending' : 'confirmed'}`}>
-                          {left < 0 ? 'Expired' : `${left} day(s)`}
+                    <div
+                      key={c.contract_id}
+                      className="card"
+                      style={{
+                        padding: '1.5rem',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.85rem',
+                        borderLeft: isExpired ? '4px solid #dc2626' : c.status === 'Active' ? '4px solid #16a34a' : '4px solid #f59e0b',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <strong style={{ fontSize: '1.2rem' }}>Cube #{c.cubes?.cube_number || c.cube_id}</strong>
+                        <span className={`status-pill ${c.status === 'Active' ? 'confirmed' : isExpired ? 'cancelled' : 'pending'}`}>
+                          {isExpired ? 'Expired' : c.status}
                         </span>
-                      </td>
-                      <td>
-                        <span className={`status-pill ${c.status === 'Active' ? 'confirmed' : 'pending'}`}>
-                          {c.status}
-                        </span>
-                      </td>
-                      <td className="no-print" style={{ textAlign: 'right' }}>
-                        <div className="row" style={{ justifyContent: 'flex-end', gap: 6 }}>
-                          {c.status === 'Pending' && (
-                            <button className="btn-ghost" type="button" onClick={() => activateContract(c)}>Activate</button>
-                          )}
-                          {(c.status === 'Active' || c.status === 'Pending') && (
-                            <>
-                              <button className="btn" type="button" style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }} onClick={() => extendContract(c, 1)}>+1 mo</button>
-                              <button className="btn-ghost" type="button" style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }} onClick={() => extendContract(c, 3)}>+3 mos</button>
-                            </>
-                          )}
+                      </div>
+
+                      <div className="muted" style={{ fontSize: '0.88rem' }}>
+                        Type: <strong>{c.cubes?.type}</strong> • Rate: <strong>{peso(c.cubes?.price_per_month)} / mo</strong>
+                      </div>
+
+                      {c.cubes?.location && (
+                        <div className="muted" style={{ fontSize: '0.82rem' }}>
+                          Location: {c.cubes.location}
                         </div>
-                      </td>
-                    </tr>
+                      )}
+
+                      <div style={{ fontSize: '0.85rem', background: '#f8fafc', padding: '0.65rem 0.85rem', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+                        <div><strong>Agreement #{c.contract_id}</strong></div>
+                        <div className="muted" style={{ marginTop: 2 }}>
+                          {c.start_date} → {c.end_date} ({daysLeft >= 0 ? `${daysLeft} day(s) left` : 'Expired'})
+                        </div>
+                      </div>
+
+                      {/* Action buttons */}
+                      <div style={{ display: 'flex', gap: '0.65rem', marginTop: 'auto', paddingTop: '0.75rem', borderTop: '1px solid #f0f0f0', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <button
+                          type="button"
+                          className="btn-ghost"
+                          style={{ fontSize: '0.8rem', padding: '0.35rem 0.65rem' }}
+                          onClick={() => setViewingContract(c)}
+                        >
+                          <FileText size={14} /> View Agreement
+                        </button>
+
+                        {/* Cube extension ONLY when the contract expires (User instruction) */}
+                        {isExpired ? (
+                          hasPendingExtension ? (
+                            <span className="badge warn" style={{ fontSize: '0.75rem' }}>
+                              Extension Pending Review
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn"
+                              style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem', background: '#16a34a' }}
+                              onClick={() => {
+                                setExtendingContract(c)
+                                setExtensionMonths(1)
+                                setExtensionNotes('')
+                              }}
+                            >
+                              + Request Extension
+                            </button>
+                          )
+                        ) : (
+                          <span className="badge ok" style={{ fontSize: '0.75rem' }}>
+                            {daysLeft} days active
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   )
                 })}
-              </tbody>
-            </table>
-            {contracts.length === 0 && (
-              <div className="empty" style={{ padding: '3rem', textAlign: 'center' }}>
-                <p>No contracts found on record.</p>
-                <Link to="/" className="btn" style={{ marginTop: '0.5rem' }}>Browse Catalogue & Reserve Cube</Link>
               </div>
             )}
           </div>
-        </div>
-      )}
+        )}
 
-      {/* ════════════ MODAL 1: ADD PRODUCT (ORGANIZED DIALOG) ════════════ */}
-      {isAddProductModalOpen && (
-        <div className="modal-overlay" onClick={() => setIsAddProductModalOpen(false)}>
-          <div className="modal-card" style={{ maxWidth: 620 }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>List New Product in Rented Cubes</h3>
-              <button className="modal-close" onClick={() => setIsAddProductModalOpen(false)}><X size={18} /></button>
+        {/* ────────────────────────────────────────────────────────
+            SECTION 5: PRODUCT MANAGEMENT (Image 3)
+           ──────────────────────────────────────────────────────── */}
+        {activeSection === 'product-management' && (
+          <div>
+            <div className="page-header">
+              <div>
+                <h1>Product Management</h1>
+                <p className="lede">
+                  Manage product details, prices, inventory levels, or restore deleted items from your trash folder.
+                </p>
+              </div>
+              <button className="btn" type="button" onClick={() => handleSectionChange('add-product')}>
+                + Add New Product
+              </button>
             </div>
 
-            {isSelectedCubePickup && (
-              <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, padding: '0.75rem 0.9rem', marginBottom: '1rem', fontSize: '0.84rem', color: '#0369a1' }}>
-                <strong>Pick-up Cube Selected:</strong> Please provide claimant details below so staff can verify the buyer upon release at the counter.
-              </div>
-            )}
+            {/* Active vs Trash tabs */}
+            <div style={{ display: 'flex', gap: '0.65rem', marginBottom: '1.25rem', borderBottom: '2px solid #efefef', paddingBottom: '0.5rem' }}>
+              <button
+                type="button"
+                className={pmTab === 'active' ? 'btn' : 'btn-ghost'}
+                onClick={() => setPmTab('active')}
+              >
+                Active Products ({activeProducts.length})
+              </button>
+              <button
+                type="button"
+                className={pmTab === 'trash' ? 'btn' : 'btn-ghost'}
+                onClick={() => setPmTab('trash')}
+                style={{ color: pmTab === 'trash' ? '#fff' : '#b00020' }}
+              >
+                <Trash2 size={15} /> Trash ({trashProducts.length})
+              </button>
+            </div>
 
-            <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.85rem' }}>
-              <div className="field">
-                <label>Product Name *</label>
+            {/* Search & Category toolbar */}
+            <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.25rem', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flex: 1, minWidth: 240, maxWidth: 380 }}>
+                <Search size={16} className="muted" />
                 <input
-                  placeholder="e.g. Handmade Ceramic Mug"
-                  value={productForm.product_name}
-                  onChange={(e) => setProductForm({ ...productForm, product_name: e.target.value })}
+                  type="text"
+                  placeholder="Search product, category, or cube…"
+                  value={pmSearch}
+                  onChange={(e) => setPmSearch(e.target.value)}
+                  style={{ margin: 0, padding: '0.5rem 0.85rem', fontSize: '0.85rem' }}
                 />
               </div>
-              <div className="field">
-                <label>Price (₱) *</label>
-                <input
-                  type="number"
-                  min="0"
-                  placeholder="0.00"
-                  value={productForm.price}
-                  onChange={(e) => setProductForm({ ...productForm, price: e.target.value })}
-                />
-              </div>
-              <div className="field">
-                <label>Quantity *</label>
-                <input
-                  type="number"
-                  min="1"
-                  value={productForm.stock_quantity}
-                  onChange={(e) => setProductForm({ ...productForm, stock_quantity: e.target.value })}
-                />
-              </div>
-              <div className="field">
-                <label>Variant / Shade (Optional)</label>
-                <input
-                  placeholder="e.g. Large / Warm Ivory"
-                  value={productForm.variant}
-                  onChange={(e) => setProductForm({ ...productForm, variant: e.target.value })}
-                />
-              </div>
-              <div className="field">
-                <label>Assigned Cube *</label>
+
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <label style={{ fontSize: '0.8rem', fontWeight: 800, textTransform: 'uppercase' }}>Category:</label>
                 <select
-                  value={productForm.cube_id}
-                  onChange={(e) => setProductForm({ ...productForm, cube_id: e.target.value })}
+                  value={pmCategory}
+                  onChange={(e) => setPmCategory(e.target.value)}
+                  style={{ margin: 0, padding: '0.45rem 0.75rem', fontSize: '0.85rem' }}
                 >
-                  <option value="">Select your cube…</option>
-                  {myCubes.map((c) => (
-                    <option key={c.cube_id} value={c.cube_id}>
-                      Cube #{c.cube_number} ({c.type})
-                    </option>
+                  <option value="All">All Categories</option>
+                  {existingCategories.map((cat) => (
+                    <option key={cat} value={cat}>{cat}</option>
                   ))}
                 </select>
               </div>
-              <div className="field">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                  <label>Category</label>
-                  <span className="muted" style={{ fontSize: '0.75rem' }}>Pick or type new</span>
-                </div>
-                <input
-                  list="renter-category-options"
-                  placeholder="e.g. Cosmetics & Skincare"
-                  value={productForm.category}
-                  onChange={(e) => setProductForm({ ...productForm, category: e.target.value })}
-                />
-                <datalist id="renter-category-options">
-                  {categories.map((category) => (
-                    <option key={category} value={category} />
-                  ))}
-                </datalist>
+            </div>
+
+            {/* Products Table */}
+            {loading ? (
+              <SkeletonTable rows={5} cols={7} />
+            ) : (
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: 60 }}>Image</th>
+                      <th>Product Name</th>
+                      <th>Assigned Cube</th>
+                      <th>Price</th>
+                      <th>Stock</th>
+                      <th>Category</th>
+                      <th>Variant</th>
+                      <th style={{ textAlign: 'right' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(pmTab === 'active' ? activeProducts : trashProducts)
+                      .filter((p) => {
+                        if (pmCategory !== 'All' && (p.category?.trim() || '') !== pmCategory) return false
+                        if (pmSearch.trim()) {
+                          const q = pmSearch.toLowerCase()
+                          const name = p.product_name.toLowerCase()
+                          const cat = (p.category || '').toLowerCase()
+                          const cube = (p.cubes?.cube_number || '').toLowerCase()
+                          if (!name.includes(q) && !cat.includes(q) && !cube.includes(q)) return false
+                        }
+                        return true
+                      })
+                      .map((p) => (
+                        <tr key={p.product_id}>
+                          <td style={{ cursor: 'pointer' }} onClick={() => setGalleryProduct(p)}>
+                            {p.image_url ? (
+                              <img src={p.image_url} alt={p.product_name} style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 4 }} />
+                            ) : (
+                              <div style={{ width: 44, height: 44, background: '#f0f0f0', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.65rem', color: '#888' }}>
+                                No pic
+                              </div>
+                            )}
+                          </td>
+                          <td>
+                            <strong>{p.product_name}</strong>
+                            {p.description && <div className="muted" style={{ fontSize: '0.78rem' }}>{p.description}</div>}
+                          </td>
+                          <td>
+                            {p.cubes ? <span className="badge info">{p.cubes.cube_number} ({p.cubes.type})</span> : '—'}
+                          </td>
+                          <td>{peso(p.price)}</td>
+                          <td>
+                            <span style={{ fontWeight: 700, color: p.stock_quantity > 0 ? '#16a34a' : '#dc2626' }}>
+                              {p.stock_quantity}
+                            </span>
+                          </td>
+                          <td>{p.category || '—'}</td>
+                          <td>{p.variant || '—'}</td>
+                          <td style={{ textAlign: 'right' }}>
+                            {pmTab === 'active' ? (
+                              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                                <button
+                                  type="button"
+                                  className="btn-ghost"
+                                  style={{ padding: '0.25rem 0.55rem', fontSize: '0.75rem' }}
+                                  onClick={() => {
+                                    setEditingProduct(p)
+                                    setEditProductForm({
+                                      product_name: p.product_name,
+                                      description: p.description || '',
+                                      price: String(p.price),
+                                      stock_quantity: String(p.stock_quantity),
+                                      variant: p.variant || '',
+                                      category: p.category || '',
+                                      cube_id: String(p.cube_id || ''),
+                                    })
+                                  }}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn-ghost"
+                                  style={{ padding: '0.25rem 0.55rem', fontSize: '0.75rem', color: '#dc2626' }}
+                                  onClick={() => void softDeleteProduct(p.product_id)}
+                                >
+                                  Trash
+                                </button>
+                              </div>
+                            ) : (
+                              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                                <button
+                                  type="button"
+                                  className="btn"
+                                  style={{ padding: '0.25rem 0.55rem', fontSize: '0.75rem', background: '#16a34a' }}
+                                  onClick={() => void restoreProduct(p.product_id)}
+                                >
+                                  <RotateCcw size={12} /> Restore
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn-ghost"
+                                  style={{ padding: '0.25rem 0.55rem', fontSize: '0.75rem', color: '#dc2626' }}
+                                  onClick={() => void permanentDeleteProduct(p.product_id)}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ────────────────────────────────────────────────────────
+            SECTION 6: INCOME (Image 3)
+           ──────────────────────────────────────────────────────── */}
+        {activeSection === 'income' && (
+          <div>
+            <div className="page-header">
+              <div>
+                <h1>Income & Sales Breakdown</h1>
+                <p className="lede">
+                  Summary of your completed orders and confirmed customer purchases. Confirmed reservations and paid transactions automatically calculate your total earnings.
+                </p>
               </div>
             </div>
 
+            {/* Metric KPI cards */}
+            <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.75rem' }}>
+              <div className="panel" style={{ padding: '1.25rem', borderLeft: '4px solid #16a34a' }}>
+                <div className="muted" style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase' }}>
+                  Total Completed Earnings
+                </div>
+                <div style={{ fontSize: '1.8rem', fontWeight: 900, color: '#16a34a', marginTop: '0.35rem' }}>
+                  {peso(totalEarned)}
+                </div>
+              </div>
+
+              <div className="panel" style={{ padding: '1.25rem', borderLeft: '4px solid #2563eb' }}>
+                <div className="muted" style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase' }}>
+                  Completed Orders
+                </div>
+                <div style={{ fontSize: '1.8rem', fontWeight: 900, color: '#2563eb', marginTop: '0.35rem' }}>
+                  {completedSales.length}
+                </div>
+              </div>
+
+              <div className="panel" style={{ padding: '1.25rem', borderLeft: '4px solid #d97706' }}>
+                <div className="muted" style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase' }}>
+                  Pending Customer Holds
+                </div>
+                <div style={{ fontSize: '1.8rem', fontWeight: 900, color: '#d97706', marginTop: '0.35rem' }}>
+                  {pendingProductResCount}
+                </div>
+              </div>
+            </div>
+
+            {/* Completed Orders Table */}
+            <h3 style={{ margin: '0 0 0.85rem' }}>Completed Order History</h3>
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Product</th>
+                    <th>Buyer Name</th>
+                    <th>Qty</th>
+                    <th>Unit Price</th>
+                    <th>Total Earned</th>
+                    <th>Payment Method</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {completedSales.map((t) => {
+                    const price = Number(t.products?.price || 0)
+                    const qty = Number(t.quantity || 1)
+                    return (
+                      <tr key={t.transaction_id}>
+                        <td>{new Date(t.transaction_date).toLocaleDateString()}</td>
+                        <td>
+                          <strong>{t.products?.product_name || t.product_name || 'Product'}</strong>
+                          {t.products?.variant && <div className="muted" style={{ fontSize: '0.78rem' }}>{t.products.variant}</div>}
+                        </td>
+                        <td>{t.buyer_name || '—'}</td>
+                        <td>{qty}</td>
+                        <td>{peso(price)}</td>
+                        <td><strong>{peso(price * qty)}</strong></td>
+                        <td>
+                          <span className="badge ok">{t.payment_method || 'Cash'}</span>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+              {completedSales.length === 0 && (
+                <div className="empty" style={{ padding: '2rem' }}>No completed orders recorded yet.</div>
+              )}
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* ════════════ MODAL: REQUEST CUBE EXTENSION ════════════ */}
+      {extendingContract && (
+        <div className="modal-overlay" onClick={() => setExtendingContract(null)}>
+          <div className="modal-card" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Request Cube Extension</h3>
+              <button className="modal-close" onClick={() => setExtendingContract(null)}><X size={18} /></button>
+            </div>
+            <p className="muted" style={{ fontSize: '0.88rem', margin: '0 0 1rem' }}>
+              Your contract for <strong>Cube #{extendingContract.cubes?.cube_number || extendingContract.cube_id}</strong> has expired. Submit an extension request to the store owner to renew your lease agreement.
+            </p>
+
+            <div className="field">
+              <label>Extension Length</label>
+              <select
+                value={extensionMonths}
+                onChange={(e) => setExtensionMonths(Number(e.target.value))}
+              >
+                <option value={1}>+1 Month Extension ({peso((extendingContract.cubes?.price_per_month || 0) * 1)})</option>
+                <option value={2}>+2 Months Extension ({peso((extendingContract.cubes?.price_per_month || 0) * 2)})</option>
+                <option value={3}>+3 Months Extension ({peso((extendingContract.cubes?.price_per_month || 0) * 3)})</option>
+                <option value={6}>+6 Months Extension ({peso((extendingContract.cubes?.price_per_month || 0) * 6)})</option>
+              </select>
+            </div>
+
+            <div className="field" style={{ marginTop: '0.85rem' }}>
+              <label>Notes to Owner (Optional)</label>
+              <textarea
+                rows={3}
+                placeholder="Message regarding your extension or payment arrangement…"
+                value={extensionNotes}
+                onChange={(e) => setExtensionNotes(e.target.value)}
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.25rem' }}>
+              <button className="btn" type="button" disabled={busy} onClick={submitExtensionRequest} style={{ flex: 1 }}>
+                {busy ? 'Submitting…' : 'Submit Extension Request'}
+              </button>
+              <button className="btn-ghost" type="button" onClick={() => setExtendingContract(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ════════════ MODAL: VIEW CONTRACT AGREEMENT ════════════ */}
+      {viewingContract && (
+        <div className="modal-overlay" onClick={() => setViewingContract(null)}>
+          <div className="modal-card" style={{ maxWidth: 640 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Cube Lease Agreement #{viewingContract.contract_id}</h3>
+              <button className="modal-close" onClick={() => setViewingContract(null)}><X size={18} /></button>
+            </div>
+            <div style={{ background: '#f8fafc', padding: '1rem', borderRadius: 8, margin: '1rem 0' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', fontSize: '0.88rem' }}>
+                <div><strong>Assigned Space:</strong> Cube #{viewingContract.cubes?.cube_number}</div>
+                <div><strong>Type:</strong> {viewingContract.cubes?.type}</div>
+                <div><strong>Monthly Rate:</strong> {peso(viewingContract.cubes?.price_per_month)}</div>
+                <div><strong>Duration:</strong> {viewingContract.start_date} → {viewingContract.end_date}</div>
+              </div>
+            </div>
+            <h4>Terms & Conditions</h4>
+            <div style={{ maxHeight: 220, overflowY: 'auto', background: '#fff', border: '1px solid #e2e8f0', padding: '0.85rem', borderRadius: 8, fontSize: '0.82rem', whiteSpace: 'pre-wrap', color: '#444' }}>
+              {viewingContract.contract_text || 'Standard cube rental terms apply. Renter agrees to consign products and pay monthly rental fees promptly.'}
+            </div>
+            <div style={{ marginTop: '1.25rem', textAlign: 'right' }}>
+              <button className="btn" type="button" onClick={() => setViewingContract(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ════════════ MODAL: EDIT PRODUCT ════════════ */}
+      {editingProduct && (
+        <div className="modal-overlay" onClick={() => setEditingProduct(null)}>
+          <div className="modal-card" style={{ maxWidth: 540 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Edit Product</h3>
+              <button className="modal-close" onClick={() => setEditingProduct(null)}><X size={18} /></button>
+            </div>
+            <div className="field">
+              <label>Product Name</label>
+              <input
+                value={editProductForm.product_name}
+                onChange={(e) => setEditProductForm({ ...editProductForm, product_name: e.target.value })}
+              />
+            </div>
+            <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '0.75rem' }}>
+              <div className="field">
+                <label>Price (₱)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={editProductForm.price}
+                  onChange={(e) => setEditProductForm({ ...editProductForm, price: e.target.value })}
+                />
+              </div>
+              <div className="field">
+                <label>Stock Quantity</label>
+                <input
+                  type="number"
+                  value={editProductForm.stock_quantity}
+                  onChange={(e) => setEditProductForm({ ...editProductForm, stock_quantity: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '0.75rem' }}>
+              <div className="field">
+                <label>Variant / Shade</label>
+                <input
+                  value={editProductForm.variant}
+                  onChange={(e) => setEditProductForm({ ...editProductForm, variant: e.target.value })}
+                />
+              </div>
+              <div className="field">
+                <label>Category</label>
+                <input
+                  value={editProductForm.category}
+                  onChange={(e) => setEditProductForm({ ...editProductForm, category: e.target.value })}
+                />
+              </div>
+            </div>
             <div className="field" style={{ marginTop: '0.75rem' }}>
               <label>Description</label>
               <textarea
                 rows={2}
-                placeholder="Product description, materials, or features…"
-                value={productForm.description}
-                onChange={(e) => setProductForm({ ...productForm, description: e.target.value })}
+                value={editProductForm.description}
+                onChange={(e) => setEditProductForm({ ...editProductForm, description: e.target.value })}
               />
             </div>
-
-            <div className="field" style={{ marginTop: '0.75rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
-                <label style={{ margin: 0 }}>Product Photos (Gallery / Multiple Angles)</label>
-                <span className="muted" style={{ fontSize: '0.75rem' }}>
-                  {imageFiles.length > 0 ? `${imageFiles.length} photo(s) selected` : 'Select 1 or more photos'}
-                </span>
-              </div>
-              <input
-                type="file"
-                accept="image/*"
-                multiple
-                onChange={(e) => onProductImages(e.target.files)}
-              />
-              {imagePreviews.length > 0 && (
-                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: 8 }}>
-                  {imagePreviews.map((preview, idx) => (
-                    <div
-                      key={idx}
-                      style={{
-                        position: 'relative',
-                        width: 72,
-                        height: 72,
-                        borderRadius: 6,
-                        overflow: 'hidden',
-                        border: idx === 0 ? '2px solid #000' : '1px solid #ddd',
-                        background: '#f8fafc',
-                      }}
-                    >
-                      <img
-                        src={preview}
-                        alt={`Preview ${idx + 1}`}
-                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                      />
-                      {idx === 0 && (
-                        <span
-                          style={{
-                            position: 'absolute',
-                            bottom: 2,
-                            left: 2,
-                            right: 2,
-                            fontSize: '0.62rem',
-                            fontWeight: 700,
-                            background: 'rgba(0,0,0,0.75)',
-                            color: '#fff',
-                            textAlign: 'center',
-                            borderRadius: 2,
-                            padding: '1px 0',
-                          }}
-                        >
-                          Cover
-                        </span>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => removeProductImage(idx)}
-                        style={{
-                          position: 'absolute',
-                          top: 2,
-                          right: 2,
-                          width: 18,
-                          height: 18,
-                          borderRadius: '50%',
-                          background: 'rgba(0,0,0,0.75)',
-                          color: '#fff',
-                          border: 'none',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: '0.75rem',
-                          lineHeight: 1,
-                          padding: 0,
-                        }}
-                        title="Remove photo"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Conditional Pick-up Claimant Details */}
-            {isSelectedCubePickup && (
-              <div style={{ marginTop: '1.25rem', padding: '1rem', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
-                <h4 style={{ margin: '0 0 0.75rem', fontSize: '0.92rem', color: '#0f172a' }}>
-                  Counter Claimant Information
-                </h4>
-                <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem' }}>
-                  <div className="field">
-                    <label>Buyer / Customer Name *</label>
-                    <input
-                      placeholder="e.g. Maria Santos"
-                      value={productForm.buyer_name}
-                      onChange={(e) => setProductForm({ ...productForm, buyer_name: e.target.value })}
-                    />
-                  </div>
-                  <div className="field">
-                    <label>Authorized Alternate Claimant</label>
-                    <input
-                      placeholder="e.g. Courier or relative"
-                      value={productForm.authorized_pickup_name}
-                      onChange={(e) => setProductForm({ ...productForm, authorized_pickup_name: e.target.value })}
-                    />
-                  </div>
-                  <div className="field">
-                    <label>Payment Status</label>
-                    <select
-                      value={productForm.payment_status}
-                      onChange={(e) => setProductForm({ ...productForm, payment_status: e.target.value as 'Pending' | 'Paid' })}
-                    >
-                      <option value="Pending">Pending Payment (Collect at counter)</option>
-                      <option value="Paid">Paid (Paid online to renter)</option>
-                    </select>
-                  </div>
-                  <div className="field">
-                    <label>Payment Method</label>
-                    <select
-                      value={productForm.payment_method}
-                      onChange={(e) => setProductForm({ ...productForm, payment_method: e.target.value as 'Cash' | 'Online' })}
-                    >
-                      <option value="Cash">Cash</option>
-                      <option value="Online">GCash / Maya / Online</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="field" style={{ marginTop: '0.75rem' }}>
-                  <label>Payment Receipt Proof (if Paid)</label>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0] || null
-                      setPickupReceiptFile(file)
-                      if (file) {
-                        const r = new FileReader()
-                        r.onload = () => setPickupReceiptPreview(String(r.result || ''))
-                        r.readAsDataURL(file)
-                      } else {
-                        setPickupReceiptPreview(null)
-                      }
-                    }}
-                  />
-                  {pickupReceiptPreview && (
-                    <img
-                      src={pickupReceiptPreview}
-                      alt="Receipt preview"
-                      style={{ marginTop: 6, maxWidth: 80, maxHeight: 80, objectFit: 'cover', borderRadius: 4 }}
-                    />
-                  )}
-                </div>
-
-                <div className="field" style={{ marginTop: '0.75rem' }}>
-                  <label>Notes / Instructions for Staff</label>
-                  <input
-                    placeholder="e.g. Paid online, claimant will show ID"
-                    value={productForm.pickup_notes}
-                    onChange={(e) => setProductForm({ ...productForm, pickup_notes: e.target.value })}
-                  />
-                </div>
-              </div>
-            )}
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.65rem', marginTop: '1.5rem' }}>
-              <button className="btn-ghost" type="button" onClick={() => setIsAddProductModalOpen(false)}>
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.25rem' }}>
+              <button className="btn" type="button" disabled={busy} onClick={saveEditedProduct} style={{ flex: 1 }}>
+                {busy ? 'Saving…' : 'Save Changes'}
+              </button>
+              <button className="btn-ghost" type="button" onClick={() => setEditingProduct(null)}>
                 Cancel
               </button>
-              <button className="btn" type="button" disabled={busy} onClick={addProduct}>
-                {busy ? 'Saving…' : 'List Product'}
-              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ════════════ MODAL 2: NEW HANDOVER ENTRY ════════════ */}
-      {isNewHandoverModalOpen && (
-        <div className="modal-overlay" onClick={() => setIsNewHandoverModalOpen(false)}>
-          <div className="modal-card" style={{ maxWidth: 540 }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>+ Add Pick-up Entry / Buyer</h3>
-              <button className="modal-close" onClick={() => setIsNewHandoverModalOpen(false)}><X size={18} /></button>
-            </div>
-            <p className="muted" style={{ fontSize: '0.85rem', marginTop: 0 }}>
-              Add a customer claimant record for your existing stock in Pick-up cubes.
-            </p>
-            <div className="grid" style={{ gridTemplateColumns: '1fr', gap: '0.85rem' }}>
-              <div className="field">
-                <label>Select Pick-up Product *</label>
-                <select
-                  value={newHandoverForm.product_id}
-                  onChange={(e) => setNewHandoverForm({ ...newHandoverForm, product_id: e.target.value })}
-                >
-                  <option value="">Select product…</option>
-                  {pickupProducts.map((p) => (
-                    <option key={p.product_id} value={p.product_id}>
-                      {p.product_name} {p.variant ? `(${p.variant})` : ''} — {p.stock_quantity} in stock ({peso(p.price)})
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="grid" style={{ gridTemplateColumns: '2fr 1fr', gap: '0.85rem' }}>
-                <div className="field">
-                  <label>Buyer / Customer Name *</label>
-                  <input
-                    placeholder="e.g. Juan dela Cruz"
-                    value={newHandoverForm.buyer_name}
-                    onChange={(e) => setNewHandoverForm({ ...newHandoverForm, buyer_name: e.target.value })}
-                  />
-                </div>
-                <div className="field">
-                  <label>Quantity *</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={newHandoverForm.quantity}
-                    onChange={(e) => setNewHandoverForm({ ...newHandoverForm, quantity: e.target.value })}
-                  />
-                </div>
-              </div>
-              <div className="field">
-                <label>Authorized Alternate Claimant (Optional)</label>
-                <input
-                  placeholder="e.g. Maria Santos (relative / courier)"
-                  value={newHandoverForm.authorized_pickup_name}
-                  onChange={(e) => setNewHandoverForm({ ...newHandoverForm, authorized_pickup_name: e.target.value })}
-                />
-              </div>
-              <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
-                <div className="field">
-                  <label>Payment Status</label>
-                  <select
-                    value={newHandoverForm.payment_status}
-                    onChange={(e) => setNewHandoverForm({ ...newHandoverForm, payment_status: e.target.value as 'Pending' | 'Paid' })}
-                  >
-                    <option value="Pending">Pending Payment (Collect at counter)</option>
-                    <option value="Paid">Paid (Paid online to renter)</option>
-                  </select>
-                </div>
-                <div className="field">
-                  <label>Payment Method</label>
-                  <select
-                    value={newHandoverForm.payment_method}
-                    onChange={(e) => setNewHandoverForm({ ...newHandoverForm, payment_method: e.target.value as 'Cash' | 'Online' })}
-                  >
-                    <option value="Cash">Cash</option>
-                    <option value="Online">GCash / Maya / Online</option>
-                  </select>
-                </div>
-              </div>
-              <div className="field">
-                <label>Payment Receipt Proof (if Paid)</label>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) => setNewHandoverReceiptFile(e.target.files?.[0] || null)}
-                />
-              </div>
-              <div className="field">
-                <label>Notes / Claimant Instructions</label>
-                <textarea
-                  rows={2}
-                  placeholder="e.g. Reference code, claimant will show ID"
-                  value={newHandoverForm.notes}
-                  onChange={(e) => setNewHandoverForm({ ...newHandoverForm, notes: e.target.value })}
-                />
-              </div>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1.25rem' }}>
-              <button className="btn-ghost" type="button" onClick={() => setIsNewHandoverModalOpen(false)}>Cancel</button>
-              <button className="btn" type="button" disabled={busy} onClick={addNewHandover}>
-                {busy ? 'Saving…' : 'Save Pick-up Entry'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ════════════ MODAL 3: EDIT HANDOVER ENTRY ════════════ */}
-      {editingTx && (
-        <div className="modal-overlay" onClick={() => setEditingTx(null)}>
-          <div className="modal-card" style={{ maxWidth: 540 }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Edit Pick-up Entry: {editingTx.products?.product_name || editingTx.product_name}</h3>
-              <button className="modal-close" onClick={() => setEditingTx(null)}><X size={18} /></button>
-            </div>
-            <p className="muted" style={{ fontSize: '0.85rem', marginTop: 0 }}>
-              Update customer, authorized claimant, or payment details for this item.
-            </p>
-            <div className="grid" style={{ gridTemplateColumns: '1fr', gap: '0.85rem' }}>
-              <div className="field">
-                <label>Buyer / Customer Name *</label>
-                <input
-                  placeholder="e.g. Juan dela Cruz"
-                  value={editTxForm.buyer_name}
-                  onChange={(e) => setEditTxForm({ ...editTxForm, buyer_name: e.target.value })}
-                />
-              </div>
-              <div className="field">
-                <label>Authorized Alternate Claimant</label>
-                <input
-                  placeholder="e.g. Maria Santos (relative / courier)"
-                  value={editTxForm.authorized_pickup_name}
-                  onChange={(e) => setEditTxForm({ ...editTxForm, authorized_pickup_name: e.target.value })}
-                />
-              </div>
-              <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
-                <div className="field">
-                  <label>Payment Status</label>
-                  <select
-                    value={editTxForm.payment_status}
-                    onChange={(e) => setEditTxForm({ ...editTxForm, payment_status: e.target.value as 'Pending' | 'Paid' })}
-                  >
-                    <option value="Pending">Pending Payment (Collect at counter)</option>
-                    <option value="Paid">Paid (Paid online to renter)</option>
-                  </select>
-                </div>
-                <div className="field">
-                  <label>Payment Method</label>
-                  <select
-                    value={editTxForm.payment_method}
-                    onChange={(e) => setEditTxForm({ ...editTxForm, payment_method: e.target.value as 'Cash' | 'Online' })}
-                  >
-                    <option value="Cash">Cash</option>
-                    <option value="Online">GCash / Maya / Online</option>
-                  </select>
-                </div>
-              </div>
-              <div className="field">
-                <label>Update Receipt Proof (Optional)</label>
-                {editingTx.receipt_image_url && (
-                  <div style={{ marginBottom: 6 }}>
-                    <img
-                      src={editingTx.receipt_image_url}
-                      alt="Current receipt"
-                      style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 4, border: '1px solid #ddd' }}
-                    />
-                    <span className="muted" style={{ fontSize: '0.75rem', marginLeft: 8 }}>Current receipt uploaded</span>
-                  </div>
-                )}
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) => setEditTxReceiptFile(e.target.files?.[0] || null)}
-                />
-              </div>
-              <div className="field">
-                <label>Notes / Claimant Instructions</label>
-                <textarea
-                  rows={2}
-                  placeholder="e.g. Reference code, note on claimant"
-                  value={editTxForm.notes}
-                  onChange={(e) => setEditTxForm({ ...editTxForm, notes: e.target.value })}
-                />
-              </div>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1.25rem' }}>
-              <button className="btn-ghost" type="button" onClick={() => setEditingTx(null)}>Cancel</button>
-              <button className="btn" type="button" disabled={busy} onClick={updateHandover}>
-                {busy ? 'Saving…' : 'Update Handover Info'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ════════════ MODAL 4: RECEIPT PROOF ZOOM ════════════ */}
+      {/* ════════════ RECEIPT ZOOM MODAL ════════════ */}
       {previewReceipt && (
         <div className="modal-overlay" onClick={() => setPreviewReceipt(null)}>
-          <div className="modal-card" style={{ maxWidth: 580, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+          <div className="modal-card" style={{ maxWidth: 600, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>Receipt Proof</h3>
+              <h3>Payment Proof</h3>
               <button className="modal-close" onClick={() => setPreviewReceipt(null)}><X size={18} /></button>
             </div>
-            <img
-              src={previewReceipt}
-              alt="Receipt proof"
-              style={{ maxWidth: '100%', maxHeight: '75vh', objectFit: 'contain', marginTop: 12, borderRadius: 8 }}
-            />
+            <img src={previewReceipt} alt="Receipt proof" style={{ maxWidth: '100%', maxHeight: '75vh', objectFit: 'contain', marginTop: 12 }} />
           </div>
         </div>
       )}
 
-      {/* ════════════ MODAL 5: PRODUCT GALLERY MODAL ════════════ */}
-      <ProductGalleryModal
-        product={galleryProduct}
-        isOpen={Boolean(galleryProduct)}
-        onClose={() => setGalleryProduct(null)}
-        userRole="Renter"
+      {/* ════════════ GALLERY MODAL ════════════ */}
+      {galleryProduct && (
+        <ProductGalleryModal isOpen={Boolean(galleryProduct)} product={galleryProduct} onClose={() => setGalleryProduct(null)} />
+      )}
+
+      {/* ════════════ SIGN OUT CONFIRM MODAL ════════════ */}
+      <ConfirmModal
+        isOpen={showSignOutConfirm}
+        title="Sign Out"
+        message="Are you sure you want to sign out of your Renter account?"
+        confirmText="Sign Out"
+        cancelText="Stay Signed In"
+        isDanger={true}
+        onConfirm={() => {
+          setShowSignOutConfirm(false)
+          signOut()
+        }}
+        onCancel={() => setShowSignOutConfirm(false)}
       />
-    </section>
+    </div>
   )
 }

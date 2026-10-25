@@ -89,7 +89,7 @@ export default function ReservationsPage() {
           ? reservations.filter((r) => r.customer_id === user.user_id)
           : user.role === 'Renter'
             ? reservations.filter((r) => r.products?.renter_id === user.user_id || r.customer_id === user.user_id)
-            : reservations
+            : reservations.filter((r) => r.cube_id && !r.product_id)
       setRows(visible)
     }
   }
@@ -370,11 +370,13 @@ export default function ReservationsPage() {
     <section>
       <div className="page-header">
         <div>
-          <h1>{user.role === 'Customer' ? 'My Reservations' : 'Reservations Hub'}</h1>
+          <h1>{isStaffOrOwner ? 'Cube Reservations' : user.role === 'Customer' ? 'My Reservations' : 'Reservations Hub'}</h1>
           <p className="lede">
-            {user.role === 'Customer'
+            {isStaffOrOwner
+              ? 'Review and approve cube rental reservations to generate and activate lease agreements.'
+              : user.role === 'Customer'
               ? 'Manage your reserved shop products and cube rental reservations before they expire.'
-              : 'Review and confirm product customer reservations, or approve cube rental reservations for contracts.'}
+              : 'Review and track customer and cube reservations.'}
           </p>
         </div>
         {counts.pending > 0 && isStaffOrOwner && (
@@ -399,33 +401,35 @@ export default function ReservationsPage() {
         )}
       </div>
 
-      {/* ── Type Filter Tabs (Separating Products vs Cubes) ── */}
-      <div style={{ display: 'flex', gap: '0.6rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
-        <button
-          type="button"
-          className={typeFilter === 'all' ? 'btn' : 'btn-ghost'}
-          onClick={() => setTypeFilter('all')}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.88rem' }}
-        >
-          <CalendarCheck size={16} /> All Reservations ({counts.all})
-        </button>
-        <button
-          type="button"
-          className={typeFilter === 'products' ? 'btn' : 'btn-ghost'}
-          onClick={() => setTypeFilter('products')}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.88rem' }}
-        >
-          <Package size={16} /> Product Reservations ({counts.products})
-        </button>
-        <button
-          type="button"
-          className={typeFilter === 'cubes' ? 'btn' : 'btn-ghost'}
-          onClick={() => setTypeFilter('cubes')}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.88rem' }}
-        >
-          <Box size={16} /> Cube Reservations ({counts.cubes})
-        </button>
-      </div>
+      {/* ── Type Filter Tabs (Only shown for Customer/Renter, as Admin/Staff is for Cube Reservations only) ── */}
+      {!isStaffOrOwner && (
+        <div style={{ display: 'flex', gap: '0.6rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className={typeFilter === 'all' ? 'btn' : 'btn-ghost'}
+            onClick={() => setTypeFilter('all')}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.88rem' }}
+          >
+            <CalendarCheck size={16} /> All Reservations ({counts.all})
+          </button>
+          <button
+            type="button"
+            className={typeFilter === 'products' ? 'btn' : 'btn-ghost'}
+            onClick={() => setTypeFilter('products')}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.88rem' }}
+          >
+            <Package size={16} /> Product Reservations ({counts.products})
+          </button>
+          <button
+            type="button"
+            className={typeFilter === 'cubes' ? 'btn' : 'btn-ghost'}
+            onClick={() => setTypeFilter('cubes')}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.88rem' }}
+          >
+            <Box size={16} /> Cube Reservations ({counts.cubes})
+          </button>
+        </div>
+      )}
 
       {/* ── Filter & Search Toolbar ── */}
       <div

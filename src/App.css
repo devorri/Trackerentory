@@ -997,6 +997,111 @@ textarea {
   min-height: 100svh;
 }
 
+/* ── Renter Dashboard Workspace Layout (Image 3) ── */
+.renter-shell {
+  display: flex;
+  min-height: calc(100svh - 70px);
+  background: #ffffff;
+}
+
+.renter-sidebar {
+  width: 260px;
+  background: #fafafa;
+  border-right: 1px solid #e5e7eb;
+  padding: 1.5rem 1rem;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.renter-sidebar-header {
+  padding: 0 0.5rem 1.25rem;
+  border-bottom: 1px solid #e5e7eb;
+  margin-bottom: 1.25rem;
+}
+
+.renter-sidebar-header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 900;
+  color: #000;
+  letter-spacing: -0.02em;
+}
+
+.renter-sidebar-header span {
+  font-size: 0.75rem;
+  color: #16a34a;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.renter-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  flex: 1;
+}
+
+.renter-nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: 10px;
+  background: transparent;
+  border: none;
+  color: #4b5563;
+  font-size: 0.88rem;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  width: 100%;
+}
+
+.renter-nav-btn:hover {
+  background: #f3f4f6;
+  color: #000000;
+}
+
+.renter-nav-btn.active {
+  background: #000000;
+  color: #ffffff;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.12);
+}
+
+.renter-main {
+  flex: 1;
+  padding: 2rem clamp(1rem, 3vw, 2.5rem);
+  min-width: 0;
+  background: #ffffff;
+}
+
+@media (max-width: 900px) {
+  .renter-shell {
+    flex-direction: column;
+  }
+  .renter-sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid #e5e7eb;
+    padding: 1rem;
+  }
+  .renter-nav-list {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+  .renter-nav-btn {
+    width: auto;
+    font-size: 0.82rem;
+    padding: 0.5rem 0.75rem;
+  }
+  .renter-main {
+    padding: 1.5rem 1rem;
+  }
+}
+
 /* ── Modal Overlay & Dialog ── */
 .modal-overlay {
   position: fixed;
