@@ -24,7 +24,7 @@ const DEFAULT_TERMS = `1. Renter may place products in the assigned Display or P
 4. Upon expiry without approved extension, the cube shall automatically return to Available status.
 5. Both parties may print and sign this agreement as a legally binding physical hard copy.`
 
-type FilterStatus = 'All' | 'Active' | 'Expiring Soon' | 'Pending' | 'Expired' | 'Extension Requests'
+type FilterStatus = 'All' | 'Active' | 'Expiring Soon' | 'Pending' | 'Expired' | 'Extension Requests' | 'Cube Payment'
 
 export default function ContractsPage() {
   const { user } = useAuth()
@@ -45,6 +45,10 @@ export default function ContractsPage() {
   const [editingContract, setEditingContract] = useState<Contract | null>(null)
   const [declineTarget, setDeclineTarget] = useState<Contract | null>(null)
   const [saving, setSaving] = useState(false)
+
+  // Contract Payments state (for Cube Payment multi-month tracking)
+  const [contractPayments, setContractPayments] = useState<any[]>([])
+  const [paymentMopMap, setPaymentMopMap] = useState<Record<string, 'Cash' | 'Online'>>({})
 
   // Form states
   const [createForm, setCreateForm] = useState({
@@ -110,6 +114,15 @@ export default function ContractsPage() {
       }
     } catch {
       // table might not exist yet
+    }
+
+    try {
+      const { data: payData, error: payErr } = await supabase.from('contract_payments').select('*')
+      if (!payErr && payData) {
+        setContractPayments(payData)
+      }
+    } catch {
+      // fallback
     }
   }
 
@@ -259,6 +272,78 @@ export default function ContractsPage() {
     }
     void load()
   }
+
+  async function markMonthPaid(c: Contract, monthIndex: number) {
+    const key = `${c.contract_id}-${monthIndex}`
+    const mop = paymentMopMap[key] || 'Cash'
+    setSaving(true)
+    try {
+      const { error } = await supabase.from('contract_payments').upsert(
+        {
+          contract_id: c.contract_id,
+          renter_id: c.renter_id,
+          cube_id: c.cube_id,
+          month_index: monthIndex,
+          amount: c.cubes?.price_per_month || 0,
+          status: 'Paid',
+          payment_method: mop,
+          payment_date: new Date().toISOString(),
+        },
+        { onConflict: 'contract_id,month_index' }
+      )
+      if (error) {
+        setContractPayments((prev) => [
+          ...prev.filter((p) => !(p.contract_id === c.contract_id && p.month_index === monthIndex)),
+          {
+            contract_id: c.contract_id,
+            renter_id: c.renter_id,
+            cube_id: c.cube_id,
+            month_index: monthIndex,
+            amount: c.cubes?.price_per_month || 0,
+            status: 'Paid',
+            payment_method: mop,
+            payment_date: new Date().toISOString(),
+          },
+        ])
+      }
+    } catch {
+      setContractPayments((prev) => [
+        ...prev.filter((p) => !(p.contract_id === c.contract_id && p.month_index === monthIndex)),
+        {
+          contract_id: c.contract_id,
+          renter_id: c.renter_id,
+          cube_id: c.cube_id,
+          month_index: monthIndex,
+          amount: c.cubes?.price_per_month || 0,
+          status: 'Paid',
+          payment_method: mop,
+          payment_date: new Date().toISOString(),
+        },
+      ])
+    }
+    setSaving(false)
+    void load()
+  }
+
+  // Segregate Renters into Display vs Pick-up
+  const displayRenters = useMemo(() => {
+    const displayRenterIds = new Set(
+      contracts.filter((c) => c.cubes?.type === 'Display').map((c) => c.renter_id)
+    )
+    return renters.filter((r) => displayRenterIds.has(r.user_id))
+  }, [contracts, renters])
+
+  const pickupRenters = useMemo(() => {
+    const pickupRenterIds = new Set(
+      contracts.filter((c) => c.cubes?.type === 'Pick-up').map((c) => c.renter_id)
+    )
+    return renters.filter((r) => pickupRenterIds.has(r.user_id))
+  }, [contracts, renters])
+
+  const otherRenters = useMemo(() => {
+    const existingIds = new Set(contracts.map((c) => c.renter_id))
+    return renters.filter((r) => !existingIds.has(r.user_id))
+  }, [contracts, renters])
 
   async function handleApprovePending(c: Contract) {
     setSaving(true)
@@ -623,39 +708,20 @@ export default function ContractsPage() {
         )}
       </div>
 
-      {/* ── Summary Stats ── */}
-      <div className="grid no-print" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem', marginBottom: '1.75rem' }}>
+      {/* ── Summary Stats (Item 20: 3 cards removed) ── */}
+      <div className="grid no-print" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.75rem' }}>
         <div className="panel" style={{ padding: '1.15rem' }}>
           <div className="muted" style={{ fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase' }}>Total Agreements</div>
           <div style={{ fontSize: '1.8rem', fontWeight: 800, marginTop: '0.3rem' }}>{metrics.total}</div>
-        </div>
-        <div
-          className="panel"
-          style={{ padding: '1.15rem', borderLeft: '4px solid #f59e0b', cursor: 'pointer' }}
-          onClick={() => setFilterStatus('Pending')}
-          title="Click to view pending reservations"
-        >
-          <div className="muted" style={{ fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase' }}>Pending Reservations</div>
-          <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#d97706', marginTop: '0.3rem' }}>{metrics.pending}</div>
         </div>
         <div className="panel" style={{ padding: '1.15rem', borderLeft: '4px solid #16a34a' }}>
           <div className="muted" style={{ fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase' }}>Active Contracts</div>
           <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#16a34a', marginTop: '0.3rem' }}>{metrics.active}</div>
         </div>
-        <div className="panel" style={{ padding: '1.15rem', borderLeft: '4px solid #f59e0b' }}>
-          <div className="muted" style={{ fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase' }}>Expiring (≤ 7 Days)</div>
-          <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#d97706', marginTop: '0.3rem' }}>{metrics.expiring}</div>
-        </div>
         <div className="panel" style={{ padding: '1.15rem', borderLeft: '4px solid #dc2626' }}>
           <div className="muted" style={{ fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase' }}>Expired</div>
           <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#dc2626', marginTop: '0.3rem' }}>{metrics.expired}</div>
         </div>
-        {isOwner && (
-          <div className="panel" style={{ padding: '1.15rem', borderLeft: '4px solid #2563eb' }}>
-            <div className="muted" style={{ fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase' }}>Active Monthly Rent</div>
-            <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#2563eb', marginTop: '0.5rem' }}>{peso(metrics.monthlyIncome)}</div>
-          </div>
-        )}
       </div>
 
       {/* ── Filter & Search Toolbar ── */}
@@ -673,14 +739,24 @@ export default function ContractsPage() {
             </button>
           ))}
           {isOwner && (
-            <button
-              type="button"
-              className={filterStatus === 'Extension Requests' ? 'btn' : 'btn-ghost'}
-              style={{ fontSize: '0.85rem', padding: '0.45rem 0.9rem' }}
-              onClick={() => setFilterStatus('Extension Requests')}
-            >
-              Extension Requests {extensionRequests.filter((e) => e.status === 'Pending').length > 0 && `(${extensionRequests.filter((e) => e.status === 'Pending').length})`}
-            </button>
+            <>
+              <button
+                type="button"
+                className={filterStatus === 'Extension Requests' ? 'btn' : 'btn-ghost'}
+                style={{ fontSize: '0.85rem', padding: '0.45rem 0.9rem' }}
+                onClick={() => setFilterStatus('Extension Requests')}
+              >
+                Extension Requests {extensionRequests.filter((e) => e.status === 'Pending').length > 0 && `(${extensionRequests.filter((e) => e.status === 'Pending').length})`}
+              </button>
+              <button
+                type="button"
+                className={filterStatus === 'Cube Payment' ? 'btn' : 'btn-ghost'}
+                style={{ fontSize: '0.85rem', padding: '0.45rem 0.9rem' }}
+                onClick={() => setFilterStatus('Cube Payment')}
+              >
+                Cube Payment
+              </button>
+            </>
           )}
         </div>
 
@@ -778,6 +854,111 @@ export default function ContractsPage() {
             </tbody>
           </table>
           {extensionRequests.length === 0 && <div className="empty" style={{ padding: '2rem' }}>No extension requests submitted yet.</div>}
+        </div>
+      ) : filterStatus === 'Cube Payment' ? (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Contract #</th>
+                <th>Renter</th>
+                <th>Assigned Cube</th>
+                <th>Monthly Rate</th>
+                <th>Lease Period</th>
+                <th>Installment / Month</th>
+                <th>Payment Status</th>
+                <th>Mode of Payment</th>
+                <th style={{ textAlign: 'right' }}>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {contracts
+                .filter((c) => {
+                  if (!search.trim()) return true
+                  const q = search.toLowerCase()
+                  const rName = ((c.users as any)?.full_name || '').toLowerCase()
+                  const cubeNum = (c.cubes?.cube_number || '').toLowerCase()
+                  return rName.includes(q) || cubeNum.includes(q) || String(c.contract_id).includes(q)
+                })
+                .flatMap((c) => {
+                  const startD = new Date(c.start_date)
+                  const endD = new Date(c.end_date)
+                  const diffMonths = Math.max(1, Math.round((endD.getTime() - startD.getTime()) / (1000 * 60 * 60 * 24 * 30)))
+                  const renterName = (c.users as any)?.full_name || 'Renter'
+                  const cubeNum = c.cubes?.cube_number || `#${c.cube_id}`
+                  const cubeType = c.cubes?.type || '—'
+                  const rate = c.cubes?.price_per_month || 0
+
+                  return Array.from({ length: diffMonths }, (_, i) => {
+                    const monthIndex = i + 1
+                    const isMonth1 = monthIndex === 1
+                    const record = contractPayments.find(
+                      (p) => p.contract_id === c.contract_id && p.month_index === monthIndex
+                    )
+                    const isPaid = isMonth1 || record?.status === 'Paid'
+                    const key = `${c.contract_id}-${monthIndex}`
+                    const mop = record?.payment_method || paymentMopMap[key] || 'Cash'
+
+                    return (
+                      <tr key={`${c.contract_id}-m${monthIndex}`}>
+                        <td><strong>#{c.contract_id}</strong></td>
+                        <td><strong>{renterName}</strong></td>
+                        <td>
+                          <span className="badge info">Cube #{cubeNum} ({cubeType})</span>
+                        </td>
+                        <td>{peso(rate)}</td>
+                        <td>
+                          <span style={{ fontSize: '0.82rem' }}>{c.start_date} → {c.end_date}</span>
+                        </td>
+                        <td>
+                          <strong>Month {monthIndex} of {diffMonths}</strong>
+                          {isMonth1 && <span className="muted" style={{ fontSize: '0.72rem', display: 'block' }}>Initial Advance</span>}
+                        </td>
+                        <td>
+                          <span className={`status-pill ${isPaid ? 'confirmed' : 'pending'}`}>
+                            {isPaid ? 'Paid' : 'Pending'}
+                          </span>
+                        </td>
+                        <td>
+                          {isPaid ? (
+                            <span className="badge ok">{mop}</span>
+                          ) : (
+                            <select
+                              value={mop}
+                              onChange={(e) =>
+                                setPaymentMopMap({
+                                  ...paymentMopMap,
+                                  [key]: e.target.value as 'Cash' | 'Online',
+                                })
+                              }
+                              style={{ padding: '0.2rem 0.45rem', fontSize: '0.78rem', borderRadius: 6 }}
+                            >
+                              <option value="Cash">Cash</option>
+                              <option value="Online">Online</option>
+                            </select>
+                          )}
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          {isPaid ? (
+                            <span className="badge ok" style={{ fontSize: '0.74rem' }}>Paid</span>
+                          ) : (
+                            <button
+                              className="btn"
+                              type="button"
+                              style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem', background: '#16a34a', color: '#fff', border: 'none' }}
+                              onClick={() => void markMonthPaid(c, monthIndex)}
+                            >
+                              Mark as Paid
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })
+                })}
+            </tbody>
+          </table>
+          {contracts.length === 0 && <div className="empty" style={{ padding: '2rem' }}>No contracts registered for cube payment tracking.</div>}
         </div>
       ) : (
         <div className="table-wrap">
@@ -1081,11 +1262,29 @@ export default function ContractsPage() {
                     onChange={(e) => setCreateForm({ ...createForm, renter_id: e.target.value })}
                   >
                     <option value="">Select registered renter…</option>
-                    {renters.map((r) => (
-                      <option key={r.user_id} value={r.user_id}>
-                        {r.full_name} {r.email ? `(${r.email})` : ''}
-                      </option>
-                    ))}
+                    <optgroup label="Display Cubes Renters">
+                      {displayRenters.map((r) => (
+                        <option key={`disp-${r.user_id}`} value={r.user_id}>
+                          {r.full_name} {r.email ? `(${r.email})` : ''}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Pick-up Cubes Renters">
+                      {pickupRenters.map((r) => (
+                        <option key={`pick-${r.user_id}`} value={r.user_id}>
+                          {r.full_name} {r.email ? `(${r.email})` : ''}
+                        </option>
+                      ))}
+                    </optgroup>
+                    {otherRenters.length > 0 && (
+                      <optgroup label="New / Other Renters">
+                        {otherRenters.map((r) => (
+                          <option key={`oth-${r.user_id}`} value={r.user_id}>
+                            {r.full_name} {r.email ? `(${r.email})` : ''}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                 </div>
               )}
@@ -1097,11 +1296,20 @@ export default function ContractsPage() {
                   onChange={(e) => setCreateForm({ ...createForm, cube_id: e.target.value })}
                 >
                   <option value="">Choose a cube…</option>
-                  {cubes.map((c) => (
-                    <option key={c.cube_id} value={c.cube_id}>
-                      Cube {c.cube_number} · {c.type} ({peso(c.price_per_month)}/mo) — {c.status}
-                    </option>
-                  ))}
+                  <optgroup label="Display Cubes">
+                    {cubes.filter((c) => c.type === 'Display').map((c) => (
+                      <option key={c.cube_id} value={c.cube_id}>
+                        Cube {c.cube_number} ({peso(c.price_per_month)}/mo) — {c.status}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Pick-up Cubes">
+                    {cubes.filter((c) => c.type === 'Pick-up').map((c) => (
+                      <option key={c.cube_id} value={c.cube_id}>
+                        Cube {c.cube_number} ({peso(c.price_per_month)}/mo) — {c.status}
+                      </option>
+                    ))}
+                  </optgroup>
                 </select>
               </div>
 

@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { X, ArrowRight, Search, ChevronLeft, ChevronRight, Camera, CheckCircle2 } from 'lucide-react'
+import { X, ArrowRight, Search, ChevronLeft, ChevronRight, Camera, CheckCircle2, Box } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import { type Reservation, type Cube, type Product, peso, isReservationExpired, todayISO, addMonths } from '../lib/types'
@@ -24,6 +24,7 @@ export default function ProductsPage() {
   const [search, setSearch] = useState('')
   const [activeImage, setActiveImage] = useState<Record<number, number>>({})
   const [galleryProduct, setGalleryProduct] = useState<Product | null>(null)
+  const [galleryCube, setGalleryCube] = useState<Cube | null>(null)
   const [reservedModalOpen, setReservedModalOpen] = useState(false)
 
   useEffect(() => {
@@ -138,13 +139,20 @@ export default function ProductsPage() {
     setLoading(true)
     await supabase.from('reservations').update({ status: 'Cancelled' }).eq('status', 'Pending').lt('expiry_time', new Date().toISOString())
     const [pRes, rRes, cRes] = await Promise.all([
-      supabase.from('products').select('*').is('deleted_at', null).order('created_at', { ascending: false }),
+      supabase.from('products').select('*, cubes(cube_number, type, status)').is('deleted_at', null).order('created_at', { ascending: false }),
       supabase.from('reservations').select('*, cubes(*)').in('status', ['Pending', 'Confirmed']),
       supabase.from('cubes').select('*').is('deleted_at', null).order('cube_number'),
     ])
     setLoading(false)
     if (!pRes.error) {
-      setProducts(pRes.data?.length ? pRes.data : [])
+      const allProds = (pRes.data || []) as (Product & { cubes?: Cube | null })[]
+      // Strictly exclude products from Pick-up cubes. Catalogue is for Display products only!
+      const displayOnly = allProds.filter((p) => {
+        const cType = p.cubes?.type
+        if (cType === 'Pick-up') return false
+        return true
+      })
+      setProducts(displayOnly)
     }
     if (!rRes.error) {
       setReservations(rRes.data || [])
@@ -433,11 +441,17 @@ export default function ProductsPage() {
                   >
                     <div
                       className="card-media"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setGalleryCube(cube)
+                      }}
+                      title="Click to view cube picture"
                       style={{
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
                         background: '#f4f5f7',
+                        cursor: 'zoom-in',
                       }}
                     >
                       {cube.image_url ? (
@@ -613,6 +627,136 @@ export default function ProductsPage() {
             >
               Okay
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ CUBE IMAGE / DETAILS PREVIEW MODAL (Item 24) ═══ */}
+      {galleryCube && (
+        <div
+          className="modal-overlay"
+          onClick={() => setGalleryCube(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 100000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1.25rem',
+            background: 'rgba(0, 0, 0, 0.65)',
+            backdropFilter: 'blur(5px)',
+          }}
+        >
+          <div
+            className="modal-card"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: 620,
+              width: '95vw',
+              borderRadius: 24,
+              background: '#ffffff',
+              boxShadow: '0 25px 60px rgba(0, 0, 0, 0.35)',
+              border: '1px solid #e2e8f0',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              maxHeight: '90vh',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.25rem 1.5rem', borderBottom: '1px solid #e2e8f0' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 800 }}>Cube #{galleryCube.cube_number}</h3>
+                <span className="badge" style={{ background: '#dcfce7', color: '#166534', marginTop: 4, fontSize: '0.72rem' }}>
+                  {galleryCube.type} Cube • {galleryCube.status}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="btn-ghost"
+                style={{ padding: '0.35rem', borderRadius: '50%' }}
+                onClick={() => setGalleryCube(null)}
+                aria-label="Close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div style={{ padding: '1.5rem', overflowY: 'auto' }}>
+              <div
+                style={{
+                  width: '100%',
+                  height: 320,
+                  borderRadius: 16,
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  overflow: 'hidden',
+                  marginBottom: '1.25rem',
+                }}
+              >
+                {galleryCube.image_url ? (
+                  <img
+                    src={galleryCube.image_url}
+                    alt={`Cube ${galleryCube.cube_number}`}
+                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                  />
+                ) : (
+                  <div style={{ textAlign: 'center', color: '#94a3b8' }}>
+                    <Box size={56} style={{ margin: '0 auto 0.5rem', opacity: 0.6 }} />
+                    <p style={{ margin: 0, fontWeight: 600 }}>No custom image uploaded for this cube</p>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.85rem', background: '#f8fafc', padding: '1rem', borderRadius: 12, border: '1px solid #e2e8f0' }}>
+                <div>
+                  <div className="muted" style={{ fontSize: '0.75rem', textTransform: 'uppercase', fontWeight: 700 }}>Rate / Month</div>
+                  <strong style={{ fontSize: '1.1rem', color: '#0f172a' }}>{peso(galleryCube.price_per_month)}</strong>
+                </div>
+                <div>
+                  <div className="muted" style={{ fontSize: '0.75rem', textTransform: 'uppercase', fontWeight: 700 }}>Cube Type</div>
+                  <strong style={{ fontSize: '1rem', color: '#0f172a' }}>{galleryCube.type}</strong>
+                </div>
+                {(galleryCube.width_cm || galleryCube.height_cm) && (
+                  <div>
+                    <div className="muted" style={{ fontSize: '0.75rem', textTransform: 'uppercase', fontWeight: 700 }}>Dimensions</div>
+                    <strong style={{ fontSize: '1rem', color: '#0f172a' }}>{galleryCube.width_cm ?? '—'}cm × {galleryCube.height_cm ?? '—'}cm</strong>
+                  </div>
+                )}
+                {galleryCube.location && (
+                  <div>
+                    <div className="muted" style={{ fontSize: '0.75rem', textTransform: 'uppercase', fontWeight: 700 }}>Location</div>
+                    <strong style={{ fontSize: '1rem', color: '#0f172a' }}>{galleryCube.location}</strong>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', padding: '1rem 1.5rem', borderTop: '1px solid #e2e8f0', background: '#ffffff', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => setGalleryCube(null)}
+              >
+                Close
+              </button>
+              {galleryCube.status === 'Available' && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    const cId = galleryCube.cube_id
+                    setGalleryCube(null)
+                    handleCubeClick(cId)
+                  }}
+                >
+                  Reserve Cube #{galleryCube.cube_number}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}

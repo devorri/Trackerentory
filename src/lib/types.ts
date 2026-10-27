@@ -84,6 +84,28 @@ export type ContractExtension = {
   users?: { full_name: string; email?: string; phone_number?: string } | null
 }
 
+export type ContractPayment = {
+  payment_id: number
+  contract_id: number
+  renter_id: number | null
+  cube_id: number | null
+  month_number: number
+  due_date: string
+  amount: number
+  payment_status: 'Pending' | 'Paid'
+  payment_method: 'Cash' | 'Online' | null
+  receipt_image_url: string | null
+  paid_at: string | null
+  processed_by: number | null
+  notes: string | null
+  created_at?: string
+  updated_at?: string
+  contracts?: Contract | null
+  cubes?: Cube | null
+  users?: { full_name: string } | null
+  processor?: { full_name: string; role: Role } | null
+}
+
 export type Transaction = {
   transaction_id: number
   product_id: number | null
@@ -171,8 +193,12 @@ export const DEFAULT_PRODUCT_CATEGORIES = [
   'Toys & Collectibles',
   'Crafts & Handcrafted',
   'Electronics & Gadgets',
-  'Home & Living',
   'Stationery & Stickers',
   'Health & Wellness',
 ] as const
 
+export const DEFAULT_CONTRACT_TERMS = `1. Renter may place products in the assigned Display or Pick-up cube only.
+2. Monthly rental fee is due as agreed; Owner reserves the right to withhold renter payouts until sales inventory records match.
+3. Contract may be extended from the Renter dashboard within the 3-day grace period following expiration.
+4. Upon expiry without approved extension after 3 days, the cube shall automatically return to Available status for other consignors.
+5. Both parties may print and sign this agreement as a legally binding physical hard copy.`

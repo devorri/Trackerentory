@@ -299,7 +299,8 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
         </div>
       )}
 
-      {filter !== 'Pick-up' && <div className="panel no-print" style={{ marginBottom: '2rem' }}>
+      {/* Manual Entry Form only on generic/all view (Item 11: hidden on Display Tracking) */}
+      {filter === 'All' && <div className="panel no-print" style={{ marginBottom: '2rem' }}>
         <h2 style={{ marginTop: 0 }}>Record New Transaction / Hand-over</h2>
         <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
           
@@ -506,22 +507,9 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                       <span className="badge info">{cubeNum}</span>
                     </td>
                     <td>
-                      <select
-                        value={t.payment_status}
-                        onChange={(e) => void updateRow(t, { payment_status: e.target.value as 'Pending' | 'Paid' })}
-                        style={{
-                          padding: '0.25rem 0.5rem',
-                          fontSize: '0.8rem',
-                          borderRadius: 6,
-                          fontWeight: 700,
-                          color: t.payment_status === 'Paid' ? '#166534' : '#92400e',
-                          background: t.payment_status === 'Paid' ? '#dcfce7' : '#fef3c7',
-                          border: '1px solid #cbd5e1',
-                        }}
-                      >
-                        <option value="Pending">Pending</option>
-                        <option value="Paid">Paid</option>
-                      </select>
+                      <span className={`status-pill ${t.payment_status === 'Paid' ? 'confirmed' : 'pending'}`}>
+                        {t.payment_status}
+                      </span>
                     </td>
                     <td>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -598,8 +586,10 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                 <th>Product</th>
                 <th>Product Info</th>
                 <th>Price</th>
+                <th>Renter Name</th>
                 <th>Authorized Alternate</th>
                 <th>Payment Status</th>
+                <th>Mode of Payment</th>
                 <th>Cube #</th>
                 <th>Notes</th>
                 <th className="no-print" style={{ textAlign: 'right' }}>Status</th>
@@ -608,6 +598,8 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
             <tbody>
               {visible.map((t) => {
                 const prod = t.products
+                const renterId = prod?.renter_id || t.renter_id
+                const rName = renterId ? renterMap.get(renterId) : '—'
                 const cubeNum = prod?.cubes?.cube_number || t.cubes?.cube_number || '—'
                 const isPickedUp = t.pickup_status === 'Picked-up'
 
@@ -621,45 +613,45 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                       </div>
                     </td>
                     <td>{peso(prod?.price)}</td>
+                    <td><strong>{rName}</strong></td>
                     <td>{t.authorized_pickup_name || <span className="muted">—</span>}</td>
+                    <td>
+                      <span className={`status-pill ${t.payment_status === 'Paid' ? 'confirmed' : 'pending'}`}>
+                        {t.payment_status}
+                      </span>
+                    </td>
                     <td>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                         <select
-                          value={t.payment_status}
-                          onChange={(e) => void updateRow(t, { payment_status: e.target.value as 'Pending' | 'Paid' })}
-                          style={{
-                            padding: '0.25rem 0.5rem',
-                            fontSize: '0.8rem',
-                            borderRadius: 6,
-                            fontWeight: 700,
-                            color: t.payment_status === 'Paid' ? '#166534' : '#92400e',
-                            background: t.payment_status === 'Paid' ? '#dcfce7' : '#fef3c7',
-                            border: '1px solid #cbd5e1',
-                          }}
+                          value={t.payment_method || 'Cash'}
+                          onChange={(e) => void updateRow(t, { payment_method: e.target.value as 'Cash' | 'Online' })}
+                          style={{ padding: '0.25rem 0.45rem', fontSize: '0.78rem', borderRadius: 6 }}
                         >
-                          <option value="Pending">Pending</option>
-                          <option value="Paid">Paid</option>
+                          <option value="Cash">Cash</option>
+                          <option value="Online">Online</option>
                         </select>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          {t.receipt_image_url ? (
-                            <img
-                              src={t.receipt_image_url}
-                              alt="Receipt"
-                              style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid #cbd5e1' }}
-                              onClick={() => setPreviewReceipt(t.receipt_image_url)}
-                              title="Click to view receipt proof"
-                            />
-                          ) : null}
-                          <label style={{ fontSize: '0.72rem', cursor: 'pointer', color: '#2563eb', textDecoration: 'underline' }}>
-                            {t.receipt_image_url ? 'Change receipt' : 'Attach receipt'}
-                            <input
-                              type="file"
-                              accept="image/*"
-                              style={{ display: 'none' }}
-                              onChange={(e) => void onReceiptFile(e.target.files?.[0] || null, (url) => void updateRow(t, { receipt_image_url: url }))}
-                            />
-                          </label>
-                        </div>
+                        {t.payment_method === 'Online' && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {t.receipt_image_url ? (
+                              <img
+                                src={t.receipt_image_url}
+                                alt="Receipt"
+                                style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid #cbd5e1' }}
+                                onClick={() => setPreviewReceipt(t.receipt_image_url)}
+                                title="Click to view receipt proof"
+                              />
+                            ) : null}
+                            <label style={{ fontSize: '0.72rem', cursor: 'pointer', color: '#2563eb', textDecoration: 'underline' }}>
+                              {t.receipt_image_url ? 'Change' : 'Attach'}
+                              <input
+                                type="file"
+                                accept="image/*"
+                                style={{ display: 'none' }}
+                                onChange={(e) => void onReceiptFile(e.target.files?.[0] || null, (url) => void updateRow(t, { receipt_image_url: url, payment_method: 'Online' }))}
+                              />
+                            </label>
+                          </div>
+                        )}
                       </div>
                     </td>
                     <td>
@@ -669,18 +661,28 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                       <span style={{ fontSize: '0.82rem', color: '#444' }}>{t.notes || '—'}</span>
                     </td>
                     <td className="no-print" style={{ textAlign: 'right' }}>
-                      {isPickedUp ? (
-                        <span className="badge ok" style={{ fontSize: '0.74rem' }}>Picked Up</span>
-                      ) : (
+                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+                        {isPickedUp ? (
+                          <span className="badge ok" style={{ fontSize: '0.74rem' }}>Picked Up</span>
+                        ) : (
+                          <button
+                            className="btn"
+                            type="button"
+                            style={{ padding: '0.25rem 0.55rem', fontSize: '0.74rem', background: '#2563eb', color: '#fff', border: 'none' }}
+                            onClick={() => void updateRow(t, { pickup_status: 'Picked-up', payment_status: 'Paid' })}
+                          >
+                            Mark Picked-up
+                          </button>
+                        )}
                         <button
-                          className="btn"
+                          className="btn-ghost"
                           type="button"
-                          style={{ padding: '0.25rem 0.55rem', fontSize: '0.74rem', background: '#2563eb', color: '#fff', border: 'none' }}
-                          onClick={() => void updateRow(t, { pickup_status: 'Picked-up' })}
+                          style={{ padding: '0.25rem 0.55rem', fontSize: '0.74rem', color: '#dc2626' }}
+                          onClick={() => void cancelTransaction(t)}
                         >
-                          Mark Picked-up
+                          Cancel
                         </button>
-                      )}
+                      </div>
                     </td>
                   </tr>
                 )

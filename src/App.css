@@ -3,6 +3,9 @@
   display: flex;
   flex-direction: column;
   background: #ffffff;
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
 }
 
 /* ── Editorial Header ── */
@@ -115,10 +118,13 @@
 /* ── Main Layout ── */
 main {
   width: min(var(--max), calc(100% - 3rem));
+  max-width: 100%;
+  min-width: 0;
   margin: 0 auto;
   padding: 2rem 0 5rem;
   flex: 1;
   animation: rise 0.4s ease both;
+  box-sizing: border-box;
 }
 
 section {
@@ -883,6 +889,9 @@ textarea {
   display: flex;
   min-height: 100svh;
   background: #ffffff;
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
 }
 
 .admin-sidebar {
@@ -993,8 +1002,131 @@ textarea {
   flex: 1;
   padding: 2.5rem clamp(1.5rem, 4vw, 3rem);
   width: calc(100% - 260px);
+  max-width: calc(100% - 260px);
+  min-width: 0;
   background: #ffffff;
   min-height: 100svh;
+  box-sizing: border-box;
+}
+
+/* ── Admin Topbar with Storefront Links ── */
+.admin-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  padding: 0.85rem 1.25rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  margin-bottom: 2rem;
+}
+
+.admin-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.admin-topbar-title {
+  font-weight: 800;
+  font-size: 0.95rem;
+  color: #0f172a;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.admin-topbar-storefront {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.admin-storefront-label {
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748b;
+  margin-right: 0.25rem;
+}
+
+.admin-store-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.35rem 0.75rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #334155;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  text-decoration: none;
+  transition: all 0.15s ease;
+}
+
+.admin-store-link:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+  border-color: #94a3b8;
+}
+
+.admin-store-link.active {
+  background: #0f172a;
+  color: #ffffff;
+  border-color: #0f172a;
+}
+
+/* ── Tables & Table Wrappers ── */
+.table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin-bottom: 1.5rem;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+  text-align: left;
+}
+
+.table th,
+.table td {
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid #f1f5f9;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.table th {
+  background: #f8fafc;
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 2px solid #e2e8f0;
+}
+
+.table tbody tr:hover {
+  background: #f8fafc;
+}
+
+.table-wrap::-webkit-scrollbar {
+  height: 6px;
+}
+
+.table-wrap::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
 }
 
 /* ── Renter Dashboard Workspace Layout (Image 3) ── */
@@ -1002,6 +1134,9 @@ textarea {
   display: flex;
   min-height: calc(100svh - 70px);
   background: #ffffff;
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
 }
 
 .renter-sidebar {
@@ -1390,6 +1525,21 @@ textarea {
     margin-left: 0 !important;
     padding: 1.25rem 1rem !important;
     width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  main {
+    width: calc(100% - 1.5rem) !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    padding: 1.25rem 0 3rem !important;
+    box-sizing: border-box !important;
+  }
+
+  .grid {
+    grid-template-columns: 1fr !important;
   }
 
   .split {

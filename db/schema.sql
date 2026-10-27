@@ -179,5 +179,27 @@ grant select, insert, update, delete on contracts to authenticated;
 grant select, insert, update, delete on contract_extensions to authenticated;
 grant select, insert, update, delete on transactions to authenticated;
 grant select, insert, update, delete on otp_codes to authenticated;
+
+create table if not exists public.contract_payments (
+  payment_id serial primary key,
+  contract_id integer references public.contracts(contract_id) on delete cascade,
+  renter_id integer references public.users(user_id) on delete set null,
+  cube_id integer references public.cubes(cube_id) on delete set null,
+  month_number integer not null default 1,
+  due_date date not null,
+  amount numeric not null default 0.00,
+  payment_status text not null default 'Pending' check (payment_status in ('Pending', 'Paid')),
+  payment_method text check (payment_method in ('Cash', 'Online')),
+  receipt_image_url text,
+  paid_at timestamptz,
+  processed_by integer references public.users(user_id) on delete set null,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint uq_contract_month unique (contract_id, month_number)
+);
+
+grant select, insert, update, delete on contract_payments to authenticated;
 revoke all on function public.reserve_product_for_customer(integer, integer, integer) from public;
 grant execute on function public.reserve_product_for_customer(integer, integer, integer) to anon, authenticated;
+

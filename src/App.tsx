@@ -169,7 +169,7 @@ function InnerApp() {
               onClick={() => setAdminSidebarOpen(false)}
             >
               <CalendarCheck size={18} />
-              <span style={{ flex: 1 }}>Reservations</span>
+              <span style={{ flex: 1 }}>Cube Reservations</span>
               {pendingReservationsCount > 0 && (
                 <span className="badge warn" style={{ fontSize: '0.7rem', padding: '0.1rem 0.45rem' }}>
                   {pendingReservationsCount}
@@ -217,6 +217,20 @@ function InnerApp() {
                 <span>Staff Accounts</span>
               </NavLink>
             )}
+
+            <div className="admin-nav-label" style={{ marginTop: '1.25rem' }}>Storefront</div>
+            <Link to="/" className="admin-nav-item" onClick={() => setAdminSidebarOpen(false)}>
+              <Store size={18} />
+              <span>Catalogue</span>
+            </Link>
+            <Link to="/services" className="admin-nav-item" onClick={() => setAdminSidebarOpen(false)}>
+              <Tag size={18} />
+              <span>Services</span>
+            </Link>
+            <Link to="/about" className="admin-nav-item" onClick={() => setAdminSidebarOpen(false)}>
+              <FileText size={18} />
+              <span>About Us</span>
+            </Link>
           </div>
 
           <div className="admin-user-card">
@@ -236,14 +250,18 @@ function InnerApp() {
         </aside>
 
         <main className="admin-main">
-          {notices.length > 0 && (
-            <div className="alert warn no-print">
-              <strong>Contract expiry notice</strong>
-              <ul style={{ margin: '0.55rem 0 0', paddingLeft: 18 }}>
-                {notices.map((n) => <li key={n}>{n}</li>)}
-              </ul>
+          {/* Admin / Staff Top Navigation Bar with Storefront Access */}
+          <div className="admin-topbar no-print">
+            <div className="admin-topbar-left">
+              <span className="admin-topbar-title">{role === 'Owner' ? 'Owner Portal' : 'Staff Portal'}</span>
             </div>
-          )}
+            <div className="admin-topbar-storefront">
+              <span className="admin-storefront-label">Storefront:</span>
+              <NavLink to="/" className={({ isActive }) => `admin-store-link ${isActive ? 'active' : ''}`}>Catalogue</NavLink>
+              <NavLink to="/services" className={({ isActive }) => `admin-store-link ${isActive ? 'active' : ''}`}>Services</NavLink>
+              <NavLink to="/about" className={({ isActive }) => `admin-store-link ${isActive ? 'active' : ''}`}>About</NavLink>
+            </div>
+          </div>
 
           <Routes>
             <Route path="/owner" element={<OwnerDashboard />} />
@@ -254,6 +272,9 @@ function InnerApp() {
             <Route path="/display-tracking" element={<TransactionsPage defaultFilter="Display" pageTitle="Display Tracking" />} />
             <Route path="/reservations" element={<ReservationsPage />} />
             <Route path="/staff" element={<StaffManagement />} />
+            <Route path="/" element={<ProductsPage />} />
+            <Route path="/services" element={<ServicesPage />} />
+            <Route path="/about" element={<AboutPage />} />
             <Route path="*" element={<Navigate to={role === 'Owner' ? '/owner' : '/pickup'} replace />} />
           </Routes>
         </main>
@@ -297,8 +318,6 @@ function InnerApp() {
           <NavLink to="/about" onClick={() => setMobileMenuOpen(false)}>About</NavLink>
           {role === 'Customer' && <NavLink to="/reservations" onClick={() => setMobileMenuOpen(false)}>Reservations</NavLink>}
           {role === 'Renter' && <NavLink to="/renter" onClick={() => setMobileMenuOpen(false)}>Renter</NavLink>}
-          {role === 'Renter' && <NavLink to="/reservations" onClick={() => setMobileMenuOpen(false)}>Reservations</NavLink>}
-          {role === 'Renter' && <NavLink to="/contracts" onClick={() => setMobileMenuOpen(false)}>Contracts</NavLink>}
         </div>
 
         <div className="nav-user">

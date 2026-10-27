@@ -461,10 +461,10 @@ export default function LoginPage() {
             {signupStep === 'form' && (
               <>
                 <div className="field">
-                  <label>Full name (letters only)</label>
+                  <label>Full name</label>
                   <input
                     value={fullName}
-                    onChange={(e) => setFullName(e.target.value.replace(/[0-9]/g, ''))}
+                    onChange={(e) => setFullName(e.target.value)}
                     placeholder="e.g. Maria Santos"
                   />
                 </div>
@@ -473,11 +473,11 @@ export default function LoginPage() {
                   <input type="email" value={signupEmail} onChange={(e) => setSignupEmail(e.target.value)} placeholder="your@email.com" />
                 </div>
                 <div className="field">
-                  <label>Contact Number (numbers only)</label>
+                  <label>Contact Number</label>
                   <input
                     type="tel"
                     value={signupPhone}
-                    onChange={(e) => setSignupPhone(e.target.value.replace(/\D/g, '').slice(0, 11))}
+                    onChange={(e) => setSignupPhone(e.target.value)}
                     placeholder="e.g. 09171234567"
                   />
                 </div>

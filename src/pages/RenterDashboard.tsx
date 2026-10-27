@@ -31,6 +31,7 @@ import {
   type Reservation,
   type ContractExtension,
   DEFAULT_PRODUCT_CATEGORIES,
+  DEFAULT_CONTRACT_TERMS,
 } from '../lib/types'
 import { expireContracts, cancelExpiredReservations } from '../lib/maintenance'
 import { uploadPublicImage } from '../lib/storage'
@@ -87,6 +88,16 @@ export default function RenterDashboard() {
   const [extensionMonths, setExtensionMonths] = useState<number>(1)
   const [extensionNotes, setExtensionNotes] = useState<string>('')
   const [editingProduct, setEditingProduct] = useState<Product | null>(null)
+  const [editingPickupTransaction, setEditingPickupTransaction] = useState<Transaction | null>(null)
+  const [editPickupForm, setEditPickupForm] = useState({
+    product_name: '',
+    product_info: '',
+    price: '',
+    buyer_name: '',
+    authorized_alternate: '',
+    notes: '',
+  })
+  const [contractTab, setContractTab] = useState<'active' | 'extension' | 'expired'>('active')
 
   // ════════════ ADD PRODUCT DUAL FORM (Image 2) ════════════
   const [addProductType, setAddProductType] = useState<'display' | 'pickup'>('display')
@@ -228,6 +239,29 @@ export default function RenterDashboard() {
     return Array.from(new Set(products.map((p) => p.category?.trim()).filter(Boolean) as string[])).sort()
   }, [products])
 
+  const categorizedContracts = useMemo(() => {
+    const activeList: Contract[] = []
+    const extensionList: Contract[] = []
+    const expiredList: Contract[] = []
+
+    contracts.forEach((c) => {
+      const daysLeft = daysUntil(c.end_date)
+      const hasPendingExtension = extensionRequests.some(
+        (ext) => ext.contract_id === c.contract_id && ext.status === 'Pending',
+      )
+
+      if (c.status === 'Active' && daysLeft >= 0) {
+        activeList.push(c)
+      } else if ((daysLeft < 0 && daysLeft >= -3) || (hasPendingExtension && c.status !== 'Active')) {
+        extensionList.push(c)
+      } else {
+        expiredList.push(c)
+      }
+    })
+
+    return { activeList, extensionList, expiredList }
+  }, [contracts, extensionRequests])
+
   // ════════════ ADD PRODUCT HANDLERS ════════════
   function handleDisplayPhotoFiles(files: FileList | null) {
     const list = Array.from(files || [])
@@ -339,7 +373,8 @@ export default function RenterDashboard() {
         quantity: 1,
         notes: pickupForm.notes.trim() || null,
         receipt_image_url: receiptUrl,
-        processed_by: user!.user_id,
+        processed_by: null,
+        transaction_date: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       },
     ])
@@ -363,6 +398,40 @@ export default function RenterDashboard() {
     setPickupReceiptPreview(null)
     void load()
     handleSectionChange('pickup-tracking')
+  }
+
+  async function saveEditedPickupTransaction() {
+    if (!editingPickupTransaction) return
+    if (!editPickupForm.product_name.trim() || !editPickupForm.buyer_name.trim()) {
+      return alert('Product name and buyer name are required.')
+    }
+    setBusy(true)
+    const { error: txErr } = await supabase
+      .from('transactions')
+      .update({
+        product_name: editPickupForm.product_name.trim(),
+        buyer_name: editPickupForm.buyer_name.trim(),
+        authorized_pickup_name: editPickupForm.authorized_alternate.trim() || null,
+        notes: editPickupForm.notes.trim() || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('transaction_id', editingPickupTransaction.transaction_id)
+
+    if (editingPickupTransaction.product_id) {
+      await supabase
+        .from('products')
+        .update({
+          product_name: editPickupForm.product_name.trim(),
+          description: editPickupForm.product_info.trim() || null,
+          price: Number(editPickupForm.price) || 0,
+        })
+        .eq('product_id', editingPickupTransaction.product_id)
+    }
+
+    setBusy(false)
+    if (txErr) return alert('Failed updating parcel: ' + txErr.message)
+    setEditingPickupTransaction(null)
+    void load()
   }
 
   // ════════════ EXTENSION REQUEST (Only when expired) ════════════
@@ -1123,9 +1192,31 @@ export default function RenterDashboard() {
                             <td><span className="badge info">{cubeNum}</span></td>
                             <td><span style={{ fontSize: '0.82rem', color: '#555' }}>{t.notes || '—'}</span></td>
                             <td>
-                              <span className={`badge ${t.pickup_status === 'Picked-up' ? 'ok' : 'warn'}`}>
-                                {t.pickup_status === 'Picked-up' ? 'Claimed' : 'Waiting for Buyer'}
-                              </span>
+                              {t.pickup_status === 'Picked-up' ? (
+                                <span className="badge ok">Claimed</span>
+                              ) : (
+                                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                  <span className="badge warn">Waiting for Buyer</span>
+                                  <button
+                                    type="button"
+                                    className="btn-ghost"
+                                    style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem', border: '1px solid #cbd5e1' }}
+                                    onClick={() => {
+                                      setEditingPickupTransaction(t)
+                                      setEditPickupForm({
+                                        product_name: t.products?.product_name || t.product_name || '',
+                                        product_info: t.products?.description || '',
+                                        price: String(t.products?.price || 0),
+                                        buyer_name: t.buyer_name || '',
+                                        authorized_alternate: t.authorized_pickup_name || '',
+                                        notes: t.notes || '',
+                                      })
+                                    }}
+                                  >
+                                    Edit
+                                  </button>
+                                </div>
+                              )}
                             </td>
                           </tr>
                         )
@@ -1154,96 +1245,162 @@ export default function RenterDashboard() {
               </div>
             </div>
 
+            {/* 3 TABS: Active, Extension, Expired (Item 18 & 19) */}
+            <div style={{ display: 'flex', gap: '0.65rem', marginBottom: '1.25rem', borderBottom: '2px solid #efefef', paddingBottom: '0.5rem' }}>
+              <button
+                type="button"
+                className={contractTab === 'active' ? 'btn' : 'btn-ghost'}
+                onClick={() => setContractTab('active')}
+              >
+                Active Cubes ({categorizedContracts.activeList.length})
+              </button>
+              <button
+                type="button"
+                className={contractTab === 'extension' ? 'btn' : 'btn-ghost'}
+                onClick={() => setContractTab('extension')}
+              >
+                Extension (Grace Period) ({categorizedContracts.extensionList.length})
+              </button>
+              <button
+                type="button"
+                className={contractTab === 'expired' ? 'btn' : 'btn-ghost'}
+                onClick={() => setContractTab('expired')}
+              >
+                Expired & Released ({categorizedContracts.expiredList.length})
+              </button>
+            </div>
+
             {contracts.length === 0 ? (
               <div className="empty" style={{ padding: '2.5rem', textAlign: 'center' }}>
                 <p>You do not have any registered cube rental contracts yet.</p>
                 <Link to="/" className="btn" style={{ marginTop: '0.5rem' }}>Browse and Reserve a Cube</Link>
               </div>
             ) : (
-              <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.25rem', marginBottom: '2rem' }}>
-                {contracts.map((c) => {
-                  const daysLeft = daysUntil(c.end_date)
-                  const isExpired = c.status === 'Expired' || daysLeft < 0
-                  const hasPendingExtension = extensionRequests.some(
-                    (ext) => ext.contract_id === c.contract_id && ext.status === 'Pending',
-                  )
+              <div>
+                {contractTab === 'extension' && categorizedContracts.extensionList.length > 0 && (
+                  <div className="panel" style={{ background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 8, padding: '0.85rem 1.25rem', marginBottom: '1.25rem' }}>
+                    <strong style={{ color: '#92400e', fontSize: '0.9rem' }}>3-Day Grace Period for Contract Extension</strong>
+                    <p style={{ margin: '0.25rem 0 0', fontSize: '0.82rem', color: '#78350f' }}>
+                      Cubes in this tab are recently expired. You have a 3-day grace period to request an extension before the space is automatically cleared and released back to available status for other renters.
+                    </p>
+                  </div>
+                )}
+
+                {contractTab === 'expired' && categorizedContracts.expiredList.length > 0 && (
+                  <div className="panel" style={{ background: '#fee2e2', border: '1px solid #fecaca', borderRadius: 8, padding: '0.85rem 1.25rem', marginBottom: '1.25rem' }}>
+                    <strong style={{ color: '#991b1b', fontSize: '0.9rem' }}>Expired & Space Released</strong>
+                    <p style={{ margin: '0.25rem 0 0', fontSize: '0.82rem', color: '#7f1d1d' }}>
+                      These lease contracts have exceeded the 3-day grace period without an approved renewal. The cube space has been marked Available in the store catalogue.
+                    </p>
+                  </div>
+                )}
+
+                {(() => {
+                  const list = contractTab === 'active'
+                    ? categorizedContracts.activeList
+                    : contractTab === 'extension'
+                    ? categorizedContracts.extensionList
+                    : categorizedContracts.expiredList
+
+                  if (list.length === 0) {
+                    return (
+                      <div className="empty" style={{ padding: '2.5rem', textAlign: 'center' }}>
+                        No contracts in the {contractTab} tab.
+                      </div>
+                    )
+                  }
 
                   return (
-                    <div
-                      key={c.contract_id}
-                      className="card"
-                      style={{
-                        padding: '1.5rem',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '0.85rem',
-                        borderLeft: isExpired ? '4px solid #dc2626' : c.status === 'Active' ? '4px solid #16a34a' : '4px solid #f59e0b',
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <strong style={{ fontSize: '1.2rem' }}>Cube #{c.cubes?.cube_number || c.cube_id}</strong>
-                        <span className={`status-pill ${c.status === 'Active' ? 'confirmed' : isExpired ? 'cancelled' : 'pending'}`}>
-                          {isExpired ? 'Expired' : c.status}
-                        </span>
-                      </div>
+                    <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.25rem', marginBottom: '2rem' }}>
+                      {list.map((c) => {
+                        const daysLeft = daysUntil(c.end_date)
+                        const isExpired = c.status === 'Expired' || daysLeft < 0
+                        const hasPendingExtension = extensionRequests.some(
+                          (ext) => ext.contract_id === c.contract_id && ext.status === 'Pending',
+                        )
 
-                      <div className="muted" style={{ fontSize: '0.88rem' }}>
-                        Type: <strong>{c.cubes?.type}</strong> • Rate: <strong>{peso(c.cubes?.price_per_month)} / mo</strong>
-                      </div>
+                        return (
+                          <div
+                            key={c.contract_id}
+                            className="card"
+                            style={{
+                              padding: '1.5rem',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '0.85rem',
+                              borderLeft: contractTab === 'expired' ? '4px solid #dc2626' : contractTab === 'extension' ? '4px solid #f59e0b' : '4px solid #16a34a',
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <strong style={{ fontSize: '1.2rem' }}>Cube #{c.cubes?.cube_number || c.cube_id}</strong>
+                              <span className={`status-pill ${c.status === 'Active' ? 'confirmed' : isExpired ? 'cancelled' : 'pending'}`}>
+                                {isExpired ? (contractTab === 'expired' ? 'Released' : 'Grace Period') : c.status}
+                              </span>
+                            </div>
 
-                      {c.cubes?.location && (
-                        <div className="muted" style={{ fontSize: '0.82rem' }}>
-                          Location: {c.cubes.location}
-                        </div>
-                      )}
+                            <div className="muted" style={{ fontSize: '0.88rem' }}>
+                              Type: <strong>{c.cubes?.type}</strong> • Rate: <strong>{peso(c.cubes?.price_per_month)} / mo</strong>
+                            </div>
 
-                      <div style={{ fontSize: '0.85rem', background: '#f8fafc', padding: '0.65rem 0.85rem', borderRadius: 8, border: '1px solid #e2e8f0' }}>
-                        <div><strong>Agreement #{c.contract_id}</strong></div>
-                        <div className="muted" style={{ marginTop: 2 }}>
-                          {c.start_date} → {c.end_date} ({daysLeft >= 0 ? `${daysLeft} day(s) left` : 'Expired'})
-                        </div>
-                      </div>
+                            {c.cubes?.location && (
+                              <div className="muted" style={{ fontSize: '0.82rem' }}>
+                                Location: {c.cubes.location}
+                              </div>
+                            )}
 
-                      {/* Action buttons */}
-                      <div style={{ display: 'flex', gap: '0.65rem', marginTop: 'auto', paddingTop: '0.75rem', borderTop: '1px solid #f0f0f0', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <button
-                          type="button"
-                          className="btn-ghost"
-                          style={{ fontSize: '0.8rem', padding: '0.35rem 0.65rem' }}
-                          onClick={() => setViewingContract(c)}
-                        >
-                          <FileText size={14} /> View Agreement
-                        </button>
+                            <div style={{ fontSize: '0.85rem', background: '#f8fafc', padding: '0.65rem 0.85rem', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+                              <div><strong>Agreement #{c.contract_id}</strong></div>
+                              <div className="muted" style={{ marginTop: 2 }}>
+                                {c.start_date} → {c.end_date} ({daysLeft >= 0 ? `${daysLeft} day(s) left` : `${Math.abs(daysLeft)} day(s) expired`})
+                              </div>
+                            </div>
 
-                        {/* Cube extension ONLY when the contract expires (User instruction) */}
-                        {isExpired ? (
-                          hasPendingExtension ? (
-                            <span className="badge warn" style={{ fontSize: '0.75rem' }}>
-                              Extension Pending Review
-                            </span>
-                          ) : (
-                            <button
-                              type="button"
-                              className="btn"
-                              style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem', background: '#16a34a' }}
-                              onClick={() => {
-                                setExtendingContract(c)
-                                setExtensionMonths(1)
-                                setExtensionNotes('')
-                              }}
-                            >
-                              + Request Extension
-                            </button>
-                          )
-                        ) : (
-                          <span className="badge ok" style={{ fontSize: '0.75rem' }}>
-                            {daysLeft} days active
-                          </span>
-                        )}
-                      </div>
+                            {/* Action buttons */}
+                            <div style={{ display: 'flex', gap: '0.65rem', marginTop: 'auto', paddingTop: '0.75rem', borderTop: '1px solid #f0f0f0', alignItems: 'center', justifyContent: 'space-between' }}>
+                              <button
+                                type="button"
+                                className="btn-ghost"
+                                style={{ fontSize: '0.8rem', padding: '0.35rem 0.65rem' }}
+                                onClick={() => setViewingContract(c)}
+                              >
+                                <FileText size={14} /> View Agreement
+                              </button>
+
+                              {contractTab === 'extension' ? (
+                                hasPendingExtension ? (
+                                  <span className="badge warn" style={{ fontSize: '0.75rem' }}>
+                                    Extension Requested
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="btn"
+                                    style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem', background: '#16a34a' }}
+                                    onClick={() => {
+                                      setExtendingContract(c)
+                                      setExtensionMonths(1)
+                                      setExtensionNotes('')
+                                    }}
+                                  >
+                                    + Request Extension
+                                  </button>
+                                )
+                              ) : contractTab === 'expired' ? (
+                                <span className="badge bad" style={{ fontSize: '0.75rem' }}>
+                                  Expired & Released
+                                </span>
+                              ) : (
+                                <span className="badge ok" style={{ fontSize: '0.75rem' }}>
+                                  {daysLeft} days active
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
                     </div>
                   )
-                })}
+                })()}
               </div>
             )}
           </div>
@@ -1464,15 +1621,6 @@ export default function RenterDashboard() {
                   {completedSales.length}
                 </div>
               </div>
-
-              <div className="panel" style={{ padding: '1.25rem', borderLeft: '4px solid #d97706' }}>
-                <div className="muted" style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase' }}>
-                  Pending Customer Holds
-                </div>
-                <div style={{ fontSize: '1.8rem', fontWeight: 900, color: '#d97706', marginTop: '0.35rem' }}>
-                  {pendingProductResCount}
-                </div>
-              </div>
             </div>
 
             {/* Completed Orders Table */}
@@ -1586,7 +1734,7 @@ export default function RenterDashboard() {
             </div>
             <h4>Terms & Conditions</h4>
             <div style={{ maxHeight: 220, overflowY: 'auto', background: '#fff', border: '1px solid #e2e8f0', padding: '0.85rem', borderRadius: 8, fontSize: '0.82rem', whiteSpace: 'pre-wrap', color: '#444' }}>
-              {viewingContract.contract_text || 'Standard cube rental terms apply. Renter agrees to consign products and pay monthly rental fees promptly.'}
+              {viewingContract.contract_text || DEFAULT_CONTRACT_TERMS}
             </div>
             <div style={{ marginTop: '1.25rem', textAlign: 'right' }}>
               <button className="btn" type="button" onClick={() => setViewingContract(null)}>
@@ -1660,6 +1808,79 @@ export default function RenterDashboard() {
                 {busy ? 'Saving…' : 'Save Changes'}
               </button>
               <button className="btn-ghost" type="button" onClick={() => setEditingProduct(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ════════════ MODAL: EDIT PICK-UP PARCEL ════════════ */}
+      {editingPickupTransaction && (
+        <div className="modal-overlay" onClick={() => setEditingPickupTransaction(null)}>
+          <div className="modal-card" style={{ maxWidth: 520 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Edit Pick-up Parcel</h3>
+              <button className="modal-close" onClick={() => setEditingPickupTransaction(null)}><X size={18} /></button>
+            </div>
+            <div className="field">
+              <label>Product Name *</label>
+              <input
+                value={editPickupForm.product_name}
+                onChange={(e) => setEditPickupForm({ ...editPickupForm, product_name: e.target.value })}
+                placeholder="Product name"
+              />
+            </div>
+            <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '0.75rem' }}>
+              <div className="field">
+                <label>Price (₱) *</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={editPickupForm.price}
+                  onChange={(e) => setEditPickupForm({ ...editPickupForm, price: e.target.value })}
+                />
+              </div>
+              <div className="field">
+                <label>Buyer Name *</label>
+                <input
+                  value={editPickupForm.buyer_name}
+                  onChange={(e) => setEditPickupForm({ ...editPickupForm, buyer_name: e.target.value })}
+                  placeholder="Buyer name"
+                />
+              </div>
+            </div>
+            <div className="field" style={{ marginTop: '0.75rem' }}>
+              <label>Authorized Alternate Claimant</label>
+              <input
+                value={editPickupForm.authorized_alternate}
+                onChange={(e) => setEditPickupForm({ ...editPickupForm, authorized_alternate: e.target.value })}
+                placeholder="Person authorized to claim (optional)"
+              />
+            </div>
+            <div className="field" style={{ marginTop: '0.75rem' }}>
+              <label>Product Info</label>
+              <textarea
+                rows={2}
+                value={editPickupForm.product_info}
+                onChange={(e) => setEditPickupForm({ ...editPickupForm, product_info: e.target.value })}
+                placeholder="Size, shade, specifications…"
+              />
+            </div>
+            <div className="field" style={{ marginTop: '0.75rem' }}>
+              <label>Notes</label>
+              <textarea
+                rows={2}
+                value={editPickupForm.notes}
+                onChange={(e) => setEditPickupForm({ ...editPickupForm, notes: e.target.value })}
+                placeholder="Special notes for counter staff…"
+              />
+            </div>
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.25rem' }}>
+              <button className="btn" type="button" disabled={busy} onClick={saveEditedPickupTransaction} style={{ flex: 1 }}>
+                {busy ? 'Saving…' : 'Save Changes'}
+              </button>
+              <button className="btn-ghost" type="button" onClick={() => setEditingPickupTransaction(null)}>
                 Cancel
               </button>
             </div>

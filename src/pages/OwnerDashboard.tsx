@@ -1,18 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Printer, Download, X, CheckCircle2, XCircle, AlertTriangle, FileText, Box, ArrowUpDown } from 'lucide-react'
+import { Printer, Download, X, ArrowUpDown } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
-import { peso, type Contract, type Transaction, type Product, type Reservation, isReservationExpired, getReservationHoursLeft, parseReservationExpiry } from '../lib/types'
+import { peso, type Contract, type Transaction, type Product } from '../lib/types'
 import { SkeletonStat, SkeletonTable } from '../components/Skeleton'
 import TablePagination, { DEFAULT_PAGE_SIZE } from '../components/TablePagination'
-import ConfirmModal from '../components/ConfirmModal'
 
 type ReportType = 'display' | 'pickup' | 'rental'
 type DateFilterMode = 'monthly' | 'daily' | 'yearly' | 'custom'
-type DashboardSection = 'cube-reservations' | 'rentals' | 'sales' | 'reservations'
+type DashboardSection = 'sales' | 'rentals'
 const PAGE_SIZE = DEFAULT_PAGE_SIZE
 
 export default function OwnerDashboard() {
@@ -20,14 +19,13 @@ export default function OwnerDashboard() {
   const [contracts, setContracts] = useState<Contract[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [renters, setRenters] = useState<{ user_id: number; full_name: string }[]>([])
-  const [reservations, setReservations] = useState<Reservation[]>([])
   const [loading, setLoading] = useState(false)
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7))
   const [dashboardSection, setDashboardSection] = useState<DashboardSection>('sales')
-  const [pendingCubesPage, setPendingCubesPage] = useState(1)
+  const [salesFilterType, setSalesFilterType] = useState<'All' | 'Display' | 'Pick-up'>('All')
+  const [rentalFilterType, setRentalFilterType] = useState<'All' | 'Display' | 'Pick-up'>('All')
   const [rentalsPage, setRentalsPage] = useState(1)
   const [salesPage, setSalesPage] = useState(1)
-  const [reservationsPage, setReservationsPage] = useState(1)
 
   // Print Dialog State
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false)
@@ -40,7 +38,6 @@ export default function OwnerDashboard() {
   const [printEndDate, setPrintEndDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [printRenterId, setPrintRenterId] = useState<string>('all')
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
-  const [declineContractTarget, setDeclineContractTarget] = useState<Contract | null>(null)
 
   function refreshData() {
     setLoading(true)
@@ -48,13 +45,11 @@ export default function OwnerDashboard() {
       supabase.from('contracts').select('*, cubes(*), users!renter_id(user_id, full_name)'),
       supabase.from('transactions').select('*, products(*, cubes(cube_number, type)), cubes(cube_number, type), users!processed_by(full_name, role)').order('updated_at', { ascending: false }),
       supabase.from('users').select('user_id, full_name').eq('role', 'Renter').order('full_name'),
-      supabase.from('reservations').select('*, products(*, cubes(cube_number, type)), cubes(cube_number, type), customer:users!customer_id(full_name, email, phone_number)').order('expiry_time', { ascending: false }),
-    ]).then(([c, t, r, res]) => {
+    ]).then(([c, t, r]) => {
       setLoading(false)
       if (!c.error) setContracts((c.data || []) as Contract[])
       if (!t.error) setTransactions((t.data || []) as Transaction[])
       if (!r.error) setRenters((r.data || []) as { user_id: number; full_name: string }[])
-      if (!res.error) setReservations((res.data || []) as Reservation[])
     })
   }
 
@@ -62,11 +57,9 @@ export default function OwnerDashboard() {
     refreshData()
   }, [])
 
-  // Sort states for all dashboard tables
-  const [sortPendingCubes, setSortPendingCubes] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'period', dir: 'desc' })
+  // Sort states for active dashboard tables
   const [sortRentals, setSortRentals] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'renter', dir: 'asc' })
   const [sortMonthTx, setSortMonthTx] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'date', dir: 'desc' })
-  const [sortCustRes, setSortCustRes] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'expires', dir: 'asc' })
 
   function renderSortIndicator(currentCol: string, sortState: { col: string; dir: 'asc' | 'desc' }) {
     if (sortState.col !== currentCol) {
@@ -81,92 +74,6 @@ export default function OwnerDashboard() {
     } else {
       setState({ col, dir: 'asc' })
     }
-  }
-
-  async function confirmReservation(r: Reservation) {
-    const { error: resErr } = await supabase.from('reservations').update({ status: 'Confirmed' }).eq('reservation_id', r.reservation_id)
-    if (resErr) return alert('Failed to confirm reservation: ' + resErr.message)
-
-    // Automatically record sale in transactions so it immediately reflects in Owner sales!
-    if (r.product_id) {
-      const prodName = r.products
-        ? `${r.products.product_name}${r.products.variant ? ` (${r.products.variant})` : ''}`
-        : 'Product'
-
-      const { error: txErr } = await supabase.from('transactions').insert([
-        {
-          product_id: r.product_id,
-          product_name: prodName,
-          cube_id: r.products?.cube_id || r.cube_id || null,
-          renter_id: r.products?.renter_id || null,
-          buyer_name: r.customer?.full_name || 'Customer',
-          payment_status: 'Paid',
-          payment_method: 'Cash',
-          pickup_status: 'Picked-up',
-          quantity: 1,
-          listed_quantity: r.products?.stock_quantity ?? null,
-          transaction_date: new Date().toISOString(),
-          processed_by: user?.user_id || null,
-          updated_at: new Date().toISOString(),
-        },
-      ])
-
-      if (txErr) {
-        alert('Reservation confirmed, but transaction recording failed: ' + txErr.message)
-      } else {
-        alert('Reservation confirmed and payment recorded in Sales!')
-      }
-
-      // Decrement stock
-      if (r.products && r.products.stock_quantity > 0) {
-        await supabase
-          .from('products')
-          .update({ stock_quantity: Math.max(0, r.products.stock_quantity - 1) })
-          .eq('product_id', r.product_id)
-      }
-    } else {
-      alert('Reservation confirmed!')
-    }
-
-    refreshData()
-  }
-
-  async function approveContract(c: Contract) {
-    const { error } = await supabase.from('contracts').update({ status: 'Active' }).eq('contract_id', c.contract_id)
-    if (error) return alert('Failed to approve contract: ' + error.message)
-    if (c.cube_id) {
-      await supabase.from('cubes').update({ status: 'Occupied' }).eq('cube_id', c.cube_id)
-      if (c.renter_id) {
-        await supabase
-          .from('reservations')
-          .update({ status: 'Confirmed' })
-          .eq('cube_id', c.cube_id)
-          .eq('customer_id', c.renter_id)
-          .eq('status', 'Pending')
-      }
-    }
-    alert(`Contract #${c.contract_id} approved and activated! Cube ${c.cubes?.cube_number || c.cube_id} is now officially rented.`)
-    refreshData()
-  }
-
-  async function confirmDeclineContract() {
-    if (!declineContractTarget) return
-    const c = declineContractTarget
-    setDeclineContractTarget(null)
-    const { error } = await supabase.from('contracts').delete().eq('contract_id', c.contract_id)
-    if (error) return alert('Failed to decline contract: ' + error.message)
-    if (c.cube_id) {
-      await supabase.from('cubes').update({ status: 'Available' }).eq('cube_id', c.cube_id)
-      if (c.renter_id) {
-        await supabase
-          .from('reservations')
-          .update({ status: 'Cancelled' })
-          .eq('cube_id', c.cube_id)
-          .eq('customer_id', c.renter_id)
-          .eq('status', 'Pending')
-      }
-    }
-    refreshData()
   }
 
   // Map of renter_id to full_name from contracts
@@ -192,36 +99,6 @@ export default function OwnerDashboard() {
     })
     return map
   }, [contracts, renterMap])
-
-  const pendingCubeReservations = useMemo(() => {
-    return contracts.filter((c) => c.status === 'Pending')
-  }, [contracts])
-
-  const pendingCubeReservationsSorted = useMemo(() => {
-    const list = [...pendingCubeReservations]
-    const { col, dir } = sortPendingCubes
-    list.sort((a, b) => {
-      let vA: any = ''
-      let vB: any = ''
-      if (col === 'cube') {
-        vA = a.cubes?.cube_number || ''
-        vB = b.cubes?.cube_number || ''
-      } else if (col === 'renter') {
-        vA = a.users?.full_name || renterMap.get(a.renter_id || 0) || ''
-        vB = b.users?.full_name || renterMap.get(b.renter_id || 0) || ''
-      } else if (col === 'rate') {
-        vA = a.cubes?.price_per_month || 0
-        vB = b.cubes?.price_per_month || 0
-      } else if (col === 'period') {
-        vA = a.start_date || ''
-        vB = b.start_date || ''
-      }
-      if (vA < vB) return dir === 'asc' ? -1 : 1
-      if (vA > vB) return dir === 'asc' ? 1 : -1
-      return 0
-    })
-    return list
-  }, [pendingCubeReservations, sortPendingCubes, renterMap])
 
   const rentalSales = useMemo(() => {
     return contracts
@@ -289,48 +166,58 @@ export default function OwnerDashboard() {
     return list
   }, [monthTx, sortMonthTx])
 
-  const reservationsSorted = useMemo(() => {
-    const list = [...reservations]
-    const { col, dir } = sortCustRes
-    list.sort((a, b) => {
-      let vA: any = ''
-      let vB: any = ''
-      if (col === 'product') { vA = a.products?.product_name || a.cubes?.cube_number || ''; vB = b.products?.product_name || b.cubes?.cube_number || '' }
-      else if (col === 'customer') { vA = a.customer?.full_name || ''; vB = b.customer?.full_name || '' }
-      else if (col === 'cube') { vA = a.products?.cubes?.cube_number || a.cubes?.cube_number || ''; vB = b.products?.cubes?.cube_number || b.cubes?.cube_number || '' }
-      else if (col === 'price') { vA = a.products?.price || a.cubes?.price_per_month || 0; vB = b.products?.price || b.cubes?.price_per_month || 0 }
-      else if (col === 'status') { vA = a.status; vB = b.status }
-      else if (col === 'expires') { vA = parseReservationExpiry(a.expiry_time).getTime(); vB = parseReservationExpiry(b.expiry_time).getTime() }
-      if (vA < vB) return dir === 'asc' ? -1 : 1
-      if (vA > vB) return dir === 'asc' ? 1 : -1
-      return 0
-    })
-    return list
-  }, [reservations, sortCustRes])
 
-  useEffect(() => setPendingCubesPage(1), [pendingCubeReservationsSorted])
-  useEffect(() => setRentalsPage(1), [rentalSalesSorted])
-  useEffect(() => setSalesPage(1), [monthTxSorted])
-  useEffect(() => setReservationsPage(1), [reservationsSorted])
+  const isPaidTx = (t: Transaction) => t.payment_status === 'Paid' || t.pickup_status === 'Picked-up'
 
-  const pendingCubesPageRows = pendingCubeReservationsSorted.slice((pendingCubesPage - 1) * PAGE_SIZE, pendingCubesPage * PAGE_SIZE)
-  const rentalsPageRows = rentalSalesSorted.slice((rentalsPage - 1) * PAGE_SIZE, rentalsPage * PAGE_SIZE)
-  const salesPageRows = monthTxSorted.slice((salesPage - 1) * PAGE_SIZE, salesPage * PAGE_SIZE)
-  const reservationsPageRows = reservationsSorted.slice((reservationsPage - 1) * PAGE_SIZE, reservationsPage * PAGE_SIZE)
+  useEffect(() => setRentalsPage(1), [rentalFilterType, rentalSalesSorted])
+  useEffect(() => setSalesPage(1), [salesFilterType, monthTxSorted])
 
   const byType = useMemo(() => {
     let display = 0
     let pickup = 0
     for (const t of monthTx) {
-      if (t.payment_status !== 'Paid') continue
+      if (!isPaidTx(t)) continue
       const amount = Number(t.products?.price || 0) * Number(t.quantity || 1)
-      const type = t.products?.cubes?.type || t.cubes?.type
-      if (type === 'Display') display += amount
-      else if (type === 'Pick-up') pickup += amount
-      else display += amount // fallback count
+      const type = t.products?.cubes?.type || t.cubes?.type || (t.authorized_pickup_name ? 'Pick-up' : 'Display')
+      if (type === 'Pick-up') pickup += amount
+      else display += amount
     }
     return { display, pickup, total: display + pickup }
   }, [monthTx])
+
+  const filteredSalesTx = useMemo(() => {
+    return monthTxSorted.filter((t) => {
+      if (salesFilterType === 'All') return true
+      const type = t.products?.cubes?.type || t.cubes?.type || (t.authorized_pickup_name ? 'Pick-up' : 'Display')
+      return type === salesFilterType
+    })
+  }, [monthTxSorted, salesFilterType])
+
+  const filteredRentals = useMemo(() => {
+    return rentalSalesSorted.filter((r) => {
+      if (rentalFilterType === 'All') return true
+      return r.type === rentalFilterType
+    })
+  }, [rentalSalesSorted, rentalFilterType])
+
+  const filteredRentersForReport = useMemo(() => {
+    if (printReportType === 'display') {
+      const ids = new Set(
+        contracts.filter((c) => c.cubes?.type === 'Display').map((c) => c.renter_id)
+      )
+      return renters.filter((r) => ids.has(r.user_id))
+    }
+    if (printReportType === 'pickup') {
+      const ids = new Set(
+        contracts.filter((c) => c.cubes?.type === 'Pick-up').map((c) => c.renter_id)
+      )
+      return renters.filter((r) => ids.has(r.user_id))
+    }
+    return renters
+  }, [printReportType, contracts, renters])
+
+  const rentalsPageRows = filteredRentals.slice((rentalsPage - 1) * PAGE_SIZE, rentalsPage * PAGE_SIZE)
+  const salesPageRows = filteredSalesTx.slice((salesPage - 1) * PAGE_SIZE, salesPage * PAGE_SIZE)
 
   // Helper to resolve transaction renter
   const getTxRenter = (t: Transaction) => {
@@ -598,8 +485,9 @@ export default function OwnerDashboard() {
 
           <div class="report">
             <div class="header">
-              <h1>TrackErentory</h1>
-              <h2>${reportTitle}</h2>
+              <h1 style="margin: 0 0 0.25rem; font-size: 1.6rem; letter-spacing: 0.05em; text-transform: uppercase;">Arce Concept Boutique</h1>
+              <div style="font-size: 0.85rem; color: #64748b; margin-top: 2px;">TrackErentory • Cube Rental & Retail Management</div>
+              <h2 style="margin: 0.75rem 0 0; font-size: 1.15rem; color: #1e293b;">${reportTitle}</h2>
               <div class="meta">
                 <span><strong>Period:</strong> ${printPeriodLabel}</span>
                 <span><strong>Renter:</strong> ${selectedRenterName}</span>
@@ -636,20 +524,24 @@ export default function OwnerDashboard() {
         : 'Monthly Rental Payment Report'
 
     // Header Branding
-    doc.setFontSize(20)
+    doc.setFontSize(18)
     doc.setTextColor(30, 41, 59)
-    doc.text('TrackErentory', 14, 20)
+    doc.text('Arce Concept Boutique', 14, 18)
 
-    doc.setFontSize(13)
-    doc.setTextColor(71, 85, 105)
-    doc.text(reportTitle, 14, 28)
-
-    // Meta details
     doc.setFontSize(9)
     doc.setTextColor(100, 116, 139)
-    doc.text(`Period: ${printPeriodLabel}`, 14, 36)
-    doc.text(`Renter: ${selectedRenterName}`, 14, 41)
-    doc.text(`Date Generated: ${new Date().toLocaleDateString('en-PH')}`, 14, 46)
+    doc.text('TrackErentory • Cube Rental & Retail Management', 14, 23)
+
+    doc.setFontSize(12)
+    doc.setTextColor(51, 65, 85)
+    doc.text(reportTitle, 14, 30)
+
+    // Meta details
+    doc.setFontSize(8.5)
+    doc.setTextColor(100, 116, 139)
+    doc.text(`Period: ${printPeriodLabel}`, 14, 37)
+    doc.text(`Renter: ${selectedRenterName}`, 14, 42)
+    doc.text(`Date Generated: ${new Date().toLocaleDateString('en-PH')}`, 14, 47)
 
     if (printReportType === 'rental') {
       const rows = (printFilteredData.list as typeof rentalSales).map((r) => [
@@ -784,12 +676,47 @@ export default function OwnerDashboard() {
           </button>
         </div>
 
-        <nav aria-label="Sales and reports sections" className="report-section-nav no-print">
-          <button type="button" className={dashboardSection === 'sales' ? 'active' : ''} onClick={() => setDashboardSection('sales')}>Product Sales</button>
-          <button type="button" className={dashboardSection === 'cube-reservations' ? 'active' : ''} onClick={() => setDashboardSection('cube-reservations')}>Cube Reservations{pendingCubeReservations.length > 0 ? ` (${pendingCubeReservations.length})` : ''}</button>
-          <button type="button" className={dashboardSection === 'rentals' ? 'active' : ''} onClick={() => setDashboardSection('rentals')}>Monthly Rentals</button>
-          <button type="button" className={dashboardSection === 'reservations' ? 'active' : ''} onClick={() => setDashboardSection('reservations')}>Reservations ({reservations.length})</button>
-        </nav>
+        {/* TOP LEVEL SECTIONS: Product Sales & Rental Income */}
+        <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.25rem', borderBottom: '2px solid #e2e8f0', paddingBottom: '0.5rem' }}>
+          <button
+            type="button"
+            className={dashboardSection === 'sales' ? 'btn' : 'btn-ghost'}
+            style={{ fontSize: '0.95rem', padding: '0.5rem 1.25rem', fontWeight: 700 }}
+            onClick={() => setDashboardSection('sales')}
+          >
+            Product Sales
+          </button>
+          <button
+            type="button"
+            className={dashboardSection === 'rentals' ? 'btn' : 'btn-ghost'}
+            style={{ fontSize: '0.95rem', padding: '0.5rem 1.25rem', fontWeight: 700 }}
+            onClick={() => setDashboardSection('rentals')}
+          >
+            Rental Income
+          </button>
+        </div>
+
+        {/* SUB-PILLS: All | Display | Pick-up */}
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', alignItems: 'center' }}>
+          <span className="muted" style={{ fontSize: '0.82rem', fontWeight: 600 }}>Filter by Cube Type:</span>
+          {(['All', 'Display', 'Pick-up'] as const).map((t) => {
+            const isActive = dashboardSection === 'sales' ? salesFilterType === t : rentalFilterType === t
+            return (
+              <button
+                key={t}
+                type="button"
+                className={isActive ? 'btn' : 'btn-ghost'}
+                style={{ fontSize: '0.8rem', padding: '0.35rem 0.85rem' }}
+                onClick={() => {
+                  if (dashboardSection === 'sales') setSalesFilterType(t)
+                  else setRentalFilterType(t)
+                }}
+              >
+                {t}
+              </button>
+            )
+          })}
+        </div>
 
         {loading ? (
           <>
@@ -802,388 +729,296 @@ export default function OwnerDashboard() {
           </>
         ) : (
           <>
-            <div className="stat-grid">
-              <div className="stat">
-                <div className="label">Monthly rental</div>
-                <div className="value">{peso(rentalTotal)}</div>
-              </div>
-              <div className="stat">
-                <div className="label">Display sales</div>
-                <div className="value">{peso(byType.display)}</div>
-              </div>
-              <div className="stat">
-                <div className="label">Pick-up sales</div>
-                <div className="value">{peso(byType.pickup)}</div>
-              </div>
-              <div className="stat">
-                <div className="label">Product total</div>
-                <div className="value">{peso(byType.total)}</div>
-              </div>
-            </div>
-
-            {dashboardSection === 'cube-reservations' && <>
-            {/* ════════════ PENDING CUBE RESERVATIONS SECTION ════════════ */}
-            {pendingCubeReservations.length > 0 && (
-              <div style={{ marginBottom: '2.5rem' }}>
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    marginBottom: '0.75rem',
-                    flexWrap: 'wrap',
-                    gap: '0.5rem',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <div
-                      style={{
-                        background: '#fef3c7',
-                        color: '#b45309',
-                        padding: '0.35rem',
-                        borderRadius: 8,
-                        display: 'flex',
-                      }}
-                    >
-                      <AlertTriangle size={20} />
-                    </div>
-                    <div>
-                      <h2 style={{ margin: 0, fontSize: '1.25rem' }}>
-                        Cube Reservations Awaiting Contracts ({pendingCubeReservations.length})
-                      </h2>
-                      <p className="muted" style={{ margin: '0.15rem 0 0', fontSize: '0.85rem' }}>
-                        Renters have reserved these cubes. Approve to activate their lease agreement or decline.
-                      </p>
-                    </div>
-                  </div>
-                  <Link to="/contracts" className="btn-ghost" style={{ fontSize: '0.82rem' }}>
-                    Open Contracts Hub →
-                  </Link>
+            {/* ════════════ PRODUCT SALES VIEW ════════════ */}
+            {dashboardSection === 'sales' && (
+              <>
+                <div className="stat-grid" style={{ marginBottom: '1.75rem' }}>
+                  {salesFilterType === 'All' ? (
+                    <>
+                      <div className="stat">
+                        <div className="label">Total Product Sales</div>
+                        <div className="value">{peso(byType.total)}</div>
+                      </div>
+                      <div className="stat">
+                        <div className="label">Display Cube Sales</div>
+                        <div className="value">{peso(byType.display)}</div>
+                      </div>
+                      <div className="stat">
+                        <div className="label">Pick-up Cube Sales</div>
+                        <div className="value">{peso(byType.pickup)}</div>
+                      </div>
+                      <div className="stat">
+                        <div className="label">Completed Orders</div>
+                        <div className="value">{monthTx.filter(isPaidTx).length}</div>
+                      </div>
+                    </>
+                  ) : salesFilterType === 'Display' ? (
+                    <>
+                      <div className="stat">
+                        <div className="label">Display Cube Sales</div>
+                        <div className="value">{peso(byType.display)}</div>
+                      </div>
+                      <div className="stat">
+                        <div className="label">Items Sold</div>
+                        <div className="value">
+                          {monthTx
+                            .filter((t) => isPaidTx(t) && (t.products?.cubes?.type || t.cubes?.type) !== 'Pick-up')
+                            .reduce((s, t) => s + (t.quantity || 1), 0)}
+                        </div>
+                      </div>
+                      <div className="stat">
+                        <div className="label">Display Consignors</div>
+                        <div className="value">
+                          {new Set(
+                            monthTx
+                              .filter((t) => (t.products?.cubes?.type || t.cubes?.type) !== 'Pick-up')
+                              .map((t) => getTxRenter(t).id)
+                              .filter(Boolean)
+                          ).size}
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="stat">
+                        <div className="label">Pick-up Sales</div>
+                        <div className="value">{peso(byType.pickup)}</div>
+                      </div>
+                      <div className="stat">
+                        <div className="label">Parcels Picked Up</div>
+                        <div className="value">
+                          {monthTx.filter((t) => isPaidTx(t) && (t.products?.cubes?.type || t.cubes?.type) === 'Pick-up').length}
+                        </div>
+                      </div>
+                      <div className="stat">
+                        <div className="label">Pick-up Consignors</div>
+                        <div className="value">
+                          {new Set(
+                            monthTx
+                              .filter((t) => (t.products?.cubes?.type || t.cubes?.type) === 'Pick-up')
+                              .map((t) => getTxRenter(t).id)
+                              .filter(Boolean)
+                          ).size}
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
 
-                <div className="table-wrap" style={{ border: '1.5px solid #fcd34d' }}>
+                <h2>Product Sales ({salesFilterType} Cubes · {month === 'all' ? 'All Time' : month})</h2>
+                <p className="muted">Sales records for customer purchases before releasing payout.</p>
+
+                <div className="table-wrap" style={{ marginBottom: '2.5rem' }}>
                   <table className="table">
                     <thead>
                       <tr>
-                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortPendingCubes, setSortPendingCubes, 'cube')}>
-                          Cube Space {renderSortIndicator('cube', sortPendingCubes)}
+                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortMonthTx, setSortMonthTx, 'date')}>
+                          Date {renderSortIndicator('date', sortMonthTx)}
                         </th>
-                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortPendingCubes, setSortPendingCubes, 'renter')}>
-                          Renter {renderSortIndicator('renter', sortPendingCubes)}
+                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortMonthTx, setSortMonthTx, 'product')}>
+                          Product {renderSortIndicator('product', sortMonthTx)}
                         </th>
-                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortPendingCubes, setSortPendingCubes, 'rate')}>
-                          Monthly Rate {renderSortIndicator('rate', sortPendingCubes)}
+                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortMonthTx, setSortMonthTx, 'cube')}>
+                          Cube / Type {renderSortIndicator('cube', sortMonthTx)}
                         </th>
-                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortPendingCubes, setSortPendingCubes, 'period')}>
-                          Requested Lease Period {renderSortIndicator('period', sortPendingCubes)}
+                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortMonthTx, setSortMonthTx, 'renter')}>
+                          Renter {renderSortIndicator('renter', sortMonthTx)}
                         </th>
-                        <th>Status</th>
-                        <th style={{ textAlign: 'right', minWidth: 160 }}>Actions</th>
+                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortMonthTx, setSortMonthTx, 'amount')}>
+                          Amount {renderSortIndicator('amount', sortMonthTx)}
+                        </th>
+                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortMonthTx, setSortMonthTx, 'payment')}>
+                          Payment {renderSortIndicator('payment', sortMonthTx)}
+                        </th>
+                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortMonthTx, setSortMonthTx, 'processed')}>
+                          Processed by {renderSortIndicator('processed', sortMonthTx)}
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
-                      {pendingCubesPageRows.map((c) => {
-                        const renterName =
-                          c.users?.full_name || renterMap.get(c.renter_id || 0) || `Renter #${c.renter_id}`
+                      {salesPageRows.map((t) => {
+                        const r = getTxRenter(t)
                         return (
-                          <tr key={c.contract_id}>
+                          <tr key={t.transaction_id}>
                             <td>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                <Box size={16} color="#6d28d9" />
-                                <strong>Cube {c.cubes?.cube_number || `#${c.cube_id}`}</strong>
-                              </div>
-                              <div style={{ marginTop: 2 }}>
-                                <span
-                                   className={`badge ${c.cubes?.type === 'Pick-up' ? 'pickup' : 'info'}`}
-                                  style={{ fontSize: '0.68rem' }}
-                                >
-                                  {c.cubes?.type || 'Standard'} Cube
-                                </span>
-                              </div>
+                              {new Date(t.updated_at || t.transaction_date).toLocaleString('en-PH')}
+                              <div className="muted" style={{ fontSize: '0.72rem' }}>Last action</div>
                             </td>
+                            <td>{t.products?.product_name || t.product_name}</td>
+                            <td>{t.products?.cubes?.cube_number || t.cubes?.cube_number || '—'} · {t.products?.cubes?.type || t.cubes?.type || '—'}</td>
+                            <td>{r.name}</td>
+                            <td>{peso(Number(t.products?.price || 0) * Number(t.quantity || 1))}</td>
                             <td>
-                              <div style={{ fontWeight: 600 }}>{renterName}</div>
-                              <div className="muted" style={{ fontSize: '0.75rem' }}>
-                                Agreement #{c.contract_id}
-                              </div>
-                            </td>
-                            <td>
-                              <strong>{c.cubes?.price_per_month ? peso(c.cubes.price_per_month) : '—'}</strong>
-                              <span className="muted" style={{ fontSize: '0.72rem' }}> / mo</span>
-                            </td>
-                            <td>
-                              <div>
-                                {c.start_date} → {c.end_date}
-                              </div>
-                            </td>
-                            <td>
-                              <span className="badge warn" style={{ fontSize: '0.72rem' }}>
-                                Pending Approval
+                              <span className={`status-pill ${t.payment_status === 'Paid' ? 'confirmed' : 'pending'}`}>
+                                {t.payment_status}
                               </span>
                             </td>
-                            <td style={{ textAlign: 'right' }}>
-                              <div className="row" style={{ justifyContent: 'flex-end', gap: '0.4rem' }}>
-                                <button
-                                  className="btn"
-                                  type="button"
-                                  style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
-                                  onClick={() => void approveContract(c)}
-                                  title="Approve reservation & activate contract"
-                                >
-                                  <CheckCircle2 size={14} /> Approve Contract
-                                </button>
-                                <button
-                                  className="btn-ghost"
-                                  type="button"
-                                  style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem', color: '#dc2626' }}
-                                  onClick={() => setDeclineContractTarget(c)}
-                                  title="Decline reservation & release cube"
-                                >
-                                  <XCircle size={14} /> Decline
-                                </button>
-                                <Link
-                                  to="/contracts"
-                                  className="btn-ghost"
-                                  style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem' }}
-                                  title="View in Contracts"
-                                >
-                                  <FileText size={14} />
-                                </Link>
-                              </div>
-                            </td>
+                            <td>{t.users ? `${t.users.full_name} (${t.users.role})` : '—'}</td>
                           </tr>
                         )
                       })}
                     </tbody>
+                    <tfoot>
+                      <tr>
+                        <td colSpan={4}><strong>Total ({salesFilterType} Sales)</strong></td>
+                        <td colSpan={3}>
+                          <strong>
+                            {peso(
+                              filteredSalesTx
+                                .filter(isPaidTx)
+                                .reduce((s, t) => s + Number(t.products?.price || 0) * Number(t.quantity || 1), 0)
+                            )}
+                          </strong>
+                        </td>
+                      </tr>
+                    </tfoot>
                   </table>
                 </div>
-                <TablePagination page={pendingCubesPage} totalItems={pendingCubeReservationsSorted.length} onPageChange={setPendingCubesPage} />
-              </div>
+                <TablePagination page={salesPage} totalItems={filteredSalesTx.length} onPageChange={setSalesPage} />
+                {filteredSalesTx.length === 0 && <div className="empty" style={{ marginBottom: '2.5rem' }}>No product sales transactions found for this selection.</div>}
+              </>
             )}
 
-            </>}
+            {/* ════════════ RENTAL INCOME VIEW ════════════ */}
+            {dashboardSection === 'rentals' && (
+              <>
+                <div className="stat-grid" style={{ marginBottom: '1.75rem' }}>
+                  {rentalFilterType === 'All' ? (
+                    <>
+                      <div className="stat">
+                        <div className="label">Total Monthly Rental</div>
+                        <div className="value">{peso(rentalTotal)}</div>
+                      </div>
+                      <div className="stat">
+                        <div className="label">Display Cubes Rent</div>
+                        <div className="value">
+                          {peso(
+                            rentalSales
+                              .filter((r) => r.status === 'Active' && r.type === 'Display')
+                              .reduce((s, r) => s + r.monthly, 0)
+                          )}
+                        </div>
+                      </div>
+                      <div className="stat">
+                        <div className="label">Pick-up Cubes Rent</div>
+                        <div className="value">
+                          {peso(
+                            rentalSales
+                              .filter((r) => r.status === 'Active' && r.type === 'Pick-up')
+                              .reduce((s, r) => s + r.monthly, 0)
+                          )}
+                        </div>
+                      </div>
+                      <div className="stat">
+                        <div className="label">Active Leased Cubes</div>
+                        <div className="value">{contracts.filter((c) => c.status === 'Active').length}</div>
+                      </div>
+                    </>
+                  ) : rentalFilterType === 'Display' ? (
+                    <>
+                      <div className="stat">
+                        <div className="label">Display Cubes Rent</div>
+                        <div className="value">
+                          {peso(
+                            rentalSales
+                              .filter((r) => r.status === 'Active' && r.type === 'Display')
+                              .reduce((s, r) => s + r.monthly, 0)
+                          )}
+                        </div>
+                      </div>
+                      <div className="stat">
+                        <div className="label">Active Display Cubes</div>
+                        <div className="value">
+                          {contracts.filter((c) => c.status === 'Active' && c.cubes?.type === 'Display').length}
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="stat">
+                        <div className="label">Pick-up Cubes Rent</div>
+                        <div className="value">
+                          {peso(
+                            rentalSales
+                              .filter((r) => r.status === 'Active' && r.type === 'Pick-up')
+                              .reduce((s, r) => s + r.monthly, 0)
+                          )}
+                        </div>
+                      </div>
+                      <div className="stat">
+                        <div className="label">Active Pick-up Cubes</div>
+                        <div className="value">
+                          {contracts.filter((c) => c.status === 'Active' && c.cubes?.type === 'Pick-up').length}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
 
-            {dashboardSection === 'rentals' && <>
-            <h2>Monthly rental payments</h2>
-            <div className="table-wrap">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortRentals, setSortRentals, 'renter')}>
-                      Renter {renderSortIndicator('renter', sortRentals)}
-                    </th>
-                    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortRentals, setSortRentals, 'cube')}>
-                      Cube {renderSortIndicator('cube', sortRentals)}
-                    </th>
-                    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortRentals, setSortRentals, 'type')}>
-                      Type {renderSortIndicator('type', sortRentals)}
-                    </th>
-                    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortRentals, setSortRentals, 'monthly')}>
-                      Monthly rent {renderSortIndicator('monthly', sortRentals)}
-                    </th>
-                    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortRentals, setSortRentals, 'period')}>
-                      Contract period {renderSortIndicator('period', sortRentals)}
-                    </th>
-                    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortRentals, setSortRentals, 'status')}>
-                      Status {renderSortIndicator('status', sortRentals)}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rentalsPageRows.map((r, i) => (
-                    <tr key={`${r.cube}-${i}`}>
-                      <td>{r.renter}</td>
-                      <td>{r.cube}</td>
-                      <td>{r.type}</td>
-                      <td>{peso(r.monthly)}</td>
-                      <td>{r.period}</td>
-                      <td>
-                        <span
-                          className={`badge ${r.status === 'Active' ? 'ok' : 'warn'}`}
-                          style={{ fontSize: '0.72rem' }}
-                        >
-                          {r.status === 'Pending' ? 'Pending Approval' : r.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr>
-                    <td colSpan={3}><strong>Active monthly rental income</strong></td>
-                    <td colSpan={3}><strong>{peso(rentalTotal)}</strong></td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-            <TablePagination page={rentalsPage} totalItems={rentalSalesSorted.length} onPageChange={setRentalsPage} />
-
-            </>}
-
-            {dashboardSection === 'sales' && <>
-            <h2>Display / Pick-up sales ({month === 'all' ? 'All Time' : month})</h2>
-            <p className="muted">Use this to match renter records before releasing money.</p>
-            <div className="table-wrap" style={{ marginBottom: '2.5rem' }}>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortMonthTx, setSortMonthTx, 'date')}>
-                      Date {renderSortIndicator('date', sortMonthTx)}
-                    </th>
-                    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortMonthTx, setSortMonthTx, 'product')}>
-                      Product {renderSortIndicator('product', sortMonthTx)}
-                    </th>
-                    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortMonthTx, setSortMonthTx, 'cube')}>
-                      Cube / Type {renderSortIndicator('cube', sortMonthTx)}
-                    </th>
-                    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortMonthTx, setSortMonthTx, 'renter')}>
-                      Renter {renderSortIndicator('renter', sortMonthTx)}
-                    </th>
-                    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortMonthTx, setSortMonthTx, 'amount')}>
-                      Amount {renderSortIndicator('amount', sortMonthTx)}
-                    </th>
-                    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortMonthTx, setSortMonthTx, 'payment')}>
-                      Payment {renderSortIndicator('payment', sortMonthTx)}
-                    </th>
-                    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortMonthTx, setSortMonthTx, 'processed')}>
-                      Processed by {renderSortIndicator('processed', sortMonthTx)}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {salesPageRows.map((t) => {
-                    const r = getTxRenter(t)
-                    return (
-                      <tr key={t.transaction_id}>
-                        <td>
-                          {new Date(t.updated_at || t.transaction_date).toLocaleString('en-PH')}
-                          <div className="muted" style={{ fontSize: '0.72rem' }}>Last action</div>
-                        </td>
-                        <td>{t.products?.product_name || t.product_name}</td>
-                        <td>{t.products?.cubes?.cube_number || t.cubes?.cube_number || '—'} · {t.products?.cubes?.type || t.cubes?.type || '—'}</td>
-                        <td>{r.name}</td>
-                        <td>{peso(Number(t.products?.price || 0) * Number(t.quantity || 1))}</td>
-                        <td>
-                          <span className={`status-pill ${t.payment_status === 'Paid' ? 'confirmed' : 'pending'}`}>
-                            {t.payment_status}
-                          </span>
-                        </td>
-                        <td>{t.users ? `${t.users.full_name} (${t.users.role})` : '—'}</td>
+                <h2>Monthly Rental Agreements ({rentalFilterType} Cubes)</h2>
+                <div className="table-wrap">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortRentals, setSortRentals, 'renter')}>
+                          Renter {renderSortIndicator('renter', sortRentals)}
+                        </th>
+                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortRentals, setSortRentals, 'cube')}>
+                          Cube {renderSortIndicator('cube', sortRentals)}
+                        </th>
+                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortRentals, setSortRentals, 'type')}>
+                          Type {renderSortIndicator('type', sortRentals)}
+                        </th>
+                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortRentals, setSortRentals, 'monthly')}>
+                          Monthly Rent {renderSortIndicator('monthly', sortRentals)}
+                        </th>
+                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortRentals, setSortRentals, 'period')}>
+                          Contract Period {renderSortIndicator('period', sortRentals)}
+                        </th>
+                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortRentals, setSortRentals, 'status')}>
+                          Status {renderSortIndicator('status', sortRentals)}
+                        </th>
                       </tr>
-                    )
-                  })}
-                </tbody>
-                <tfoot>
-                  <tr>
-                    <td colSpan={4}><strong>Paid Display</strong></td>
-                    <td colSpan={3}><strong>{peso(byType.display)}</strong></td>
-                  </tr>
-                  <tr>
-                    <td colSpan={4}><strong>Paid Pick-up</strong></td>
-                    <td colSpan={3}><strong>{peso(byType.pickup)}</strong></td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-            <TablePagination page={salesPage} totalItems={monthTxSorted.length} onPageChange={setSalesPage} />
-            {monthTx.length === 0 && <div className="empty" style={{ marginBottom: '2.5rem' }}>No transactions found for this period.</div>}
-
-            </>}
-
-            {dashboardSection === 'reservations' && <>
-            {/* ════════════ PENDING CUSTOMER RESERVATIONS ════════════ */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-              <div>
-                <h2 style={{ margin: 0 }}>Customer Product Reservations</h2>
-                <p className="muted" style={{ margin: '0.2rem 0 0' }}>Review and confirm pending customer reservations directly from the Owner dashboard.</p>
-              </div>
-              <Link to="/reservations" className="btn-ghost" style={{ fontSize: '0.82rem' }}>
-                View All Reservations →
-              </Link>
-            </div>
-            <div className="table-wrap" style={{ marginBottom: '2.5rem' }}>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortCustRes, setSortCustRes, 'product')}>
-                      Product / Cube {renderSortIndicator('product', sortCustRes)}
-                    </th>
-                    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortCustRes, setSortCustRes, 'customer')}>
-                      Customer {renderSortIndicator('customer', sortCustRes)}
-                    </th>
-                    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortCustRes, setSortCustRes, 'cube')}>
-                      Cube No. {renderSortIndicator('cube', sortCustRes)}
-                    </th>
-                    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortCustRes, setSortCustRes, 'price')}>
-                      Price {renderSortIndicator('price', sortCustRes)}
-                    </th>
-                    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortCustRes, setSortCustRes, 'status')}>
-                      Status {renderSortIndicator('status', sortCustRes)}
-                    </th>
-                    <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortCustRes, setSortCustRes, 'expires')}>
-                      Expires {renderSortIndicator('expires', sortCustRes)}
-                    </th>
-                    <th style={{ textAlign: 'right' }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {reservationsPageRows.map((r) => {
-                    const expired = isReservationExpired(r)
-                    const hoursLeft = getReservationHoursLeft(r)
-                    const isPending = r.status === 'Pending' && !expired
-                    return (
-                      <tr key={r.reservation_id}>
-                        <td>
-                          <strong>{r.products?.product_name || (r.cube_id ? `Cube #${r.cubes?.cube_number}` : 'Product')}</strong>
-                          {r.products?.variant && <div className="muted" style={{ fontSize: '0.75rem' }}>{r.products.variant}</div>}
-                        </td>
-                        <td>
-                          {r.customer?.full_name || '—'}
-                          {r.customer?.phone_number && <div className="muted" style={{ fontSize: '0.75rem' }}>{r.customer.phone_number}</div>}
-                        </td>
-                        <td>{r.products?.cubes?.cube_number || r.cubes?.cube_number || '—'}</td>
-                        <td>{r.products ? peso(r.products.price) : '—'}</td>
-                        <td>
-                          <span className={`badge ${r.status === 'Cancelled' || expired ? 'bad' : r.status === 'Confirmed' ? 'ok' : 'warn'}`}>
-                            {expired ? 'Expired' : r.status}
-                          </span>
-                        </td>
-                        <td>
-                          {parseReservationExpiry(r.expiry_time).toLocaleString('en-PH')}
-                          <div className="muted" style={{ fontSize: '0.75rem' }}>
-                            {expired ? '(Expired)' : `${hoursLeft}h left`}
-                          </div>
-                        </td>
-                        <td style={{ textAlign: 'right' }}>
-                          <div className="row" style={{ justifyContent: 'flex-end', gap: '0.4rem' }}>
-                            {isPending && (
-                              <button
-                                className="btn"
-                                type="button"
-                                style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
-                                onClick={() => confirmReservation(r)}
-                              >
-                                Confirm
-                              </button>
-                            )}
-                            <Link
-                              to={`/pickup?claimId=${r.reservation_id}`}
-                              className="btn-ghost"
-                              style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+                    </thead>
+                    <tbody>
+                      {rentalsPageRows.map((r, i) => (
+                        <tr key={`${r.cube}-${i}`}>
+                          <td>{r.renter}</td>
+                          <td>{r.cube}</td>
+                          <td>{r.type}</td>
+                          <td>{peso(r.monthly)}</td>
+                          <td>{r.period}</td>
+                          <td>
+                            <span
+                              className={`badge ${r.status === 'Active' ? 'ok' : 'warn'}`}
+                              style={{ fontSize: '0.72rem' }}
                             >
-                              Process in Cashier
-                            </Link>
-                          </div>
+                              {r.status === 'Pending' ? 'Pending Approval' : r.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <td colSpan={3}><strong>Active Rental Income ({rentalFilterType})</strong></td>
+                        <td colSpan={3}>
+                          <strong>
+                            {peso(
+                              filteredRentals
+                                .filter((r) => r.status === 'Active')
+                                .reduce((s, r) => s + r.monthly, 0)
+                            )}
+                          </strong>
                         </td>
                       </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <TablePagination page={reservationsPage} totalItems={reservationsSorted.length} onPageChange={setReservationsPage} />
-            {reservations.length === 0 && <div className="empty" style={{ marginBottom: '2.5rem' }}>No customer reservations found.</div>}
-            </>}
+                    </tfoot>
+                  </table>
+                </div>
+                <TablePagination page={rentalsPage} totalItems={filteredRentals.length} onPageChange={setRentalsPage} />
+                {filteredRentals.length === 0 && <div className="empty" style={{ marginBottom: '2.5rem' }}>No rental contracts found for this selection.</div>}
+              </>
+            )}
           </>
         )}
       </div>
@@ -1202,11 +1037,14 @@ export default function OwnerDashboard() {
                 <label>Report Type</label>
                 <select
                   value={printReportType}
-                  onChange={(e) => setPrintReportType(e.target.value as ReportType)}
+                  onChange={(e) => {
+                    setPrintReportType(e.target.value as ReportType)
+                    setPrintRenterId('all')
+                  }}
                 >
-                  <option value="display">Display Sales Report (Monthly display transactions)</option>
-                  <option value="pickup">Pick-up Sales Report (Monthly pick-up transactions)</option>
-                  <option value="rental">Monthly Rental Payment Report (Cube rental income only)</option>
+                  <option value="display">Display Sales Report</option>
+                  <option value="pickup">Pick-up Sales Report</option>
+                  <option value="rental">Monthly Rental Payment Report</option>
                 </select>
               </div>
 
@@ -1289,8 +1127,8 @@ export default function OwnerDashboard() {
                   value={printRenterId}
                   onChange={(e) => setPrintRenterId(e.target.value)}
                 >
-                  <option value="all">All Renters</option>
-                  {renters.map((r) => (
+                  <option value="all">All Renters ({filteredRentersForReport.length})</option>
+                  {filteredRentersForReport.map((r) => (
                     <option key={r.user_id} value={r.user_id}>
                       {r.full_name} (#{r.user_id})
                     </option>
@@ -1346,23 +1184,12 @@ export default function OwnerDashboard() {
         </div>
       )}
 
-      {/* Decline Contract Confirmation Modal */}
-      <ConfirmModal
-        isOpen={Boolean(declineContractTarget)}
-        title="Decline Contract Agreement"
-        message={declineContractTarget ? `Are you sure you want to decline contract #${declineContractTarget.contract_id}? The cube will be released back to Available.` : ''}
-        confirmText="Decline Contract"
-        cancelText="Cancel"
-        isDanger={true}
-        onConfirm={confirmDeclineContract}
-        onCancel={() => setDeclineContractTarget(null)}
-      />
-
       {/* ════════════ DEDICATED PRINT DOCUMENT ════════════ */}
       <div id="owner-print-report" className="print-report-container">
         <div className="print-report-header">
-          <h2>TrackErentory</h2>
-          <h3>
+          <h2 style={{ margin: 0, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Arce Concept Boutique</h2>
+          <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: 2 }}>TrackErentory • Cube Rental & Retail Management</div>
+          <h3 style={{ margin: '0.75rem 0 0' }}>
             {printReportType === 'display' && 'Display Sales Report'}
             {printReportType === 'pickup' && 'Pick-up Sales Report'}
             {printReportType === 'rental' && 'Monthly Rental Payment Report'}
