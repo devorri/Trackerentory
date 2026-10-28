@@ -49,6 +49,7 @@ export default function LoginPage() {
   const [fullName, setFullName] = useState('')
   const [signupEmail, setSignupEmail] = useState('')
   const [signupPhone, setSignupPhone] = useState('')
+  const [signupSocial, setSignupSocial] = useState('')
   const [signupUsername, setSignupUsername] = useState('')
   const [signupPassword, setSignupPassword] = useState('')
   const [signupConfirmPw, setSignupConfirmPw] = useState('')
@@ -83,6 +84,7 @@ export default function LoginPage() {
     setSignupTestOtp(null)
     setForgotTestOtp(null)
     setSignupConfirmPw('')
+    setSignupSocial('')
     setNewPasswordConfirm('')
   }
 
@@ -178,16 +180,21 @@ export default function LoginPage() {
 
   // ── SIGN UP ──
   async function handleSignupSubmitForm() {
-    if (!fullName || !signupUsername || !signupPassword || !signupEmail || !signupPhone) {
-      return setError('All fields including contact number are required.')
+    if (!fullName || !signupUsername || !signupPassword || !signupEmail) {
+      return setError('Please fill in all required fields.')
     }
 
     if (/\d/.test(fullName)) {
       return setError('Full name cannot contain numbers.')
     }
 
-    if (signupPhone.length < 10) {
-      return setError('Please enter a valid 10-11 digit contact number.')
+    if (role === 'Renter') {
+      if (!signupPhone) {
+        return setError('Contact number is required for Renter accounts.')
+      }
+      if (signupPhone.length < 10) {
+        return setError('Please enter a valid 10-11 digit contact number.')
+      }
     }
 
     // Password strength
@@ -248,7 +255,8 @@ export default function LoginPage() {
       username: signupUsername,
       password: signupPassword,
       email: signupEmail,
-      phone_number: signupPhone,
+      phone_number: role === 'Renter' ? signupPhone : undefined,
+      social_link: role === 'Renter' && signupSocial ? signupSocial.trim() : undefined,
       role,
     })
     setLoading(false)
@@ -469,19 +477,6 @@ export default function LoginPage() {
                   />
                 </div>
                 <div className="field">
-                  <label>Email</label>
-                  <input type="email" value={signupEmail} onChange={(e) => setSignupEmail(e.target.value)} placeholder="your@email.com" />
-                </div>
-                <div className="field">
-                  <label>Contact Number</label>
-                  <input
-                    type="tel"
-                    value={signupPhone}
-                    onChange={(e) => setSignupPhone(e.target.value)}
-                    placeholder="e.g. 09171234567"
-                  />
-                </div>
-                <div className="field">
                   <label>Role</label>
                   <select value={role} onChange={(e) => setRole(e.target.value as AppUser['role'])}>
                     {PUBLIC_ROLES.map((r) => (
@@ -489,6 +484,32 @@ export default function LoginPage() {
                     ))}
                   </select>
                 </div>
+                <div className="field">
+                  <label>Email</label>
+                  <input type="email" value={signupEmail} onChange={(e) => setSignupEmail(e.target.value)} placeholder="your@email.com" />
+                </div>
+                {role === 'Renter' && (
+                  <>
+                    <div className="field">
+                      <label>Contact Number</label>
+                      <input
+                        type="tel"
+                        value={signupPhone}
+                        onChange={(e) => setSignupPhone(e.target.value)}
+                        placeholder="e.g. 09171234567"
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Social Media Link</label>
+                      <input
+                        type="text"
+                        value={signupSocial}
+                        onChange={(e) => setSignupSocial(e.target.value)}
+                        placeholder="e.g. facebook.com/yourprofile or @handle"
+                      />
+                    </div>
+                  </>
+                )}
                 <div className="field">
                   <label>Username</label>
                   <input value={signupUsername} onChange={(e) => setSignupUsername(e.target.value)} autoComplete="username" />

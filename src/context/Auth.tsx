@@ -10,6 +10,7 @@ export type AppUser = {
   username: string
   email: string | null
   phone_number?: string | null
+  social_link?: string | null
   deleted_at?: string | null
 }
 
@@ -25,6 +26,7 @@ type AuthContextValue = {
     password: string
     email: string
     phone_number?: string | null
+    social_link?: string | null
     role: AppUser['role']
   }) => Promise<{ error: string | null }>
   signOut: () => void
@@ -59,7 +61,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const signIn = async (username: string, password: string) => {
     const { data, error } = await supabase
       .from('users')
-      .select('user_id, full_name, role, status, salary, username, email, phone_number, deleted_at')
+      .select('user_id, full_name, role, status, salary, username, email, phone_number, social_link, deleted_at')
       .eq('username', username)
       .eq('password', password)
       .maybeSingle()
@@ -79,6 +81,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     password: string
     email: string
     phone_number?: string | null
+    social_link?: string | null
     role: AppUser['role']
   }) => {
     const { data, error } = await supabase
@@ -89,10 +92,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         password: input.password,
         email: input.email,
         phone_number: input.phone_number || null,
+        social_link: input.social_link || null,
         role: input.role,
         status: 'Active',
       }])
-      .select('user_id, full_name, role, status, salary, username, email, phone_number')
+      .select('user_id, full_name, role, status, salary, username, email, phone_number, social_link')
       .maybeSingle()
 
     if (error) return { error: error.message }

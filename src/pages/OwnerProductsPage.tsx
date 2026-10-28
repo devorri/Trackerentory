@@ -7,6 +7,7 @@ import { peso, type Cube, type Product, DEFAULT_PRODUCT_CATEGORIES } from '../li
 import { SkeletonTable } from '../components/Skeleton'
 import { uploadPublicImage } from '../lib/storage'
 import { BUCKET_PRODUCT_IMAGES } from '../lib/supabase'
+import { addPullOutItem } from '../lib/pull-out'
 
 import ConfirmModal from '../components/ConfirmModal'
 import ProductGalleryModal from '../components/ProductGalleryModal'
@@ -31,6 +32,12 @@ export default function OwnerProductsPage() {
     onConfirm: () => void
   } | null>(null)
 
+  // Pull out state
+  const [pullOutProduct, setPullOutProduct] = useState<Product | null>(null)
+  const [pullOutQty, setPullOutQty] = useState('1')
+  const [pullOutReason, setPullOutReason] = useState('Contract Expired')
+  const [pullOutNotes, setPullOutNotes] = useState('')
+
   const [form, setForm] = useState({
     product_name: '',
     description: '',
@@ -41,10 +48,8 @@ export default function OwnerProductsPage() {
     cube_id: '',
   })
 
-  const [imageFile, setImageFile] = useState<File | null>(null)
   const [imageFiles, setImageFiles] = useState<File[]>([])
-  const [imagePreview, setImagePreview] = useState<string | null>(null)
-  const [currentImageUrl, setCurrentImageUrl] = useState<string | null>(null)
+  const [newImagePreviews, setNewImagePreviews] = useState<string[]>([])
   const [currentImageUrls, setCurrentImageUrls] = useState<string[]>([])
 
   async function load() {
@@ -81,11 +86,9 @@ export default function OwnerProductsPage() {
       category: p.category || '',
       cube_id: String(p.cube_id || ''),
     })
-    setCurrentImageUrl(p.image_url || null)
     setCurrentImageUrls(p.image_urls?.length ? p.image_urls : p.image_url ? [p.image_url] : [])
-    setImageFile(null)
     setImageFiles([])
-    setImagePreview(null)
+    setNewImagePreviews([])
     setIsModalOpen(true)
   }
 
@@ -100,10 +103,8 @@ export default function OwnerProductsPage() {
       category: '',
       cube_id: '',
     })
-    setImageFile(null)
     setImageFiles([])
-    setImagePreview(null)
-    setCurrentImageUrl(null)
+    setNewImagePreviews([])
     setCurrentImageUrls([])
   }
 
@@ -118,23 +119,20 @@ export default function OwnerProductsPage() {
     }
     setBusy(true)
 
-    let finalImageUrl = currentImageUrl
-    if (imageFile) {
-      const up = await uploadPublicImage(BUCKET_PRODUCT_IMAGES, imageFile, String(user?.user_id || 'admin'))
-      if (up.error || !up.url) {
+    let uploadedUrls: string[] = []
+    if (imageFiles.length > 0) {
+      const uploads = await Promise.all(
+        imageFiles.map((file) => uploadPublicImage(BUCKET_PRODUCT_IMAGES, file, String(user?.user_id || 'admin')))
+      )
+      const uploadError = uploads.find((upload) => upload.error || !upload.url)
+      if (uploadError) {
         setBusy(false)
-        return alert('Image upload failed: ' + (up.error || 'unknown error'))
+        return alert('One or more product photos could not be uploaded.')
       }
-      finalImageUrl = up.url
+      uploadedUrls = uploads.map((upload) => upload.url!)
     }
-    const extraUploads = await Promise.all(imageFiles.slice(imageFile ? 1 : 0).map((file) => uploadPublicImage(BUCKET_PRODUCT_IMAGES, file, String(user?.user_id || 'admin'))))
-    const uploadError = extraUploads.find((upload) => upload.error || !upload.url)
-    if (uploadError) {
-      setBusy(false)
-      return alert('One or more product photos could not be uploaded.')
-    }
-    const imageUrls = [...currentImageUrls, ...extraUploads.map((upload) => upload.url!)]
-    if (finalImageUrl && !imageUrls.includes(finalImageUrl)) imageUrls.unshift(finalImageUrl)
+    const finalImageUrls = [...currentImageUrls, ...uploadedUrls]
+    const finalImageUrl = finalImageUrls[0] || null
 
     const payload = {
       product_name: form.product_name.trim(),
@@ -143,8 +141,8 @@ export default function OwnerProductsPage() {
       stock_quantity: Number(form.stock_quantity || 1),
       variant: form.variant ? form.variant.trim() : null,
       category: form.category ? form.category.trim() : null,
-      image_url: finalImageUrl || null,
-      image_urls: imageUrls,
+      image_url: finalImageUrl,
+      image_urls: finalImageUrls,
       cube_id: Number(form.cube_id),
     }
 
@@ -221,21 +219,62 @@ export default function OwnerProductsPage() {
     })
   }
 
-  function onImageFile(file: File | null) {
-    setImageFile(file)
-    if (!file) {
-      setImagePreview(null)
-      return
-    }
-    const reader = new FileReader()
-    reader.onload = () => setImagePreview(String(reader.result || ''))
-    reader.readAsDataURL(file)
+  function onImageFiles(files: FileList | null) {
+    if (!files || files.length === 0) return
+    const selected = Array.from(files)
+    setImageFiles((prev) => [...prev, ...selected])
+    const previews = selected.map((f) => URL.createObjectURL(f))
+    setNewImagePreviews((prev) => [...prev, ...previews])
   }
 
-  function onImageFiles(files: FileList | null) {
-    const selected = Array.from(files || [])
-    setImageFiles(selected)
-    if (selected[0]) onImageFile(selected[0])
+  function removeExistingImage(index: number) {
+    setCurrentImageUrls((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  function removeNewImage(index: number) {
+    if (newImagePreviews[index]) {
+      URL.revokeObjectURL(newImagePreviews[index])
+    }
+    setImageFiles((prev) => prev.filter((_, i) => i !== index))
+    setNewImagePreviews((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  function openDisplayPullOutModal(p: Product) {
+    setPullOutProduct(p)
+    setPullOutQty(String(p.stock_quantity > 0 ? p.stock_quantity : 1))
+    setPullOutReason('Contract Expired')
+    setPullOutNotes('')
+  }
+
+  async function confirmDisplayPullOut() {
+    if (!pullOutProduct) return
+    const p = pullOutProduct
+    const qtyToPull = Math.max(1, Math.min(parseInt(pullOutQty, 10) || 1, p.stock_quantity || 1))
+    const remaining = Math.max(0, (p.stock_quantity || 1) - qtyToPull)
+
+    setBusy(true)
+    await addPullOutItem({
+      type: 'Display',
+      product_id: p.product_id,
+      cube_id: p.cube_id,
+      renter_id: p.renter_id,
+      product_name: p.product_name,
+      price: p.price,
+      quantity: qtyToPull,
+      reason: pullOutReason,
+      status: 'Pull Out',
+      notes: pullOutNotes.trim() || null,
+      pulled_out_by: user?.user_id,
+      cubes: p.cubes ? { cube_number: p.cubes.cube_number, type: p.cubes.type } : null,
+      renter: p.renter ? { full_name: p.renter.full_name, phone_number: (p.renter as any).phone_number, social_link: (p.renter as any).social_link } : null,
+    })
+
+    // Deduct stock in products table
+    await supabase.from('products').update({ stock_quantity: remaining }).eq('product_id', p.product_id)
+
+    setBusy(false)
+    setPullOutProduct(null)
+    void load()
   }
 
   const categories = useMemo(() => {
@@ -545,7 +584,7 @@ export default function OwnerProductsPage() {
                         </button>
                       </div>
                     ) : (
-                      <div className="row" style={{ justifyContent: 'flex-end', gap: '0.5rem' }}>
+                      <div className="row" style={{ justifyContent: 'flex-end', gap: '0.4rem', flexWrap: 'nowrap' }}>
                         <button
                           className="btn-ghost"
                           type="button"
@@ -561,6 +600,22 @@ export default function OwnerProductsPage() {
                           onClick={() => moveToTrash(p.product_id)}
                         >
                           <Trash2 size={14} /> Trash
+                        </button>
+                        <button
+                          className="btn-ghost"
+                          style={{
+                            color: '#b45309',
+                            border: '1px solid #fde68a',
+                            background: '#fffbeb',
+                            padding: '0.2rem 0.55rem',
+                            fontSize: '0.75rem',
+                          }}
+                          type="button"
+                          disabled={busy}
+                          onClick={() => openDisplayPullOutModal(p)}
+                          title="Pull out this item from cube"
+                        >
+                          Pull Out
                         </button>
                       </div>
                     )}
@@ -678,16 +733,52 @@ export default function OwnerProductsPage() {
                 </div>
 
                 <div className="field" style={{ gridColumn: 'span 2' }}>
-                  <label>Product Photos</label>
-                  <input type="file" accept="image/*" multiple onChange={(e) => onImageFiles(e.target.files)} />
-                  {(imagePreview || currentImageUrl) && (
-                    <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                      <img
-                        src={imagePreview || currentImageUrl || ''}
-                        alt="Preview"
-                        style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 4, border: '1px solid #ddd' }}
-                      />
-                      <span className="muted" style={{ fontSize: '0.8rem' }}>{imageFiles.length ? `${imageFiles.length} new photo(s) selected` : 'Current saved photos'}</span>
+                  <label>Product Photos (Can select multiple)</label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={(e) => {
+                      onImageFiles(e.target.files)
+                      e.target.value = ''
+                    }}
+                  />
+                  {(currentImageUrls.length > 0 || newImagePreviews.length > 0) && (
+                    <div className="photo-preview-grid">
+                      {/* Existing saved photos */}
+                      {currentImageUrls.map((src, i) => (
+                        <div key={`exist-${i}`} className="photo-preview-item" title="Saved photo">
+                          <img src={src} alt={`Saved photo ${i + 1}`} />
+                          <button
+                            type="button"
+                            className="photo-remove-btn"
+                            onClick={() => removeExistingImage(i)}
+                            title="Remove photo"
+                            aria-label="Remove photo"
+                          >
+                            <X size={12} strokeWidth={2.5} />
+                          </button>
+                          {i === 0 && <span className="photo-badge-main">Cover</span>}
+                        </div>
+                      ))}
+                      {/* Newly selected photos */}
+                      {newImagePreviews.map((src, i) => (
+                        <div key={`new-${i}`} className="photo-preview-item" title="Newly selected photo">
+                          <img src={src} alt={`New upload ${i + 1}`} />
+                          <button
+                            type="button"
+                            className="photo-remove-btn"
+                            onClick={() => removeNewImage(i)}
+                            title="Remove photo"
+                            aria-label="Remove photo"
+                          >
+                            <X size={12} strokeWidth={2.5} />
+                          </button>
+                          {currentImageUrls.length === 0 && i === 0 && (
+                            <span className="photo-badge-main">Cover</span>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -724,6 +815,82 @@ export default function OwnerProductsPage() {
         onClose={() => setGalleryProduct(null)}
         userRole="Owner"
       />
+
+      {pullOutProduct && createPortal(
+        <div className="modal-overlay" onClick={() => !busy && setPullOutProduct(null)}>
+          <div className="modal-card" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Pull Out Display Item</h3>
+              <button className="modal-close" disabled={busy} onClick={() => setPullOutProduct(null)}>✕</button>
+            </div>
+            <div style={{ padding: '0.75rem 0' }}>
+              <div style={{ marginBottom: '0.75rem', background: '#f8fafc', padding: '0.75rem', borderRadius: 8 }}>
+                <div style={{ fontWeight: 700, fontSize: '1rem', color: '#0f172a' }}>{pullOutProduct.product_name}</div>
+                <div className="muted" style={{ fontSize: '0.82rem', marginTop: 2 }}>
+                  Cube: <strong>{pullOutProduct.cubes?.cube_number || '—'}</strong> · Renter: <strong>{pullOutProduct.renter?.full_name || '—'}</strong>
+                </div>
+                <div className="muted" style={{ fontSize: '0.82rem', marginTop: 2 }}>
+                  Current In-Store Stock: <strong>{pullOutProduct.stock_quantity}</strong> · Price: {peso(pullOutProduct.price)}
+                </div>
+              </div>
+
+              <div className="field">
+                <label>Quantity to Pull Out</label>
+                <input
+                  type="number"
+                  min="1"
+                  max={Math.max(1, pullOutProduct.stock_quantity)}
+                  value={pullOutQty}
+                  onChange={(e) => setPullOutQty(e.target.value)}
+                  disabled={busy}
+                />
+              </div>
+
+              <div className="field">
+                <label>Reason for Pull Out</label>
+                <select
+                  value={pullOutReason}
+                  onChange={(e) => setPullOutReason(e.target.value)}
+                  disabled={busy}
+                >
+                  <option value="Contract Expired">Contract Expired</option>
+                  <option value="Unsold Display / Consignor Pull Out">Unsold Display / Consignor Pull Out</option>
+                  <option value="Renter Request">Renter Request</option>
+                  <option value="Damaged / Defective">Damaged / Defective</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+
+              <div className="field">
+                <label>Notes (optional)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Renter will pick up on Friday"
+                  value={pullOutNotes}
+                  onChange={(e) => setPullOutNotes(e.target.value)}
+                  disabled={busy}
+                />
+              </div>
+            </div>
+
+            <div className="row" style={{ justifyContent: 'flex-end', marginTop: '1rem', gap: '0.5rem' }}>
+              <button className="btn-ghost" type="button" disabled={busy} onClick={() => setPullOutProduct(null)}>
+                Cancel
+              </button>
+              <button
+                className="btn"
+                type="button"
+                style={{ background: '#b45309', color: '#fff' }}
+                disabled={busy}
+                onClick={confirmDisplayPullOut}
+              >
+                {busy ? 'Processing…' : 'Confirm Pull Out'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </section>
   )
 }

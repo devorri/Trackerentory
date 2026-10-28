@@ -40,14 +40,15 @@ export default function CubeManagement() {
 
   // Create form
   const [form, setForm] = useState(initialForm)
-  const [imageFile, setImageFile] = useState<File | null>(null)
-  const [imagePreview, setImagePreview] = useState<string | null>(null)
+  const [cubeImages, setCubeImages] = useState<File[]>([])
+  const [cubeImagePreviews, setCubeImagePreviews] = useState<string[]>([])
 
   // Edit modal
   const [editId, setEditId] = useState<number | null>(null)
   const [editForm, setEditForm] = useState(initialForm)
-  const [editImageFile, setEditImageFile] = useState<File | null>(null)
-  const [editImagePreview, setEditImagePreview] = useState<string | null>(null)
+  const [editExistingUrls, setEditExistingUrls] = useState<string[]>([])
+  const [editNewFiles, setEditNewFiles] = useState<File[]>([])
+  const [editNewPreviews, setEditNewPreviews] = useState<string[]>([])
 
   async function loadCubes() {
     setLoading(true)
@@ -67,23 +68,63 @@ export default function CubeManagement() {
   const displayCubes = useMemo(() => activeCubes.filter((c) => c.type === 'Display'), [activeCubes])
   const pickupCubes = useMemo(() => activeCubes.filter((c) => c.type === 'Pick-up'), [activeCubes])
 
+  function handleCubeFiles(files: FileList | null) {
+    if (!files || files.length === 0) return
+    const list = Array.from(files)
+    setCubeImages((prev) => [...prev, ...list])
+    const previews = list.map((f) => URL.createObjectURL(f))
+    setCubeImagePreviews((prev) => [...prev, ...previews])
+  }
+
+  function removeCreateCubePhoto(index: number) {
+    if (cubeImagePreviews[index]) {
+      URL.revokeObjectURL(cubeImagePreviews[index])
+    }
+    setCubeImages((prev) => prev.filter((_, i) => i !== index))
+    setCubeImagePreviews((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  function handleEditCubeFiles(files: FileList | null) {
+    if (!files || files.length === 0) return
+    const list = Array.from(files)
+    setEditNewFiles((prev) => [...prev, ...list])
+    const previews = list.map((f) => URL.createObjectURL(f))
+    setEditNewPreviews((prev) => [...prev, ...previews])
+  }
+
+  function removeEditExistingCubePhoto(index: number) {
+    setEditExistingUrls((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  function removeEditNewCubePhoto(index: number) {
+    if (editNewPreviews[index]) {
+      URL.revokeObjectURL(editNewPreviews[index])
+    }
+    setEditNewFiles((prev) => prev.filter((_, i) => i !== index))
+    setEditNewPreviews((prev) => prev.filter((_, i) => i !== index))
+  }
+
   async function createCube() {
     if (!form.cube_number || !form.price_per_month) {
       return alert('Cube number and price are required.')
     }
     setSaving(true)
 
-    let finalImageUrl = form.image_url
-    if (imageFile) {
-      const up = await uploadPublicImage(BUCKET_PRODUCT_IMAGES, imageFile, 'cubes')
-      if (up.error || !up.url) {
+    let uploadedUrls: string[] = []
+    if (cubeImages.length > 0) {
+      const uploads = await Promise.all(
+        cubeImages.map((f) => uploadPublicImage(BUCKET_PRODUCT_IMAGES, f, 'cubes'))
+      )
+      const err = uploads.find((u) => u.error || !u.url)
+      if (err) {
         setSaving(false)
-        return alert('Image upload failed: ' + (up.error || 'unknown error'))
+        return alert('Image upload failed: ' + (err.error || 'unknown error'))
       }
-      finalImageUrl = up.url
+      uploadedUrls = uploads.map((u) => u.url!)
     }
+    const finalImageUrl = uploadedUrls[0] || form.image_url || null
 
-    const { error } = await supabase.from('cubes').insert([{
+    let insertPayload: any = {
       cube_number: form.cube_number.trim(),
       location: form.location.trim() || null,
       type: form.type,
@@ -91,14 +132,23 @@ export default function CubeManagement() {
       status: form.status,
       width_cm: form.width_cm ? Number(form.width_cm) : null,
       height_cm: form.height_cm ? Number(form.height_cm) : null,
-      image_url: finalImageUrl || null,
-    }])
+      image_url: finalImageUrl,
+      image_urls: uploadedUrls,
+    }
+
+    let { error } = await supabase.from('cubes').insert([insertPayload])
+    if (error && error.message.includes('image_urls')) {
+      delete insertPayload.image_urls
+      const retry = await supabase.from('cubes').insert([insertPayload])
+      error = retry.error
+    }
+
     setSaving(false)
     if (error) return alert(error.message)
 
     setForm(initialForm)
-    setImageFile(null)
-    setImagePreview(null)
+    setCubeImages([])
+    setCubeImagePreviews([])
     await loadCubes()
   }
 
@@ -114,8 +164,14 @@ export default function CubeManagement() {
       height_cm: cube.height_cm ? String(cube.height_cm) : '',
       image_url: cube.image_url || '',
     })
-    setEditImageFile(null)
-    setEditImagePreview(cube.image_url || null)
+    const existing = (cube as any).image_urls?.length
+      ? (cube as any).image_urls
+      : cube.image_url
+      ? [cube.image_url]
+      : []
+    setEditExistingUrls(existing)
+    setEditNewFiles([])
+    setEditNewPreviews([])
   }
 
   async function saveCube() {
@@ -124,17 +180,22 @@ export default function CubeManagement() {
     }
     setSaving(true)
 
-    let finalImageUrl = editForm.image_url
-    if (editImageFile) {
-      const up = await uploadPublicImage(BUCKET_PRODUCT_IMAGES, editImageFile, 'cubes')
-      if (up.error || !up.url) {
+    let uploadedUrls: string[] = []
+    if (editNewFiles.length > 0) {
+      const uploads = await Promise.all(
+        editNewFiles.map((f) => uploadPublicImage(BUCKET_PRODUCT_IMAGES, f, 'cubes'))
+      )
+      const err = uploads.find((u) => u.error || !u.url)
+      if (err) {
         setSaving(false)
-        return alert('Image upload failed: ' + (up.error || 'unknown error'))
+        return alert('Image upload failed: ' + (err.error || 'unknown error'))
       }
-      finalImageUrl = up.url
+      uploadedUrls = uploads.map((u) => u.url!)
     }
+    const finalUrls = [...editExistingUrls, ...uploadedUrls]
+    const finalImageUrl = finalUrls[0] || null
 
-    const { error } = await supabase.from('cubes').update({
+    let updatePayload: any = {
       cube_number: editForm.cube_number.trim(),
       location: editForm.location.trim() || null,
       type: editForm.type,
@@ -142,15 +203,24 @@ export default function CubeManagement() {
       status: editForm.status,
       width_cm: editForm.width_cm ? Number(editForm.width_cm) : null,
       height_cm: editForm.height_cm ? Number(editForm.height_cm) : null,
-      image_url: finalImageUrl || null,
-    }).eq('cube_id', editId)
+      image_url: finalImageUrl,
+      image_urls: finalUrls,
+    }
+
+    let { error } = await supabase.from('cubes').update(updatePayload).eq('cube_id', editId)
+    if (error && error.message.includes('image_urls')) {
+      delete updatePayload.image_urls
+      const retry = await supabase.from('cubes').update(updatePayload).eq('cube_id', editId)
+      error = retry.error
+    }
 
     setSaving(false)
     if (error) return alert(error.message)
     setEditId(null)
     setEditForm(initialForm)
-    setEditImageFile(null)
-    setEditImagePreview(null)
+    setEditExistingUrls([])
+    setEditNewFiles([])
+    setEditNewPreviews([])
     await loadCubes()
   }
 
@@ -336,21 +406,33 @@ export default function CubeManagement() {
           </div>
 
           <div className="field" style={{ gridColumn: 'span 2' }}>
-            <label>Cube Photo</label>
+            <label>Cube Photos (Can select multiple)</label>
             <input
               type="file"
               accept="image/*"
+              multiple
               onChange={(e) => {
-                const f = e.target.files?.[0]
-                if (f) {
-                  setImageFile(f)
-                  setImagePreview(URL.createObjectURL(f))
-                }
+                handleCubeFiles(e.target.files)
+                e.target.value = ''
               }}
             />
-            {imagePreview && (
-              <div style={{ marginTop: '0.5rem' }}>
-                <img src={imagePreview} alt="Preview" style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 6, border: '1px solid #ddd' }} />
+            {cubeImagePreviews.length > 0 && (
+              <div className="photo-preview-grid">
+                {cubeImagePreviews.map((src, i) => (
+                  <div key={i} className="photo-preview-item" title="Cube photo">
+                    <img src={src} alt={`Cube shot ${i + 1}`} />
+                    <button
+                      type="button"
+                      className="photo-remove-btn"
+                      onClick={() => removeCreateCubePhoto(i)}
+                      title="Remove photo"
+                      aria-label="Remove photo"
+                    >
+                      <X size={12} strokeWidth={2.5} />
+                    </button>
+                    {i === 0 && <span className="photo-badge-main">Cover</span>}
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -423,17 +505,42 @@ export default function CubeManagement() {
               {pagedCubes.map((c) => (
                 <tr key={c.cube_id}>
                   <td>
-                    {c.image_url ? (
-                      <img
-                        src={c.image_url}
-                        alt={c.cube_number}
-                        style={{ width: 50, height: 50, objectFit: 'cover', borderRadius: 6, border: '1px solid #eee' }}
-                      />
-                    ) : (
-                      <div style={{ width: 50, height: 50, background: '#f5f5f5', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', color: '#999' }}>
-                        No pic
-                      </div>
-                    )}
+                    {(() => {
+                      const displayImg = c.image_url || (c.image_urls && c.image_urls[0])
+                      const totalShots = (c.image_urls && c.image_urls.length > 0) ? c.image_urls.length : (c.image_url ? 1 : 0)
+                      return displayImg ? (
+                        <div style={{ position: 'relative', width: 50, height: 50, display: 'inline-block' }}>
+                          <img
+                            src={displayImg}
+                            alt={c.cube_number}
+                            style={{ width: 50, height: 50, objectFit: 'cover', borderRadius: 6, border: '1px solid #eee' }}
+                          />
+                          {totalShots > 1 && (
+                            <span
+                              style={{
+                                position: 'absolute',
+                                bottom: 2,
+                                right: 2,
+                                background: 'rgba(15, 23, 42, 0.85)',
+                                color: '#fff',
+                                fontSize: '0.62rem',
+                                fontWeight: 700,
+                                padding: '1px 4px',
+                                borderRadius: 4,
+                                lineHeight: 1.2,
+                              }}
+                              title={`${totalShots} photos`}
+                            >
+                              {totalShots}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <div style={{ width: 50, height: 50, background: '#f5f5f5', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', color: '#999' }}>
+                          No pic
+                        </div>
+                      )
+                    })()}
                   </td>
                   <td><strong>{c.cube_number}</strong></td>
                   <td>{c.location || '—'}</td>
@@ -569,21 +676,50 @@ export default function CubeManagement() {
               </div>
 
               <div className="field" style={{ gridColumn: 'span 2' }}>
-                <label>Update Photo</label>
+                <label>Cube Photos (Can select multiple)</label>
                 <input
                   type="file"
                   accept="image/*"
+                  multiple
                   onChange={(e) => {
-                    const f = e.target.files?.[0]
-                    if (f) {
-                      setEditImageFile(f)
-                      setEditImagePreview(URL.createObjectURL(f))
-                    }
+                    handleEditCubeFiles(e.target.files)
+                    e.target.value = ''
                   }}
                 />
-                {editImagePreview && (
-                  <div style={{ marginTop: '0.5rem' }}>
-                    <img src={editImagePreview} alt="Preview" style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 6, border: '1px solid #ddd' }} />
+                {(editExistingUrls.length > 0 || editNewPreviews.length > 0) && (
+                  <div className="photo-preview-grid">
+                    {editExistingUrls.map((src, i) => (
+                      <div key={`exist-${i}`} className="photo-preview-item" title="Saved photo">
+                        <img src={src} alt={`Saved photo ${i + 1}`} />
+                        <button
+                          type="button"
+                          className="photo-remove-btn"
+                          onClick={() => removeEditExistingCubePhoto(i)}
+                          title="Remove photo"
+                          aria-label="Remove photo"
+                        >
+                          <X size={12} strokeWidth={2.5} />
+                        </button>
+                        {i === 0 && <span className="photo-badge-main">Cover</span>}
+                      </div>
+                    ))}
+                    {editNewPreviews.map((src, i) => (
+                      <div key={`new-${i}`} className="photo-preview-item" title="New photo">
+                        <img src={src} alt={`New upload ${i + 1}`} />
+                        <button
+                          type="button"
+                          className="photo-remove-btn"
+                          onClick={() => removeEditNewCubePhoto(i)}
+                          title="Remove photo"
+                          aria-label="Remove photo"
+                        >
+                          <X size={12} strokeWidth={2.5} />
+                        </button>
+                        {editExistingUrls.length === 0 && i === 0 && (
+                          <span className="photo-badge-main">Cover</span>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>

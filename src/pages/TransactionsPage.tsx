@@ -7,6 +7,7 @@ import { peso, type Product, type Transaction, type Cube, type UserRow, type Res
 import { uploadPublicImage } from '../lib/storage'
 import { BUCKET_DOCUMENTS } from '../lib/supabase'
 import { SkeletonTable } from '../components/Skeleton'
+import { addPullOutItem } from '../lib/pull-out'
 
 type FormState = {
   renter_id: string
@@ -57,6 +58,12 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(false)
   const [previewReceipt, setPreviewReceipt] = useState<string | null>(null)
+
+  // Pull Out Modal State
+  const [pullOutTarget, setPullOutTarget] = useState<Transaction | null>(null)
+  const [pullOutQty, setPullOutQty] = useState('1')
+  const [pullOutReason, setPullOutReason] = useState('Unclaimed by buyer')
+  const [pullOutNotes, setPullOutNotes] = useState('')
 
   // Update filter when prop changes
   useEffect(() => {
@@ -255,6 +262,72 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
     const { error } = await supabase.from('transactions').delete().eq('transaction_id', t.transaction_id)
     setBusy(false)
     if (error) return alert(error.message)
+    void load()
+  }
+
+  function openPickupPullOutModal(t: Transaction) {
+    setPullOutTarget(t)
+    setPullOutQty(String(t.quantity || 1))
+    setPullOutReason('Unclaimed by buyer')
+    setPullOutNotes('')
+  }
+
+  async function handleConfirmPickupPullOut() {
+    if (!pullOutTarget) return
+    const t = pullOutTarget
+    const prod = t.products
+    const renterId = prod?.renter_id || t.renter_id
+    const rName = renterId ? renterMap.get(renterId) : '—'
+    const cubeNum = prod?.cubes?.cube_number || t.cubes?.cube_number || ''
+    const cubeType = prod?.cubes?.type || t.cubes?.type || 'Pick-up'
+    const qtyToPull = Math.min(Math.max(1, parseInt(pullOutQty, 10) || 1), t.quantity || 1)
+    const remainingQty = (t.quantity || 1) - qtyToPull
+
+    setBusy(true)
+
+    // 1. Record in pull out items
+    await addPullOutItem({
+      type: 'Pick-up',
+      product_id: t.product_id,
+      cube_id: t.cube_id || prod?.cube_id,
+      renter_id: renterId,
+      transaction_id: t.transaction_id,
+      buyer_name: t.buyer_name,
+      product_name: prod?.product_name || t.product_name || 'Pickup Item',
+      price: Number(prod?.price || 0),
+      quantity: qtyToPull,
+      reason: pullOutReason,
+      status: 'Pull Out',
+      notes: pullOutNotes.trim() || null,
+      pulled_out_by: user?.user_id,
+      cubes: { cube_number: cubeNum, type: cubeType },
+      renter: renterId ? { full_name: rName || 'Renter' } : null,
+    })
+
+    // 2. Update transaction
+    if (remainingQty > 0) {
+      // Partial pull out (e.g. 1 out of 3 dresses pulled out)
+      await supabase
+        .from('transactions')
+        .update({
+          quantity: remainingQty,
+          notes: `${t.notes || ''} [Pulled out ${qtyToPull} item(s): ${pullOutReason}]`.trim(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('transaction_id', t.transaction_id)
+    } else {
+      // Full pull out
+      await supabase
+        .from('transactions')
+        .update({
+          notes: `[PULLED OUT] ${t.notes || ''} (${pullOutReason})`.trim(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('transaction_id', t.transaction_id)
+    }
+
+    setBusy(false)
+    setPullOutTarget(null)
     void load()
   }
 
@@ -602,6 +675,7 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                 const rName = renterId ? renterMap.get(renterId) : '—'
                 const cubeNum = prod?.cubes?.cube_number || t.cubes?.cube_number || '—'
                 const isPickedUp = t.pickup_status === 'Picked-up'
+                const isPulledOut = Boolean(t.notes?.startsWith('[PULLED OUT]'))
 
                 return (
                   <tr key={t.transaction_id}>
@@ -664,24 +738,43 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                       <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
                         {isPickedUp ? (
                           <span className="badge ok" style={{ fontSize: '0.74rem' }}>Picked Up</span>
+                        ) : isPulledOut ? (
+                          <span className="badge warn" style={{ fontSize: '0.74rem' }}>Pulled Out</span>
                         ) : (
-                          <button
-                            className="btn"
-                            type="button"
-                            style={{ padding: '0.25rem 0.55rem', fontSize: '0.74rem', background: '#2563eb', color: '#fff', border: 'none' }}
-                            onClick={() => void updateRow(t, { pickup_status: 'Picked-up', payment_status: 'Paid' })}
-                          >
-                            Mark Picked-up
-                          </button>
+                          <>
+                            <button
+                              className="btn"
+                              type="button"
+                              style={{ padding: '0.25rem 0.55rem', fontSize: '0.74rem', background: '#2563eb', color: '#fff', border: 'none' }}
+                              onClick={() => void updateRow(t, { pickup_status: 'Picked-up', payment_status: 'Paid' })}
+                            >
+                              Mark Picked-up
+                            </button>
+                            <button
+                              className="btn-ghost"
+                              type="button"
+                              style={{
+                                padding: '0.25rem 0.55rem',
+                                fontSize: '0.74rem',
+                                color: '#b45309',
+                                border: '1px solid #fde68a',
+                                background: '#fffbeb',
+                              }}
+                              onClick={() => openPickupPullOutModal(t)}
+                              title="Pull out unclaimed item"
+                            >
+                              Pull Out
+                            </button>
+                            <button
+                              className="btn-ghost"
+                              type="button"
+                              style={{ padding: '0.25rem 0.55rem', fontSize: '0.74rem', color: '#dc2626' }}
+                              onClick={() => void cancelTransaction(t)}
+                            >
+                              Cancel
+                            </button>
+                          </>
                         )}
-                        <button
-                          className="btn-ghost"
-                          type="button"
-                          style={{ padding: '0.25rem 0.55rem', fontSize: '0.74rem', color: '#dc2626' }}
-                          onClick={() => void cancelTransaction(t)}
-                        >
-                          Cancel
-                        </button>
                       </div>
                     </td>
                   </tr>
@@ -816,6 +909,93 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
               <button className="modal-close" onClick={() => setPreviewReceipt(null)}><X size={18} /></button>
             </div>
             <img src={previewReceipt} alt="Receipt proof" style={{ maxWidth: '100%', maxHeight: '75vh', objectFit: 'contain', marginTop: 12 }} />
+          </div>
+        </div>
+      )}
+
+      {/* PULL OUT UNCLAIMED ITEM MODAL */}
+      {pullOutTarget && (
+        <div className="modal-overlay" onClick={() => !busy && setPullOutTarget(null)}>
+          <div className="modal-card" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Pull Out Pickup Item</h3>
+              <button className="modal-close" disabled={busy} onClick={() => setPullOutTarget(null)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div style={{ padding: '0.75rem 0' }}>
+              <div style={{ marginBottom: '0.75rem', background: '#f8fafc', padding: '0.75rem', borderRadius: 8 }}>
+                <div style={{ fontWeight: 700, fontSize: '1rem', color: '#0f172a' }}>
+                  {pullOutTarget.products?.product_name || pullOutTarget.product_name || 'Item'}
+                </div>
+                <div className="muted" style={{ fontSize: '0.82rem', marginTop: 2 }}>
+                  Buyer: <strong>{pullOutTarget.buyer_name || '—'}</strong> · Renter:{' '}
+                  <strong>
+                    {pullOutTarget.products?.renter_id || pullOutTarget.renter_id
+                      ? renterMap.get((pullOutTarget.products?.renter_id || pullOutTarget.renter_id)!) || '—'
+                      : '—'}
+                  </strong>
+                </div>
+                <div className="muted" style={{ fontSize: '0.82rem', marginTop: 2 }}>
+                  Cube: <strong>{pullOutTarget.products?.cubes?.cube_number || pullOutTarget.cubes?.cube_number || '—'}</strong> · Available Qty:{' '}
+                  <strong>{pullOutTarget.quantity || 1}</strong>
+                </div>
+              </div>
+
+              <div className="field">
+                <label>Quantity to Pull Out</label>
+                <input
+                  type="number"
+                  min="1"
+                  max={pullOutTarget.quantity || 1}
+                  value={pullOutQty}
+                  onChange={(e) => setPullOutQty(e.target.value)}
+                  disabled={busy}
+                />
+                {(pullOutTarget.quantity || 1) > 1 && (
+                  <div className="muted" style={{ fontSize: '0.75rem', marginTop: 2 }}>
+                    If partial (e.g. 1 out of {pullOutTarget.quantity}), the remaining quantity stays available for buyer pickup.
+                  </div>
+                )}
+              </div>
+
+              <div className="field">
+                <label>Reason for Pull Out</label>
+                <select value={pullOutReason} onChange={(e) => setPullOutReason(e.target.value)} disabled={busy}>
+                  <option value="Unclaimed by buyer">Unclaimed by buyer</option>
+                  <option value="Contract Expired">Contract Expired</option>
+                  <option value="Buyer cancelled / Did not claim">Buyer cancelled / Did not claim</option>
+                  <option value="Renter requested pull out">Renter requested pull out</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+
+              <div className="field">
+                <label>Notes (optional)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Buyer only took remaining items"
+                  value={pullOutNotes}
+                  onChange={(e) => setPullOutNotes(e.target.value)}
+                  disabled={busy}
+                />
+              </div>
+            </div>
+
+            <div className="row" style={{ justifyContent: 'flex-end', marginTop: '1rem', gap: '0.5rem' }}>
+              <button className="btn-ghost" type="button" disabled={busy} onClick={() => setPullOutTarget(null)}>
+                Cancel
+              </button>
+              <button
+                className="btn"
+                type="button"
+                style={{ background: '#b45309', color: '#fff', border: 'none' }}
+                disabled={busy}
+                onClick={handleConfirmPickupPullOut}
+              >
+                {busy ? 'Processing…' : 'Confirm Pull Out'}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -25,6 +25,7 @@ export default function ProductsPage() {
   const [activeImage, setActiveImage] = useState<Record<number, number>>({})
   const [galleryProduct, setGalleryProduct] = useState<Product | null>(null)
   const [galleryCube, setGalleryCube] = useState<Cube | null>(null)
+  const [activeCubeImageIndex, setActiveCubeImageIndex] = useState(0)
   const [reservedModalOpen, setReservedModalOpen] = useState(false)
 
   useEffect(() => {
@@ -443,10 +444,12 @@ export default function ProductsPage() {
                       className="card-media"
                       onClick={(e) => {
                         e.stopPropagation()
+                        setActiveCubeImageIndex(0)
                         setGalleryCube(cube)
                       }}
                       title="Click to view cube picture"
                       style={{
+                        position: 'relative',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -455,7 +458,26 @@ export default function ProductsPage() {
                       }}
                     >
                       {cube.image_url ? (
-                        <img src={cube.image_url} alt={`Cube ${cube.cube_number}`} />
+                        <>
+                          <img src={cube.image_url} alt={`Cube ${cube.cube_number}`} />
+                          {((cube as any).image_urls?.length || 0) > 1 && (
+                            <span
+                              className="photo-badge-main"
+                              style={{
+                                top: 8,
+                                right: 8,
+                                bottom: 'auto',
+                                left: 'auto',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 4,
+                                background: 'rgba(0,0,0,0.7)',
+                              }}
+                            >
+                              <Camera size={11} /> {(cube as any).image_urls.length} shots
+                            </span>
+                          )}
+                        </>
                       ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.4rem', color: '#888' }}>
                           <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -683,33 +705,123 @@ export default function ProductsPage() {
             </div>
 
             <div style={{ padding: '1.5rem', overflowY: 'auto' }}>
-              <div
-                style={{
-                  width: '100%',
-                  height: 320,
-                  borderRadius: 16,
-                  background: '#f8fafc',
-                  border: '1px solid #e2e8f0',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  overflow: 'hidden',
-                  marginBottom: '1.25rem',
-                }}
-              >
-                {galleryCube.image_url ? (
-                  <img
-                    src={galleryCube.image_url}
-                    alt={`Cube ${galleryCube.cube_number}`}
-                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                  />
-                ) : (
-                  <div style={{ textAlign: 'center', color: '#94a3b8' }}>
-                    <Box size={56} style={{ margin: '0 auto 0.5rem', opacity: 0.6 }} />
-                    <p style={{ margin: 0, fontWeight: 600 }}>No custom image uploaded for this cube</p>
+              {(() => {
+                const cubeImages: string[] = (galleryCube as any).image_urls?.length
+                  ? (galleryCube as any).image_urls
+                  : galleryCube.image_url
+                  ? [galleryCube.image_url]
+                  : []
+                const currentImg = cubeImages[activeCubeImageIndex] || cubeImages[0]
+
+                return (
+                  <div>
+                    <div
+                      style={{
+                        position: 'relative',
+                        width: '100%',
+                        height: 320,
+                        borderRadius: 16,
+                        background: '#f8fafc',
+                        border: '1px solid #e2e8f0',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        overflow: 'hidden',
+                        marginBottom: cubeImages.length > 1 ? '0.75rem' : '1.25rem',
+                      }}
+                    >
+                      {currentImg ? (
+                        <img
+                          src={currentImg}
+                          alt={`Cube ${galleryCube.cube_number}`}
+                          style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                        />
+                      ) : (
+                        <div style={{ textAlign: 'center', color: '#94a3b8' }}>
+                          <Box size={56} style={{ margin: '0 auto 0.5rem', opacity: 0.6 }} />
+                          <p style={{ margin: 0, fontWeight: 600 }}>No custom image uploaded for this cube</p>
+                        </div>
+                      )}
+
+                      {cubeImages.length > 1 && (
+                        <>
+                          <button
+                            type="button"
+                            className="btn-ghost"
+                            onClick={() => setActiveCubeImageIndex((i) => (i - 1 + cubeImages.length) % cubeImages.length)}
+                            style={{
+                              position: 'absolute',
+                              left: 10,
+                              top: '50%',
+                              transform: 'translateY(-50%)',
+                              background: 'rgba(255,255,255,0.9)',
+                              borderRadius: '50%',
+                              width: 36,
+                              height: 36,
+                              padding: 0,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                            }}
+                            aria-label="Previous image"
+                          >
+                            <ChevronLeft size={20} />
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-ghost"
+                            onClick={() => setActiveCubeImageIndex((i) => (i + 1) % cubeImages.length)}
+                            style={{
+                              position: 'absolute',
+                              right: 10,
+                              top: '50%',
+                              transform: 'translateY(-50%)',
+                              background: 'rgba(255,255,255,0.9)',
+                              borderRadius: '50%',
+                              width: 36,
+                              height: 36,
+                              padding: 0,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                            }}
+                            aria-label="Next image"
+                          >
+                            <ChevronRight size={20} />
+                          </button>
+                        </>
+                      )}
+                    </div>
+
+                    {cubeImages.length > 1 && (
+                      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', overflowX: 'auto', paddingBottom: 4 }}>
+                        {cubeImages.map((src: string, idx: number) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => setActiveCubeImageIndex(idx)}
+                            style={{
+                              width: 60,
+                              height: 60,
+                              padding: 0,
+                              border: idx === activeCubeImageIndex ? '2px solid #000' : '1px solid #cbd5e1',
+                              borderRadius: 8,
+                              overflow: 'hidden',
+                              background: '#fff',
+                              cursor: 'pointer',
+                              flexShrink: 0,
+                            }}
+                          >
+                            <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                )
+              })()}
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.85rem', background: '#f8fafc', padding: '1rem', borderRadius: 12, border: '1px solid #e2e8f0' }}>
                 <div>

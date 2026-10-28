@@ -24,6 +24,7 @@ create table if not exists cubes (
   price_per_month numeric(12,2) not null default 0,
   status text not null check (status in ('Available', 'Occupied')) default 'Available',
   image_url text,
+  image_urls text[] not null default '{}',
   width_cm numeric(8,2),
   height_cm numeric(8,2),
   deleted_at timestamptz,
@@ -64,6 +65,7 @@ create table if not exists contracts (
   start_date date not null,
   end_date date not null,
   status text not null check (status in ('Active', 'Expired', 'Pending')) default 'Pending',
+  contract_text text,
   created_at timestamptz default now()
 );
 
@@ -202,4 +204,31 @@ create table if not exists public.contract_payments (
 grant select, insert, update, delete on contract_payments to authenticated;
 revoke all on function public.reserve_product_for_customer(integer, integer, integer) from public;
 grant execute on function public.reserve_product_for_customer(integer, integer, integer) to anon, authenticated;
+
+create table if not exists public.pull_out_items (
+  pull_out_id serial primary key,
+  type varchar not null check (type in ('Display', 'Pick-up')),
+  product_id integer references public.products(product_id) on delete set null,
+  cube_id integer references public.cubes(cube_id) on delete set null,
+  renter_id integer references public.users(user_id) on delete set null,
+  transaction_id integer references public.transactions(transaction_id) on delete set null,
+  buyer_name varchar,
+  product_name varchar not null,
+  price numeric(12,2) default 0.00,
+  quantity integer not null default 1,
+  reason varchar default 'Contract Expired',
+  status varchar default 'Pull Out',
+  notes text,
+  pulled_out_by integer references public.users(user_id) on delete set null,
+  pulled_out_at timestamptz default now(),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_pull_out_items_type on public.pull_out_items(type);
+create index if not exists idx_pull_out_items_renter on public.pull_out_items(renter_id);
+create index if not exists idx_pull_out_items_cube on public.pull_out_items(cube_id);
+
+grant all on public.pull_out_items to anon, authenticated;
+grant usage, select on sequence pull_out_items_pull_out_id_seq to anon, authenticated;
+
 

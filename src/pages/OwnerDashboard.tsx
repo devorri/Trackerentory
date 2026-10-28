@@ -5,7 +5,7 @@ import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
-import { peso, type Contract, type Transaction, type Product } from '../lib/types'
+import { peso, addMonths, type Contract, type Transaction, type Product } from '../lib/types'
 import { SkeletonStat, SkeletonTable } from '../components/Skeleton'
 import TablePagination, { DEFAULT_PAGE_SIZE } from '../components/TablePagination'
 
@@ -19,6 +19,7 @@ export default function OwnerDashboard() {
   const [contracts, setContracts] = useState<Contract[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [renters, setRenters] = useState<{ user_id: number; full_name: string }[]>([])
+  const [contractPayments, setContractPayments] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7))
   const [dashboardSection, setDashboardSection] = useState<DashboardSection>('sales')
@@ -38,6 +39,57 @@ export default function OwnerDashboard() {
   const [printEndDate, setPrintEndDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [printRenterId, setPrintRenterId] = useState<string>('all')
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
+  const [logoDataUrl, setLogoDataUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas')
+        const size = 256
+        canvas.width = size
+        canvas.height = size
+        const ctx = canvas.getContext('2d')
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, size, size)
+          setLogoDataUrl(canvas.toDataURL('image/png'))
+        }
+      } catch (err) {
+        console.warn('Could not rasterize logo for PDF preview', err)
+      }
+    }
+    img.src = '/TrackErentory.svg'
+  }, [])
+
+  function getOrLoadLogoDataUrl(): Promise<string | null> {
+    if (logoDataUrl) return Promise.resolve(logoDataUrl)
+    return new Promise((resolve) => {
+      const img = new Image()
+      img.crossOrigin = 'anonymous'
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas')
+          const size = 256
+          canvas.width = size
+          canvas.height = size
+          const ctx = canvas.getContext('2d')
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, size, size)
+            const d = canvas.toDataURL('image/png')
+            setLogoDataUrl(d)
+            resolve(d)
+            return
+          }
+        } catch {
+          // ignore
+        }
+        resolve(null)
+      }
+      img.onerror = () => resolve(null)
+      img.src = '/TrackErentory.svg'
+    })
+  }
 
   function refreshData() {
     setLoading(true)
@@ -45,11 +97,13 @@ export default function OwnerDashboard() {
       supabase.from('contracts').select('*, cubes(*), users!renter_id(user_id, full_name)'),
       supabase.from('transactions').select('*, products(*, cubes(cube_number, type)), cubes(cube_number, type), users!processed_by(full_name, role)').order('updated_at', { ascending: false }),
       supabase.from('users').select('user_id, full_name').eq('role', 'Renter').order('full_name'),
-    ]).then(([c, t, r]) => {
+      supabase.from('contract_payments').select('*'),
+    ]).then(([c, t, r, cp]) => {
       setLoading(false)
       if (!c.error) setContracts((c.data || []) as Contract[])
       if (!t.error) setTransactions((t.data || []) as Transaction[])
       if (!r.error) setRenters((r.data || []) as { user_id: number; full_name: string }[])
+      if (!cp.error) setContractPayments(cp.data || [])
     })
   }
 
@@ -101,20 +155,87 @@ export default function OwnerDashboard() {
   }, [contracts, renterMap])
 
   const rentalSales = useMemo(() => {
-    return contracts
-      .filter((c) => c.status === 'Active' || c.status === 'Pending')
-      .map((c) => ({
-        contract_id: c.contract_id,
-        status: c.status,
-        renter_id: c.renter_id,
-        renter: c.users?.full_name || (c.renter_id ? renterMap.get(c.renter_id) : null) || `User #${c.renter_id}`,
-        cube: c.cubes?.cube_number,
-        type: c.cubes?.type,
-        monthly: Number(c.cubes?.price_per_month || 0),
-        period: `${c.start_date} → ${c.end_date}`,
-        startDate: c.start_date,
-      }))
-  }, [contracts, renterMap])
+    const results: Array<{
+      key: string
+      contract_id: number
+      status: string
+      renter_id: number | null
+      renter: string
+      cube: string | undefined
+      type: string | undefined
+      monthly: number
+      period: string
+      periodDates?: string
+      periodMonthLabel?: string
+      startDate: string
+      dueMonth: string
+      monthNumber: number
+      totalMonths: number
+    }> = []
+
+    // 1. Strictly exclude pending contracts! Only Active or previously Active (Expired) contracts
+    const liveOrPastContracts = contracts.filter((c) => c.status === 'Active' || c.status === 'Expired')
+
+    for (const c of liveOrPastContracts) {
+      if (!c.start_date || !c.end_date) continue
+
+      const startD = new Date(c.start_date)
+      const endD = new Date(c.end_date)
+      const diffMonths = Math.max(1, Math.round((endD.getTime() - startD.getTime()) / (1000 * 60 * 60 * 24 * 30)))
+      const renterName = c.users?.full_name || (c.renter_id ? renterMap.get(c.renter_id) : null) || `User #${c.renter_id}`
+      const monthlyRate = Number(c.cubes?.price_per_month || 0)
+
+      for (let m = 1; m <= diffMonths; m++) {
+        const isMonth1 = m === 1
+        const dueDate = isMonth1 ? c.start_date : addMonths(c.start_date, m - 1)
+        const dueMonth = dueDate.slice(0, 7) // 'YYYY-MM'
+
+        // Check if there is an explicit payment record in contract_payments
+        const record = contractPayments.find(
+          (p) => p.contract_id === c.contract_id && (p.month_number === m || p.month_index === m)
+        )
+
+        // Month 1 is paid upon opening (initial advance) for active/contracted cubes.
+        // For succeeding months (m > 1), it is ONLY paid if marked as Paid by owner.
+        const isPaid = (record?.payment_status === 'Paid' || record?.status === 'Paid') || (isMonth1 && (!record || record.payment_status === 'Paid' || record.status === 'Paid'))
+
+        // We only include PAID entries in sales & reports!
+        if (!isPaid) continue
+
+        // Check month filter (if month !== 'all', must match selected month)
+        if (month !== 'all' && dueMonth !== month) {
+          const paidMonth = (record?.paid_at || record?.payment_date || '')?.slice(0, 7)
+          if (paidMonth !== month) {
+            continue
+          }
+        }
+
+        const periodDates = `${c.start_date} to ${c.end_date}`
+        const periodMonthLabel = diffMonths > 1 ? `(Mo. ${m}/${diffMonths})` : ''
+        const periodLabel = periodMonthLabel ? `${periodDates}\n${periodMonthLabel}` : periodDates
+
+        results.push({
+          key: `${c.contract_id}-m${m}`,
+          contract_id: c.contract_id,
+          status: 'Active',
+          renter_id: c.renter_id,
+          renter: renterName,
+          cube: c.cubes?.cube_number,
+          type: c.cubes?.type,
+          monthly: monthlyRate,
+          period: periodLabel,
+          periodDates,
+          periodMonthLabel,
+          startDate: dueDate,
+          dueMonth,
+          monthNumber: m,
+          totalMonths: diffMonths,
+        })
+      }
+    }
+
+    return results
+  }, [contracts, contractPayments, renterMap, month])
 
   const rentalSalesSorted = useMemo(() => {
     const list = [...rentalSales]
@@ -135,9 +256,7 @@ export default function OwnerDashboard() {
     return list
   }, [rentalSales, sortRentals])
 
-  const rentalTotal = rentalSales
-    .filter((r) => r.status === 'Active')
-    .reduce((s, r) => s + r.monthly, 0)
+  const rentalTotal = rentalSales.reduce((s, r) => s + r.monthly, 0)
 
   const monthTx = useMemo(() => {
     return transactions.filter((t) => {
@@ -167,7 +286,9 @@ export default function OwnerDashboard() {
   }, [monthTx, sortMonthTx])
 
 
-  const isPaidTx = (t: Transaction) => t.payment_status === 'Paid' || t.pickup_status === 'Picked-up'
+  const isPaidTx = (t: Transaction) =>
+    (t.payment_status === 'Paid' || t.pickup_status === 'Picked-up') &&
+    !t.notes?.startsWith('[PULLED OUT]')
 
   useEffect(() => setRentalsPage(1), [rentalFilterType, rentalSalesSorted])
   useEffect(() => setSalesPage(1), [salesFilterType, monthTxSorted])
@@ -186,11 +307,13 @@ export default function OwnerDashboard() {
   }, [monthTx])
 
   const filteredSalesTx = useMemo(() => {
-    return monthTxSorted.filter((t) => {
-      if (salesFilterType === 'All') return true
-      const type = t.products?.cubes?.type || t.cubes?.type || (t.authorized_pickup_name ? 'Pick-up' : 'Display')
-      return type === salesFilterType
-    })
+    return monthTxSorted
+      .filter((t) => !t.notes?.startsWith('[PULLED OUT]'))
+      .filter((t) => {
+        if (salesFilterType === 'All') return true
+        const type = t.products?.cubes?.type || t.cubes?.type || (t.authorized_pickup_name ? 'Pick-up' : 'Display')
+        return type === salesFilterType
+      })
   }, [monthTxSorted, salesFilterType])
 
   const filteredRentals = useMemo(() => {
@@ -295,20 +418,23 @@ export default function OwnerDashboard() {
 
   function buildPrintableReportHtml() {
     const reportTitle = printReportType === 'display'
-      ? 'Display Sales Report'
+      ? 'DISPLAY SALES REPORT'
       : printReportType === 'pickup'
-        ? 'Pick-up Sales Report'
-        : 'Monthly Rental Payment Report'
+        ? 'PICK-UP SALES REPORT'
+        : 'MONTHLY RENTAL PAYMENT REPORT'
 
     const rowsHtml = printReportType === 'rental'
       ? (printFilteredData.list.length === 0
           ? `<tr><td colspan="5" style="text-align:center;padding:1.5rem;color:#6b7280;">No rental contracts found for this selection.</td></tr>`
           : (printFilteredData.list as typeof rentalSales).map((r) => `
               <tr>
-                <td>${r.renter}</td>
-                <td>${r.cube ?? '—'}</td>
-                <td>${r.type ?? '—'}</td>
-                <td>${r.period}</td>
+                <td style="text-align:left;">${r.renter}</td>
+                <td style="text-align:center;">${r.cube ?? '—'}</td>
+                <td style="text-align:center;">${r.type ?? '—'}</td>
+                <td style="text-align:center;">
+                  <div>${r.periodDates || r.period}</div>
+                  ${r.periodMonthLabel ? `<div style="font-size:0.75rem;color:#555;">${r.periodMonthLabel}</div>` : ''}
+                </td>
                 <td style="text-align:right;">${peso(r.monthly)}</td>
               </tr>
             `).join('')
@@ -317,16 +443,23 @@ export default function OwnerDashboard() {
           ? `<tr><td colspan="8" style="text-align:center;padding:1.5rem;color:#6b7280;">No sales transactions found for this period.</td></tr>`
           : (printFilteredData.list as Transaction[]).map((t) => {
               const renter = getTxRenter(t)
+              const amt = Number(t.products?.price || 0) * Number(t.quantity || 1)
+              const txDate = new Date(t.transaction_date).toLocaleDateString('en-PH')
+              const processorName = t.users?.full_name || 'Staff'
+              const paymentStr = t.payment_method || 'Cash'
               return `
                 <tr>
-                  <td><strong>${t.products?.product_name || t.product_name || '—'}</strong>${t.products?.variant ? `<div style="font-size:0.75rem;color:#555;">Variant: ${t.products.variant}</div>` : ''}</td>
-                  <td>${t.products?.cubes?.cube_number || t.cubes?.cube_number || '—'}</td>
-                  <td>${renter.name}</td>
-                  <td>${new Date(t.transaction_date).toLocaleDateString('en-PH')}</td>
-                  <td>${t.payment_status}</td>
-                  <td>${t.payment_method || 'Cash'}</td>
-                  <td>${t.quantity || 1}</td>
-                  <td style="text-align:right;">${peso(Number(t.products?.price || 0) * Number(t.quantity || 1))}</td>
+                  <td style="text-align:left;">
+                    <div>${t.products?.product_name || t.product_name || '—'}</div>
+                    ${t.products?.variant ? `<div style="font-size:0.75rem;color:#555;">Variant: ${t.products.variant}</div>` : ''}
+                  </td>
+                  <td style="text-align:center;">${t.products?.cubes?.cube_number || t.cubes?.cube_number || '—'}</td>
+                  <td style="text-align:center;">${renter.name}</td>
+                  <td style="text-align:center;">${txDate}</td>
+                  <td style="text-align:center;">${paymentStr}</td>
+                  <td style="text-align:center;">${processorName}</td>
+                  <td style="text-align:center;">${t.quantity || 1}</td>
+                  <td style="text-align:right;">${peso(amt)}</td>
                 </tr>
               `
             }).join('')
@@ -337,18 +470,18 @@ export default function OwnerDashboard() {
         <table>
           <thead>
             <tr>
-              <th>Renter</th>
-              <th>Cube No.</th>
-              <th>Type</th>
-              <th>Contract Period</th>
-              <th style="text-align:right;">Monthly Rent</th>
+              <th style="text-align:left;">renter</th>
+              <th>cube no.</th>
+              <th>type</th>
+              <th>contract period</th>
+              <th style="text-align:right;">monthly rent</th>
             </tr>
           </thead>
           <tbody>${rowsHtml}</tbody>
           <tfoot>
             <tr>
-              <td colspan="4"><strong>Total Rental Income</strong></td>
-              <td style="text-align:right;"><strong>${peso(printFilteredData.total)}</strong></td>
+              <td colspan="4">total rental income</td>
+              <td style="text-align:right;">${peso(printFilteredData.total)}</td>
             </tr>
           </tfoot>
         </table>
@@ -357,21 +490,21 @@ export default function OwnerDashboard() {
         <table>
           <thead>
             <tr>
-              <th>Product</th>
-              <th>Cube</th>
-              <th>Renter</th>
-              <th>Date</th>
-              <th>Payment</th>
-              <th>Process</th>
-              <th>Qty</th>
-              <th style="text-align:right;">Total</th>
+              <th style="text-align:left;">product</th>
+              <th>cube</th>
+              <th>renter</th>
+              <th>date</th>
+              <th>payment</th>
+              <th>process</th>
+              <th>qty</th>
+              <th style="text-align:right;">total</th>
             </tr>
           </thead>
           <tbody>${rowsHtml}</tbody>
           <tfoot>
             <tr>
-              <td colspan="7"><strong>Overall Total (${printPeriodLabel})</strong></td>
-              <td style="text-align:right;"><strong>${peso(printFilteredData.total)}</strong></td>
+              <td colspan="7">overall total</td>
+              <td style="text-align:right;">${peso(printFilteredData.total)}</td>
             </tr>
           </tfoot>
         </table>
@@ -383,97 +516,150 @@ export default function OwnerDashboard() {
           <meta charset="UTF-8" />
           <title>${reportTitle}</title>
           <style>
+            @page {
+              size: A4 portrait;
+              margin: 15mm;
+            }
+            * {
+              box-sizing: border-box;
+            }
             body {
               margin: 0;
-              padding: 2rem 1.5rem;
-              font-family: Arial, Helvetica, sans-serif;
-              color: #111827;
-              background: #fff;
+              padding: 2rem;
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+              color: #000;
+              background: #f8fafc;
             }
             .toolbar {
               display: flex;
               justify-content: flex-end;
               gap: 0.75rem;
-              margin-bottom: 1rem;
+              margin-bottom: 1.5rem;
+              max-width: 960px;
+              margin-left: auto;
+              margin-right: auto;
             }
             .toolbar button {
               border: 1px solid #111827;
               background: #111827;
               color: white;
-              padding: 0.65rem 1rem;
-              border-radius: 8px;
+              padding: 0.6rem 1.1rem;
+              border-radius: 6px;
               cursor: pointer;
               font-size: 0.9rem;
+              font-weight: 500;
             }
             .toolbar button.secondary {
               background: white;
               color: #111827;
             }
             .report {
-              border: 1px solid #d1d5db;
-              padding: 1.5rem;
-              max-width: 1100px;
+              background: #fff;
+              border: 1px solid #e2e8f0;
+              padding: 2.5rem;
+              max-width: 960px;
               margin: 0 auto;
+              box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
             }
-            .header {
-              text-align: center;
-              border-bottom: 2px solid #111827;
-              padding-bottom: 1rem;
-              margin-bottom: 1.5rem;
+            .report-header-brand {
+              display: flex;
+              align-items: center;
+              gap: 0.85rem;
             }
-            .header h1 {
-              margin: 0 0 0.25rem;
-              font-size: 1.8rem;
-              letter-spacing: 0.04em;
+            .brand-logo {
+              height: 56px;
+              width: 56px;
+              object-fit: contain;
+            }
+            .brand-text-name {
+              font-size: 1.5rem;
+              font-weight: 700;
+              letter-spacing: 0.05em;
+              line-height: 1.15;
               text-transform: uppercase;
+              color: #000;
             }
-            .header h2 {
-              margin: 0;
-              font-size: 1.2rem;
-              color: #374151;
+            .brand-text-sub {
+              font-size: 1rem;
+              color: #333;
+              margin-top: 2px;
             }
-            .meta {
+            .report-title {
+              text-align: center;
+              font-size: 1.35rem;
+              font-weight: 700;
+              letter-spacing: 0.05em;
+              text-transform: uppercase;
+              margin: 1.75rem 0 1.25rem;
+              color: #000;
+            }
+            .report-meta-row {
               display: flex;
               justify-content: space-between;
-              gap: 1rem;
-              font-size: 0.82rem;
-              margin-top: 0.75rem;
-              flex-wrap: wrap;
+              align-items: center;
+              font-size: 0.95rem;
+              color: #000;
+              margin-bottom: 0.65rem;
+            }
+            .report-hr {
+              border: none;
+              border-top: 2px solid #000;
+              margin: 0 0 1.25rem;
             }
             table {
               width: 100%;
               border-collapse: collapse;
-              font-size: 0.9rem;
+              font-size: 0.88rem;
+              margin-bottom: 1.5rem;
             }
             th, td {
-              border: 1px solid #374151;
-              padding: 0.6rem 0.7rem;
-              vertical-align: top;
+              border: 1px solid #000;
+              padding: 0.55rem 0.65rem;
+              vertical-align: middle;
+              background: #fff;
+              color: #000;
             }
             th {
-              background: #e5e7eb;
-              text-transform: uppercase;
-              font-size: 0.78rem;
+              font-weight: normal;
+              text-align: center;
             }
             tfoot td {
-              background: #f9fafb;
-              font-weight: 700;
+              font-weight: normal;
             }
-            .signatures {
+            .signatures-row {
               display: flex;
               justify-content: space-between;
-              margin-top: 3rem;
-              gap: 2rem;
+              margin-top: 5rem;
+              padding: 0 1.5rem;
+            }
+            .sig-group {
+              display: flex;
+              flex-direction: column;
+              align-items: flex-start;
             }
             .sig-line {
-              width: 180px;
-              border-bottom: 1px solid #111827;
+              width: 190px;
+              border-bottom: 1px solid #000;
               margin-bottom: 0.5rem;
             }
+            .sig-text {
+              font-size: 0.92rem;
+              color: #000;
+            }
             @media print {
-              .toolbar { display: none !important; }
-              body { padding: 0; }
-              .report { border: none; max-width: none; }
+              body {
+                padding: 0;
+                background: #fff;
+              }
+              .toolbar {
+                display: none !important;
+              }
+              .report {
+                border: none;
+                box-shadow: none;
+                padding: 0;
+                max-width: 100%;
+              }
             }
           </style>
         </head>
@@ -484,27 +670,34 @@ export default function OwnerDashboard() {
           </div>
 
           <div class="report">
-            <div class="header">
-              <h1 style="margin: 0 0 0.25rem; font-size: 1.6rem; letter-spacing: 0.05em; text-transform: uppercase;">Arce Concept Boutique</h1>
-              <div style="font-size: 0.85rem; color: #64748b; margin-top: 2px;">TrackErentory • Cube Rental & Retail Management</div>
-              <h2 style="margin: 0.75rem 0 0; font-size: 1.15rem; color: #1e293b;">${reportTitle}</h2>
-              <div class="meta">
-                <span><strong>Period:</strong> ${printPeriodLabel}</span>
-                <span><strong>Renter:</strong> ${selectedRenterName}</span>
-                <span><strong>Date Generated:</strong> ${new Date().toLocaleDateString('en-PH')}</span>
+            <div class="report-header-brand">
+              <img src="${window.location.origin}/TrackErentory.svg" alt="TrackErentory" class="brand-logo" />
+              <div>
+                <div class="brand-text-name">TRACKERENTORY</div>
+                <div class="brand-text-sub">Arce Concept Store</div>
               </div>
             </div>
 
+            <div class="report-title">${reportTitle}</div>
+
+            <div class="report-meta-row">
+              <div>period: ${printPeriodLabel}</div>
+              <div style="text-align: center;">renter: ${selectedRenterName}</div>
+              <div style="text-align: right;">date generated: ${new Date().toLocaleDateString('en-PH')}</div>
+            </div>
+
+            <hr class="report-hr" />
+
             ${tableMarkup}
 
-            <div class="signatures">
-              <div>
+            <div class="signatures-row">
+              <div class="sig-group">
                 <div class="sig-line"></div>
-                <div>Prepared By (Owner)</div>
+                <div class="sig-text">prepared by</div>
               </div>
-              <div>
+              <div class="sig-group">
                 <div class="sig-line"></div>
-                <div>Received / Acknowledged By</div>
+                <div class="sig-text">received/acknowledge by</div>
               </div>
             </div>
           </div>
@@ -513,94 +706,204 @@ export default function OwnerDashboard() {
     `
   }
 
-  function handleDownloadPdf() {
+  async function handleDownloadPdf() {
     setIsPrintModalOpen(false)
     const doc = new jsPDF()
+    const logo = await getOrLoadLogoDataUrl()
 
     const reportTitle = printReportType === 'display'
-      ? 'Display Sales Report'
+      ? 'DISPLAY SALES REPORT'
       : printReportType === 'pickup'
-        ? 'Pick-up Sales Report'
-        : 'Monthly Rental Payment Report'
+        ? 'PICK-UP SALES REPORT'
+        : 'MONTHLY RENTAL PAYMENT REPORT'
 
     // Header Branding
-    doc.setFontSize(18)
-    doc.setTextColor(30, 41, 59)
-    doc.text('Arce Concept Boutique', 14, 18)
+    if (logo) {
+      try {
+        doc.addImage(logo, 'PNG', 14, 10, 16, 16)
+      } catch {
+        // fallback
+      }
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(16)
+      doc.setTextColor(0, 0, 0)
+      doc.text('TRACKERENTORY', 34, 17)
 
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(10.5)
+      doc.setTextColor(40, 40, 40)
+      doc.text('Arce Concept Store', 34, 23)
+    } else {
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(16)
+      doc.setTextColor(0, 0, 0)
+      doc.text('TRACKERENTORY', 14, 17)
+
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(10.5)
+      doc.setTextColor(40, 40, 40)
+      doc.text('Arce Concept Store', 14, 23)
+    }
+
+    // Centered Title
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(13)
+    doc.setTextColor(0, 0, 0)
+    doc.text(reportTitle, 105, 34, { align: 'center' })
+
+    // Meta details row
+    doc.setFont('helvetica', 'normal')
     doc.setFontSize(9)
-    doc.setTextColor(100, 116, 139)
-    doc.text('TrackErentory • Cube Rental & Retail Management', 14, 23)
+    doc.setTextColor(0, 0, 0)
+    doc.text(`period: ${printPeriodLabel}`, 14, 42)
+    doc.text(`renter: ${selectedRenterName}`, 105, 42, { align: 'center' })
+    doc.text(`date generated: ${new Date().toLocaleDateString('en-PH')}`, 196, 42, { align: 'right' })
 
-    doc.setFontSize(12)
-    doc.setTextColor(51, 65, 85)
-    doc.text(reportTitle, 14, 30)
+    // Solid dividing line
+    doc.setDrawColor(0, 0, 0)
+    doc.setLineWidth(0.6)
+    doc.line(14, 45, 196, 45)
 
-    // Meta details
-    doc.setFontSize(8.5)
-    doc.setTextColor(100, 116, 139)
-    doc.text(`Period: ${printPeriodLabel}`, 14, 37)
-    doc.text(`Renter: ${selectedRenterName}`, 14, 42)
-    doc.text(`Date Generated: ${new Date().toLocaleDateString('en-PH')}`, 14, 47)
+    // Safe currency formatter for jsPDF standard Helvetica font (prevents 16-bit encoding bugs and text overflow)
+    const formatPdfCurrency = (n: number | string | null | undefined) => {
+      const num = typeof n === 'number' ? n : Number(n || 0)
+      return 'P ' + num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    }
 
     if (printReportType === 'rental') {
       const rows = (printFilteredData.list as typeof rentalSales).map((r) => [
-        r.renter,
+        r.renter || '—',
         r.cube || '—',
         r.type || '—',
-        r.period,
-        peso(r.monthly),
+        r.periodMonthLabel ? `${r.periodDates}\n${r.periodMonthLabel}` : (r.periodDates || r.period),
+        formatPdfCurrency(r.monthly),
       ])
 
       autoTable(doc, {
-        startY: 52,
-        head: [['Renter', 'Cube No.', 'Type', 'Contract Period', 'Monthly Rent']],
-        body: rows,
-        foot: [['Total Rental Income', '', '', '', peso(printFilteredData.total)]],
-        theme: 'striped',
-        headStyles: { fillColor: [45, 55, 72], textColor: 255 },
-        footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold' },
-        styles: { fontSize: 8.5 },
-        columnStyles: { 4: { halign: 'right' } },
+        startY: 48,
+        margin: { left: 14, right: 14 },
+        tableWidth: 182,
+        head: [['renter', 'cube no.', 'type', 'contract period', 'monthly rent']],
+        body: rows.length === 0
+          ? [[{ content: 'No rental contracts found for this selection.', colSpan: 5, styles: { halign: 'center', textColor: [120, 120, 120] } }]]
+          : rows,
+        foot: [[
+          { content: 'total rental income', colSpan: 4, styles: { halign: 'left', fontStyle: 'normal' } },
+          { content: formatPdfCurrency(printFilteredData.total), styles: { halign: 'right', fontStyle: 'normal' } },
+        ]],
+        theme: 'grid',
+        headStyles: {
+          fillColor: [255, 255, 255],
+          textColor: [0, 0, 0],
+          fontStyle: 'normal',
+          lineColor: [0, 0, 0],
+          lineWidth: 0.2,
+          halign: 'center',
+        },
+        bodyStyles: {
+          lineColor: [0, 0, 0],
+          lineWidth: 0.2,
+          textColor: [0, 0, 0],
+        },
+        footStyles: {
+          fillColor: [255, 255, 255],
+          textColor: [0, 0, 0],
+          fontStyle: 'normal',
+          lineColor: [0, 0, 0],
+          lineWidth: 0.2,
+        },
+        styles: { fontSize: 8.5, cellPadding: 2.2, overflow: 'linebreak', valign: 'middle', font: 'helvetica' },
+        columnStyles: {
+          0: { cellWidth: 44, halign: 'left' },
+          1: { cellWidth: 18, halign: 'center' },
+          2: { cellWidth: 20, halign: 'center' },
+          3: { cellWidth: 68, halign: 'center' },
+          4: { cellWidth: 32, halign: 'right' },
+        },
       })
     } else {
       const rows = (printFilteredData.list as Transaction[]).map((t) => {
         const r = getTxRenter(t)
         const amt = Number(t.products?.price || 0) * Number(t.quantity || 1)
+        const txDate = new Date(t.transaction_date).toLocaleDateString('en-PH')
+        const processorName = t.users?.full_name || 'Staff'
+        const paymentStr = t.payment_method || 'Cash'
+        const prodName = t.products?.product_name || t.product_name || '—'
+        const variantStr = t.products?.variant ? `\n(Variant: ${t.products.variant})` : ''
         return [
-          t.products?.product_name || t.product_name || '—',
+          `${prodName}${variantStr}`,
           t.products?.cubes?.cube_number || t.cubes?.cube_number || '—',
           r.name,
-          new Date(t.transaction_date).toLocaleDateString('en-PH'),
-          t.payment_status,
-          t.payment_method || 'Cash',
+          txDate,
+          paymentStr,
+          processorName,
           String(t.quantity || 1),
-          peso(amt),
+          formatPdfCurrency(amt),
         ]
       })
 
       autoTable(doc, {
-        startY: 52,
-        head: [['Product', 'Cube', 'Renter', 'Date', 'Payment', 'Process', 'Qty', 'Total']],
-        body: rows,
-        foot: [[`Overall Total (${printPeriodLabel})`, '', '', '', '', '', '', peso(printFilteredData.total)]],
-        theme: 'striped',
-        headStyles: { fillColor: [45, 55, 72], textColor: 255 },
-        footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold' },
-        styles: { fontSize: 8 },
-        columnStyles: { 7: { halign: 'right' } },
+        startY: 48,
+        margin: { left: 14, right: 14 },
+        tableWidth: 182,
+        head: [['product', 'cube', 'renter', 'date', 'payment', 'process', 'qty', 'total']],
+        body: rows.length === 0
+          ? [[{ content: 'No sales transactions found for this period.', colSpan: 8, styles: { halign: 'center', textColor: [120, 120, 120] } }]]
+          : rows,
+        foot: [[
+          { content: 'overall total', colSpan: 7, styles: { halign: 'left', fontStyle: 'normal' } },
+          { content: formatPdfCurrency(printFilteredData.total), styles: { halign: 'right', fontStyle: 'normal' } },
+        ]],
+        theme: 'grid',
+        headStyles: {
+          fillColor: [255, 255, 255],
+          textColor: [0, 0, 0],
+          fontStyle: 'normal',
+          lineColor: [0, 0, 0],
+          lineWidth: 0.2,
+          halign: 'center',
+        },
+        bodyStyles: {
+          lineColor: [0, 0, 0],
+          lineWidth: 0.2,
+          textColor: [0, 0, 0],
+        },
+        footStyles: {
+          fillColor: [255, 255, 255],
+          textColor: [0, 0, 0],
+          fontStyle: 'normal',
+          lineColor: [0, 0, 0],
+          lineWidth: 0.2,
+        },
+        styles: { fontSize: 8, cellPadding: 2.2, overflow: 'linebreak', valign: 'middle', font: 'helvetica' },
+        columnStyles: {
+          0: { cellWidth: 44, halign: 'left' },
+          1: { cellWidth: 16, halign: 'center' },
+          2: { cellWidth: 26, halign: 'center' },
+          3: { cellWidth: 22, halign: 'center' },
+          4: { cellWidth: 18, halign: 'center' },
+          5: { cellWidth: 24, halign: 'center' },
+          6: { cellWidth: 12, halign: 'center' },
+          7: { cellWidth: 20, halign: 'right' },
+        },
       })
     }
 
     // Signatures block
-    const finalY = (doc as any).lastAutoTable ? (doc as any).lastAutoTable.finalY + 25 : 200
-    doc.setFontSize(8.5)
-    doc.setTextColor(30, 41, 59)
-    doc.line(14, finalY, 74, finalY)
-    doc.text('Prepared By (Owner)', 14, finalY + 6)
+    let finalY = (doc as any).lastAutoTable ? (doc as any).lastAutoTable.finalY + 35 : 200
+    if (finalY > 265) {
+      doc.addPage()
+      finalY = 35
+    }
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(9)
+    doc.setTextColor(0, 0, 0)
 
-    doc.line(136, finalY, 196, finalY)
-    doc.text('Received / Acknowledged By', 136, finalY + 6)
+    doc.line(14, finalY, 64, finalY)
+    doc.text('prepared by', 14, finalY + 6)
+
+    doc.line(146, finalY, 196, finalY)
+    doc.text('received/acknowledge by', 146, finalY + 6)
 
     if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl)
     setPdfPreviewUrl(String(doc.output('bloburl')))
@@ -663,7 +966,7 @@ export default function OwnerDashboard() {
 
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
           <div className="field" style={{ maxWidth: 220, margin: 0 }}>
-            <label>Product sales month</label>
+            <label>Sales & reports month</label>
             <input type="month" value={month === 'all' ? '' : month} onChange={(e) => setMonth(e.target.value || 'all')} />
           </div>
           <button
@@ -886,7 +1189,7 @@ export default function OwnerDashboard() {
                   {rentalFilterType === 'All' ? (
                     <>
                       <div className="stat">
-                        <div className="label">Total Monthly Rental</div>
+                        <div className="label">Total Paid Rental</div>
                         <div className="value">{peso(rentalTotal)}</div>
                       </div>
                       <div className="stat">
@@ -894,7 +1197,7 @@ export default function OwnerDashboard() {
                         <div className="value">
                           {peso(
                             rentalSales
-                              .filter((r) => r.status === 'Active' && r.type === 'Display')
+                              .filter((r) => r.type === 'Display')
                               .reduce((s, r) => s + r.monthly, 0)
                           )}
                         </div>
@@ -904,14 +1207,14 @@ export default function OwnerDashboard() {
                         <div className="value">
                           {peso(
                             rentalSales
-                              .filter((r) => r.status === 'Active' && r.type === 'Pick-up')
+                              .filter((r) => r.type === 'Pick-up')
                               .reduce((s, r) => s + r.monthly, 0)
                           )}
                         </div>
                       </div>
                       <div className="stat">
-                        <div className="label">Active Leased Cubes</div>
-                        <div className="value">{contracts.filter((c) => c.status === 'Active').length}</div>
+                        <div className="label">Paid Leased Cubes</div>
+                        <div className="value">{new Set(rentalSales.map((r) => r.cube).filter(Boolean)).size}</div>
                       </div>
                     </>
                   ) : rentalFilterType === 'Display' ? (
@@ -921,15 +1224,15 @@ export default function OwnerDashboard() {
                         <div className="value">
                           {peso(
                             rentalSales
-                              .filter((r) => r.status === 'Active' && r.type === 'Display')
+                              .filter((r) => r.type === 'Display')
                               .reduce((s, r) => s + r.monthly, 0)
                           )}
                         </div>
                       </div>
                       <div className="stat">
-                        <div className="label">Active Display Cubes</div>
+                        <div className="label">Paid Display Cubes</div>
                         <div className="value">
-                          {contracts.filter((c) => c.status === 'Active' && c.cubes?.type === 'Display').length}
+                          {new Set(rentalSales.filter((r) => r.type === 'Display').map((r) => r.cube).filter(Boolean)).size}
                         </div>
                       </div>
                     </>
@@ -940,22 +1243,22 @@ export default function OwnerDashboard() {
                         <div className="value">
                           {peso(
                             rentalSales
-                              .filter((r) => r.status === 'Active' && r.type === 'Pick-up')
+                              .filter((r) => r.type === 'Pick-up')
                               .reduce((s, r) => s + r.monthly, 0)
                           )}
                         </div>
                       </div>
                       <div className="stat">
-                        <div className="label">Active Pick-up Cubes</div>
+                        <div className="label">Paid Pick-up Cubes</div>
                         <div className="value">
-                          {contracts.filter((c) => c.status === 'Active' && c.cubes?.type === 'Pick-up').length}
+                          {new Set(rentalSales.filter((r) => r.type === 'Pick-up').map((r) => r.cube).filter(Boolean)).size}
                         </div>
                       </div>
                     </>
                   )}
                 </div>
 
-                <h2>Monthly Rental Agreements ({rentalFilterType} Cubes)</h2>
+                <h2>Monthly Rental Agreements ({rentalFilterType} Cubes · {month === 'all' ? 'All Time' : month})</h2>
                 <div className="table-wrap">
                   <table className="table">
                     <thead>
@@ -982,18 +1285,23 @@ export default function OwnerDashboard() {
                     </thead>
                     <tbody>
                       {rentalsPageRows.map((r, i) => (
-                        <tr key={`${r.cube}-${i}`}>
+                        <tr key={`${r.key || r.cube}-${i}`}>
                           <td>{r.renter}</td>
                           <td>{r.cube}</td>
                           <td>{r.type}</td>
                           <td>{peso(r.monthly)}</td>
-                          <td>{r.period}</td>
+                          <td>
+                            <div>{r.periodDates || r.period}</div>
+                            {r.periodMonthLabel && (
+                              <div className="muted" style={{ fontSize: '0.75rem' }}>{r.periodMonthLabel}</div>
+                            )}
+                          </td>
                           <td>
                             <span
-                              className={`badge ${r.status === 'Active' ? 'ok' : 'warn'}`}
+                              className="badge ok"
                               style={{ fontSize: '0.72rem' }}
                             >
-                              {r.status === 'Pending' ? 'Pending Approval' : r.status}
+                              Paid
                             </span>
                           </td>
                         </tr>
@@ -1001,12 +1309,11 @@ export default function OwnerDashboard() {
                     </tbody>
                     <tfoot>
                       <tr>
-                        <td colSpan={3}><strong>Active Rental Income ({rentalFilterType})</strong></td>
+                        <td colSpan={3}><strong>Total Paid Rental ({rentalFilterType})</strong></td>
                         <td colSpan={3}>
                           <strong>
                             {peso(
                               filteredRentals
-                                .filter((r) => r.status === 'Active')
                                 .reduce((s, r) => s + r.monthly, 0)
                             )}
                           </strong>
@@ -1186,30 +1493,41 @@ export default function OwnerDashboard() {
 
       {/* ════════════ DEDICATED PRINT DOCUMENT ════════════ */}
       <div id="owner-print-report" className="print-report-container">
-        <div className="print-report-header">
-          <h2 style={{ margin: 0, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Arce Concept Boutique</h2>
-          <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: 2 }}>TrackErentory • Cube Rental & Retail Management</div>
-          <h3 style={{ margin: '0.75rem 0 0' }}>
-            {printReportType === 'display' && 'Display Sales Report'}
-            {printReportType === 'pickup' && 'Pick-up Sales Report'}
-            {printReportType === 'rental' && 'Monthly Rental Payment Report'}
-          </h3>
-          <div className="print-report-meta">
-            <span><strong>Period:</strong> {printPeriodLabel}</span>
-            <span><strong>Renter:</strong> {selectedRenterName}</span>
-            <span><strong>Date Generated:</strong> {new Date().toLocaleDateString('en-PH')}</span>
+        <div className="report-header-brand" style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+          <img src="/TrackErentory.svg" alt="TrackErentory" className="brand-logo" style={{ height: 56, width: 56, objectFit: 'contain' }} />
+          <div>
+            <div style={{ fontSize: '1.5rem', fontWeight: 700, letterSpacing: '0.05em', lineHeight: 1.15, textTransform: 'uppercase', color: '#000' }}>
+              TRACKERENTORY
+            </div>
+            <div style={{ fontSize: '1rem', color: '#333', marginTop: 2 }}>
+              Arce Concept Store
+            </div>
           </div>
         </div>
 
+        <div style={{ textAlign: 'center', fontSize: '1.35rem', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', margin: '1.75rem 0 1.25rem', color: '#000' }}>
+          {printReportType === 'display' && 'DISPLAY SALES REPORT'}
+          {printReportType === 'pickup' && 'PICK-UP SALES REPORT'}
+          {printReportType === 'rental' && 'MONTHLY RENTAL PAYMENT REPORT'}
+        </div>
+
+        <div className="print-report-meta" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.95rem', color: '#000', marginBottom: '0.65rem' }}>
+          <span>period: {printPeriodLabel}</span>
+          <span>renter: {selectedRenterName}</span>
+          <span>date generated: {new Date().toLocaleDateString('en-PH')}</span>
+        </div>
+
+        <hr style={{ border: 'none', borderTop: '2px solid #000', margin: '0 0 1.25rem' }} />
+
         {printReportType === 'rental' ? (
-          <table className="print-table">
+          <table className="print-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem', marginBottom: '1.5rem' }}>
             <thead>
               <tr>
-                <th>Renter</th>
-                <th>Cube No.</th>
-                <th>Type</th>
-                <th>Contract Period</th>
-                <th style={{ textAlign: 'right' }}>Monthly Rent</th>
+                <th style={{ textAlign: 'left' }}>renter</th>
+                <th>cube no.</th>
+                <th>type</th>
+                <th>contract period</th>
+                <th style={{ textAlign: 'right' }}>monthly rent</th>
               </tr>
             </thead>
             <tbody>
@@ -1222,10 +1540,15 @@ export default function OwnerDashboard() {
               ) : (
                 (printFilteredData.list as typeof rentalSales).map((r, i) => (
                   <tr key={i}>
-                    <td>{r.renter}</td>
-                    <td>{r.cube}</td>
-                    <td>{r.type}</td>
-                    <td>{r.period}</td>
+                    <td style={{ textAlign: 'left' }}>{r.renter}</td>
+                    <td style={{ textAlign: 'center' }}>{r.cube}</td>
+                    <td style={{ textAlign: 'center' }}>{r.type}</td>
+                    <td style={{ textAlign: 'center' }}>
+                      <div>{r.periodDates || r.period}</div>
+                      {r.periodMonthLabel && (
+                        <div style={{ fontSize: '0.75rem', color: '#555' }}>{r.periodMonthLabel}</div>
+                      )}
+                    </td>
                     <td style={{ textAlign: 'right' }}>{peso(r.monthly)}</td>
                   </tr>
                 ))
@@ -1233,23 +1556,23 @@ export default function OwnerDashboard() {
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={4}><strong>Total Rental Income</strong></td>
-                <td style={{ textAlign: 'right' }}><strong>{peso(printFilteredData.total)}</strong></td>
+                <td colSpan={4}>total rental income</td>
+                <td style={{ textAlign: 'right' }}>{peso(printFilteredData.total)}</td>
               </tr>
             </tfoot>
           </table>
         ) : (
-          <table className="print-table">
+          <table className="print-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem', marginBottom: '1.5rem' }}>
             <thead>
               <tr>
-                <th>Product</th>
-                <th>Cube</th>
-                <th>Renter</th>
-                <th>Date</th>
-                <th>Payment</th>
-                <th>Process</th>
-                <th>Qty</th>
-                <th style={{ textAlign: 'right' }}>Total</th>
+                <th style={{ textAlign: 'left' }}>product</th>
+                <th>cube</th>
+                <th>renter</th>
+                <th>date</th>
+                <th>payment</th>
+                <th>process</th>
+                <th>qty</th>
+                <th style={{ textAlign: 'right' }}>total</th>
               </tr>
             </thead>
             <tbody>
@@ -1262,19 +1585,23 @@ export default function OwnerDashboard() {
               ) : (
                 (printFilteredData.list as Transaction[]).map((t) => {
                   const r = getTxRenter(t)
+                  const amt = Number(t.products?.price || 0) * Number(t.quantity || 1)
+                  const txDate = new Date(t.transaction_date).toLocaleDateString('en-PH')
+                  const processorName = t.users?.full_name || 'Staff'
+                  const paymentStr = t.payment_method || 'Cash'
                   return (
                     <tr key={t.transaction_id}>
-                      <td>
-                        <strong>{t.products?.product_name || t.product_name || '—'}</strong>
+                      <td style={{ textAlign: 'left' }}>
+                        <div>{t.products?.product_name || t.product_name || '—'}</div>
                         {t.products?.variant && <div style={{ fontSize: '0.75rem', color: '#555' }}>Variant: {t.products.variant}</div>}
                       </td>
-                      <td>{t.products?.cubes?.cube_number || t.cubes?.cube_number || '—'}</td>
-                      <td>{r.name}</td>
-                      <td>{new Date(t.transaction_date).toLocaleDateString('en-PH')}</td>
-                      <td>{t.payment_status}</td>
-                      <td>{t.payment_method || 'Cash'}</td>
-                      <td>{t.quantity || 1}</td>
-                      <td style={{ textAlign: 'right' }}>{peso(Number(t.products?.price || 0) * Number(t.quantity || 1))}</td>
+                      <td style={{ textAlign: 'center' }}>{t.products?.cubes?.cube_number || t.cubes?.cube_number || '—'}</td>
+                      <td style={{ textAlign: 'center' }}>{r.name}</td>
+                      <td style={{ textAlign: 'center' }}>{txDate}</td>
+                      <td style={{ textAlign: 'center' }}>{paymentStr}</td>
+                      <td style={{ textAlign: 'center' }}>{processorName}</td>
+                      <td style={{ textAlign: 'center' }}>{t.quantity || 1}</td>
+                      <td style={{ textAlign: 'right' }}>{peso(amt)}</td>
                     </tr>
                   )
                 })
@@ -1282,21 +1609,21 @@ export default function OwnerDashboard() {
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={7}><strong>Overall Total ({printPeriodLabel})</strong></td>
-                <td style={{ textAlign: 'right' }}><strong>{peso(printFilteredData.total)}</strong></td>
+                <td colSpan={7}>overall total</td>
+                <td style={{ textAlign: 'right' }}>{peso(printFilteredData.total)}</td>
               </tr>
             </tfoot>
           </table>
         )}
 
-        <div className="print-report-signatures">
+        <div className="print-report-signatures" style={{ display: 'flex', justifyContent: 'space-between', marginTop: '5rem', padding: '0 1.5rem' }}>
           <div>
-            <div className="sig-line"></div>
-            <div>Prepared By (Owner)</div>
+            <div className="sig-line" style={{ width: 190, borderBottom: '1px solid #000', marginBottom: '0.5rem' }}></div>
+            <div style={{ fontSize: '0.92rem', color: '#000' }}>prepared by</div>
           </div>
           <div>
-            <div className="sig-line"></div>
-            <div>Received / Acknowledged By</div>
+            <div className="sig-line" style={{ width: 190, borderBottom: '1px solid #000', marginBottom: '0.5rem' }}></div>
+            <div style={{ fontSize: '0.92rem', color: '#000' }}>received/acknowledge by</div>
           </div>
         </div>
       </div>

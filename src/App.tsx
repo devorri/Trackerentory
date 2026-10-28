@@ -14,9 +14,11 @@ import ServicesPage from './pages/ServicesPage'
 import OwnerProductsPage from './pages/OwnerProductsPage'
 import TermsPage from './pages/TermsPage'
 import PrivacyPage from './pages/PrivacyPage'
+import RenterAccountsPage from './pages/RenterAccountsPage'
+import PullOutItemsPage from './pages/PullOutItemsPage'
 import { AuthProvider, useAuth } from './context/Auth'
 import { useEffect, useState } from 'react'
-import { BarChart3, Package, Store, CalendarCheck, Tag, Box, FileText, Users, Menu, X } from 'lucide-react'
+import { BarChart3, Package, Store, CalendarCheck, Tag, Box, FileText, Users, UserCheck, Menu, X, LogOut, PackageMinus } from 'lucide-react'
 import { supabase } from './lib/supabase'
 import { daysUntil, type Contract } from './lib/types'
 import ConfirmModal from './components/ConfirmModal'
@@ -185,6 +187,14 @@ function InnerApp() {
               <span>Products Management</span>
             </NavLink>
             <NavLink
+              to="/pull-out"
+              className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
+              onClick={() => setAdminSidebarOpen(false)}
+            >
+              <PackageMinus size={18} />
+              <span>Pull Out Items</span>
+            </NavLink>
+            <NavLink
               to="/cubes"
               className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
               onClick={() => setAdminSidebarOpen(false)}
@@ -215,6 +225,16 @@ function InnerApp() {
               >
                 <Users size={18} />
                 <span>Staff Accounts</span>
+              </NavLink>
+            )}
+            {(role === 'Owner' || role === 'Staff') && (
+              <NavLink
+                to="/renter-accounts"
+                className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
+                onClick={() => setAdminSidebarOpen(false)}
+              >
+                <UserCheck size={18} />
+                <span>Renter Accounts</span>
               </NavLink>
             )}
 
@@ -272,6 +292,9 @@ function InnerApp() {
             <Route path="/display-tracking" element={<TransactionsPage defaultFilter="Display" pageTitle="Display Tracking" />} />
             <Route path="/reservations" element={<ReservationsPage />} />
             <Route path="/staff" element={<StaffManagement />} />
+            <Route path="/renter-accounts" element={<RenterAccountsPage />} />
+            <Route path="/renters" element={<Navigate to="/renter-accounts" replace />} />
+            <Route path="/pull-out" element={<PullOutItemsPage />} />
             <Route path="/" element={<ProductsPage />} />
             <Route path="/services" element={<ServicesPage />} />
             <Route path="/about" element={<AboutPage />} />
@@ -302,25 +325,55 @@ function InnerApp() {
           <span className="brand-text">Track<span>Erentory</span></span>
         </Link>
 
-        {/* Mobile Hamburger Button */}
-        <button
-          type="button"
-          className="hamburger-btn no-print"
-          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-          aria-label="Toggle Navigation"
-        >
-          {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
-        </button>
-
         <div className={`nav-links ${mobileMenuOpen ? 'mobile-open' : ''}`}>
           <NavLink to="/" onClick={() => setMobileMenuOpen(false)}>Catalogue</NavLink>
           <NavLink to="/services" onClick={() => setMobileMenuOpen(false)}>Services</NavLink>
           <NavLink to="/about" onClick={() => setMobileMenuOpen(false)}>About</NavLink>
           {role === 'Customer' && <NavLink to="/reservations" onClick={() => setMobileMenuOpen(false)}>Reservations</NavLink>}
           {role === 'Renter' && <NavLink to="/renter" onClick={() => setMobileMenuOpen(false)}>Renter</NavLink>}
+
+          {/* Mobile User Profile & Sign Out (in hamburger nav) */}
+          <div className="mobile-nav-auth-section">
+            {user ? (
+              <div className="mobile-nav-user-card">
+                <div className="mobile-nav-user-info">
+                  <div className="mobile-nav-avatar">
+                    {user.full_name ? user.full_name.charAt(0).toUpperCase() : 'U'}
+                  </div>
+                  <div className="mobile-nav-user-details">
+                    <strong className="mobile-nav-user-name">{user.full_name}</strong>
+                    <div className="mobile-nav-user-sub">
+                      <span className="badge info">{user.role}</span>
+                      {user.email && <span className="mobile-nav-user-email">{user.email}</span>}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="mobile-nav-signout-btn"
+                  onClick={() => {
+                    setMobileMenuOpen(false)
+                    setShowSignOutConfirm(true)
+                  }}
+                >
+                  <LogOut size={16} />
+                  <span>Sign Out</span>
+                </button>
+              </div>
+            ) : (
+              <Link
+                className="btn mobile-nav-signin-btn"
+                to="/login"
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                Sign In
+              </Link>
+            )}
+          </div>
         </div>
 
-        <div className="nav-user">
+        {/* Desktop User Info & Sign Out */}
+        <div className="nav-user desktop-only">
           {user ? (
             <>
               <div className="nav-user-meta">
@@ -333,7 +386,25 @@ function InnerApp() {
             <Link className="btn" to="/login">Sign in</Link>
           )}
         </div>
+
+        {/* Mobile Hamburger Button */}
+        <button
+          type="button"
+          className="hamburger-btn no-print"
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          aria-label="Toggle Navigation"
+        >
+          {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
+        </button>
       </nav>
+
+      {/* Mobile Backdrop Overlay */}
+      {mobileMenuOpen && (
+        <div
+          className="mobile-nav-overlay no-print"
+          onClick={() => setMobileMenuOpen(false)}
+        />
+      )}
 
       <main>
         {notices.length > 0 && (
@@ -355,6 +426,9 @@ function InnerApp() {
           <Route path="/reservations" element={<ReservationsPage />} />
           <Route path="/renter" element={<RenterDashboard />} />
           <Route path="/contracts" element={<ContractsPage />} />
+          <Route path="/renter-accounts" element={<RenterAccountsPage />} />
+          <Route path="/renters" element={<Navigate to="/renter-accounts" replace />} />
+          <Route path="/pull-out" element={<PullOutItemsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

@@ -10,8 +10,10 @@ import {
   AlertTriangle,
   CheckCircle2,
   ArrowUpDown,
+  Upload,
 } from 'lucide-react'
-import { supabase } from '../lib/supabase'
+import { supabase, BUCKET_DOCUMENTS } from '../lib/supabase'
+import { uploadPublicImage } from '../lib/storage'
 import { useAuth } from '../context/Auth'
 import { addMonths, daysUntil, peso, todayISO, type Contract, type Cube, type ContractExtension } from '../lib/types'
 import { SkeletonTable } from '../components/Skeleton'
@@ -45,10 +47,14 @@ export default function ContractsPage() {
   const [editingContract, setEditingContract] = useState<Contract | null>(null)
   const [declineTarget, setDeclineTarget] = useState<Contract | null>(null)
   const [saving, setSaving] = useState(false)
+  const [expireExistingContract, setExpireExistingContract] = useState(false)
 
   // Contract Payments state (for Cube Payment multi-month tracking)
   const [contractPayments, setContractPayments] = useState<any[]>([])
   const [paymentMopMap, setPaymentMopMap] = useState<Record<string, 'Cash' | 'Online'>>({})
+  const [paymentReceiptMap, setPaymentReceiptMap] = useState<Record<string, string>>({})
+  const [uploadingReceiptKey, setUploadingReceiptKey] = useState<string | null>(null)
+  const [previewReceipt, setPreviewReceipt] = useState<string | null>(null)
 
   // Form states
   const [createForm, setCreateForm] = useState({
@@ -59,6 +65,13 @@ export default function ContractsPage() {
     status: 'Active' as Contract['status'],
     contract_text: DEFAULT_TERMS,
   })
+
+  const activeContractOnCube = useMemo(() => {
+    if (!createForm.cube_id) return null
+    return contracts.find(
+      (c) => c.cube_id === Number(createForm.cube_id) && (c.status === 'Active' || c.status === 'Pending')
+    )
+  }, [contracts, createForm.cube_id])
 
   const [editForm, setEditForm] = useState({
     cube_id: '',
@@ -120,6 +133,18 @@ export default function ContractsPage() {
       const { data: payData, error: payErr } = await supabase.from('contract_payments').select('*')
       if (!payErr && payData) {
         setContractPayments(payData)
+        const initialReceipts: Record<string, string> = {}
+        const initialMops: Record<string, 'Cash' | 'Online'> = {}
+        for (const p of payData) {
+          const mNum = p.month_number ?? p.month_index
+          if (mNum) {
+            const k = `${p.contract_id}-${mNum}`
+            if (p.receipt_image_url) initialReceipts[k] = p.receipt_image_url
+            if (p.payment_method) initialMops[k] = p.payment_method as 'Cash' | 'Online'
+          }
+        }
+        setPaymentReceiptMap((prev) => ({ ...initialReceipts, ...prev }))
+        setPaymentMopMap((prev) => ({ ...initialMops, ...prev }))
       }
     } catch {
       // fallback
@@ -167,25 +192,57 @@ export default function ContractsPage() {
       return
     }
 
+    const cubeIdNum = Number(createForm.cube_id)
+    const existingLive = contracts.find(
+      (c) => c.cube_id === cubeIdNum && (c.status === 'Active' || c.status === 'Pending')
+    )
+
+    if (existingLive && !approvingExtensionId && !expireExistingContract) {
+      const renterName = (existingLive.users as any)?.full_name || 'the current renter'
+      const ok = window.confirm(
+        `Cube already has a live agreement (#${existingLive.contract_id}) for ${renterName}.\n\nDo you want to expire the previous agreement and activate this new contract?`
+      )
+      if (!ok) return
+    }
+
     setSaving(true)
+
+    // Expire any existing live contract on this cube first so unique constraint 'contracts_one_live_contract_per_cube' is preserved
+    if (existingLive) {
+      const { error: expireError } = await supabase
+        .from('contracts')
+        .update({ status: 'Expired' })
+        .eq('contract_id', existingLive.contract_id)
+
+      if (expireError) {
+        setSaving(false)
+        alert('Failed to archive previous active agreement: ' + expireError.message)
+        return
+      }
+    }
+
     const { error } = await supabase.from('contracts').insert([{
       renter_id: renterId,
-      cube_id: Number(createForm.cube_id),
+      cube_id: cubeIdNum,
       start_date: createForm.start_date,
       end_date: createForm.end_date,
       status: createForm.status,
       contract_text: createForm.contract_text || DEFAULT_TERMS,
     }])
-    setSaving(false)
 
     if (error) {
-      alert('Error creating contract: ' + error.message)
+      setSaving(false)
+      if (error.message.includes('contracts_one_live_contract_per_cube')) {
+        alert('This cube space already has an active or pending contract. Please expire or resolve the previous agreement first.')
+      } else {
+        alert('Error creating contract: ' + error.message)
+      }
       return
     }
 
     // Set cube to Occupied if status is Active
     if (createForm.status === 'Active') {
-      await supabase.from('cubes').update({ status: 'Occupied' }).eq('cube_id', Number(createForm.cube_id))
+      await supabase.from('cubes').update({ status: 'Occupied' }).eq('cube_id', cubeIdNum)
     }
 
     if (approvingExtensionId) {
@@ -200,12 +257,15 @@ export default function ContractsPage() {
       setApprovingExtensionId(null)
     }
 
+    setSaving(false)
     setIsCreateModalOpen(false)
+    setExpireExistingContract(false)
     void load()
   }
 
   function handleApproveExtension(ext: ContractExtension) {
     setApprovingExtensionId(ext.extension_id)
+    setExpireExistingContract(true)
     const prevEnd = ext.contracts?.end_date || todayISO()
     const start = prevEnd > todayISO() ? prevEnd : todayISO()
     const end = addMonths(start, ext.requested_months || 1)
@@ -262,7 +322,11 @@ export default function ContractsPage() {
 
     setSaving(false)
     if (error) {
-      alert('Error updating contract: ' + error.message)
+      if (error.message.includes('contracts_one_live_contract_per_cube')) {
+        alert('Cannot activate this contract: The assigned cube already has another live agreement.')
+      } else {
+        alert('Error updating contract: ' + error.message)
+      }
       return
     }
 
@@ -273,54 +337,161 @@ export default function ContractsPage() {
     void load()
   }
 
+  async function handleUploadCubePaymentReceipt(c: Contract, monthIndex: number, file: File | null) {
+    if (!file) return
+    const key = `${c.contract_id}-${monthIndex}`
+    setUploadingReceiptKey(key)
+
+    const upload = await uploadPublicImage(BUCKET_DOCUMENTS, file, 'cube-payments')
+    setUploadingReceiptKey(null)
+
+    if (upload.error || !upload.url) {
+      alert('Failed to upload receipt: ' + (upload.error || 'unknown error'))
+      return
+    }
+
+    const receiptUrl = upload.url
+    setPaymentReceiptMap((prev) => ({ ...prev, [key]: receiptUrl }))
+    setPaymentMopMap((prev) => ({ ...prev, [key]: 'Online' }))
+
+    const existing = contractPayments.find(
+      (p) => p.contract_id === c.contract_id && (p.month_number === monthIndex || p.month_index === monthIndex)
+    )
+
+    if (existing?.payment_id) {
+      const { error } = await supabase
+        .from('contract_payments')
+        .update({
+          receipt_image_url: receiptUrl,
+          payment_method: 'Online',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('payment_id', existing.payment_id)
+
+      if (error) {
+        console.warn('Error saving receipt to existing payment:', error)
+      } else {
+        setContractPayments((prev) =>
+          prev.map((p) =>
+            p.payment_id === existing.payment_id
+              ? { ...p, receipt_image_url: receiptUrl, payment_method: 'Online' }
+              : p
+          )
+        )
+      }
+    }
+  }
+
   async function markMonthPaid(c: Contract, monthIndex: number) {
     const key = `${c.contract_id}-${monthIndex}`
     const mop = paymentMopMap[key] || 'Cash'
-    setSaving(true)
-    try {
-      const { error } = await supabase.from('contract_payments').upsert(
-        {
-          contract_id: c.contract_id,
-          renter_id: c.renter_id,
-          cube_id: c.cube_id,
-          month_index: monthIndex,
-          amount: c.cubes?.price_per_month || 0,
-          status: 'Paid',
-          payment_method: mop,
-          payment_date: new Date().toISOString(),
-        },
-        { onConflict: 'contract_id,month_index' }
+    const receiptUrl = paymentReceiptMap[key] || null
+
+    if (mop === 'Online' && !receiptUrl) {
+      const proceed = window.confirm(
+        'You selected Online payment but have not attached a receipt proof yet.\n\nDo you want to proceed and mark as Paid anyway, or cancel to attach the receipt image first?'
       )
-      if (error) {
-        setContractPayments((prev) => [
-          ...prev.filter((p) => !(p.contract_id === c.contract_id && p.month_index === monthIndex)),
-          {
-            contract_id: c.contract_id,
-            renter_id: c.renter_id,
-            cube_id: c.cube_id,
-            month_index: monthIndex,
-            amount: c.cubes?.price_per_month || 0,
+      if (!proceed) return
+    }
+
+    setSaving(true)
+    const dueDate = addMonths(c.start_date, monthIndex - 1)
+    const existing = contractPayments.find(
+      (p) => p.contract_id === c.contract_id && (p.month_number === monthIndex || p.month_index === monthIndex)
+    )
+
+    try {
+      if (existing?.payment_id) {
+        const { error } = await supabase
+          .from('contract_payments')
+          .update({
+            payment_status: 'Paid',
             status: 'Paid',
             payment_method: mop,
+            receipt_image_url: receiptUrl || existing.receipt_image_url || null,
+            paid_at: new Date().toISOString(),
             payment_date: new Date().toISOString(),
-          },
-        ])
-      }
-    } catch {
-      setContractPayments((prev) => [
-        ...prev.filter((p) => !(p.contract_id === c.contract_id && p.month_index === monthIndex)),
-        {
+            processed_by: user?.user_id,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('payment_id', existing.payment_id)
+
+        if (!error) {
+          setContractPayments((prev) =>
+            prev.map((p) =>
+              p.payment_id === existing.payment_id
+                ? {
+                    ...p,
+                    payment_status: 'Paid',
+                    status: 'Paid',
+                    payment_method: mop,
+                    receipt_image_url: receiptUrl || existing.receipt_image_url || null,
+                    paid_at: new Date().toISOString(),
+                  }
+                : p
+            )
+          )
+        }
+      } else {
+        const insertPayload: any = {
           contract_id: c.contract_id,
           renter_id: c.renter_id,
           cube_id: c.cube_id,
-          month_index: monthIndex,
+          month_number: monthIndex,
+          due_date: dueDate,
           amount: c.cubes?.price_per_month || 0,
-          status: 'Paid',
+          payment_status: 'Paid',
           payment_method: mop,
-          payment_date: new Date().toISOString(),
-        },
-      ])
+          receipt_image_url: receiptUrl || null,
+          paid_at: new Date().toISOString(),
+          processed_by: user?.user_id,
+        }
+
+        let { data, error } = await supabase
+          .from('contract_payments')
+          .insert([insertPayload])
+          .select()
+
+        if (error && (error.message.includes('month_number') || error.message.includes('payment_status'))) {
+          delete insertPayload.month_number
+          delete insertPayload.payment_status
+          insertPayload.month_index = monthIndex
+          insertPayload.status = 'Paid'
+          insertPayload.payment_date = new Date().toISOString()
+          const retry = await supabase.from('contract_payments').insert([insertPayload]).select()
+          data = retry.data
+          error = retry.error
+        }
+
+        if (error) {
+          console.warn('contract_payments insert error, updating local state:', error)
+          setContractPayments((prev) => [
+            ...prev.filter((p) => !(p.contract_id === c.contract_id && (p.month_number === monthIndex || p.month_index === monthIndex))),
+            {
+              contract_id: c.contract_id,
+              renter_id: c.renter_id,
+              cube_id: c.cube_id,
+              month_number: monthIndex,
+              due_date: dueDate,
+              amount: c.cubes?.price_per_month || 0,
+              payment_status: 'Paid',
+              status: 'Paid',
+              payment_method: mop,
+              receipt_image_url: receiptUrl || null,
+              paid_at: new Date().toISOString(),
+            },
+          ])
+        } else if (data && data[0]) {
+          setContractPayments((prev) => [
+            ...prev.filter((p) => !(p.contract_id === c.contract_id && (p.month_number === monthIndex || p.month_index === monthIndex))),
+            data[0],
+          ])
+        }
+      }
+    } catch (err) {
+      console.error(err)
     }
+
     setSaving(false)
     void load()
   }
@@ -893,11 +1064,13 @@ export default function ContractsPage() {
                     const monthIndex = i + 1
                     const isMonth1 = monthIndex === 1
                     const record = contractPayments.find(
-                      (p) => p.contract_id === c.contract_id && p.month_index === monthIndex
+                      (p) => p.contract_id === c.contract_id && (p.month_number === monthIndex || p.month_index === monthIndex)
                     )
-                    const isPaid = isMonth1 || record?.status === 'Paid'
+                    const isPaid = (record?.payment_status === 'Paid' || record?.status === 'Paid') || (isMonth1 && !record)
                     const key = `${c.contract_id}-${monthIndex}`
                     const mop = record?.payment_method || paymentMopMap[key] || 'Cash'
+                    const receiptUrl = record?.receipt_image_url || paymentReceiptMap[key] || null
+                    const isUploading = uploadingReceiptKey === key
 
                     return (
                       <tr key={`${c.contract_id}-m${monthIndex}`}>
@@ -920,23 +1093,137 @@ export default function ContractsPage() {
                           </span>
                         </td>
                         <td>
-                          {isPaid ? (
-                            <span className="badge ok">{mop}</span>
-                          ) : (
-                            <select
-                              value={mop}
-                              onChange={(e) =>
-                                setPaymentMopMap({
-                                  ...paymentMopMap,
-                                  [key]: e.target.value as 'Cash' | 'Online',
-                                })
-                              }
-                              style={{ padding: '0.2rem 0.45rem', fontSize: '0.78rem', borderRadius: 6 }}
-                            >
-                              <option value="Cash">Cash</option>
-                              <option value="Online">Online</option>
-                            </select>
-                          )}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 140 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              {isPaid ? (
+                                <span className={`badge ${mop === 'Online' ? 'info' : 'ok'}`} style={{ fontWeight: 700 }}>
+                                  {mop}
+                                </span>
+                              ) : (
+                                <select
+                                  value={mop}
+                                  onChange={(e) => {
+                                    const nextMop = e.target.value as 'Cash' | 'Online'
+                                    setPaymentMopMap((prev) => ({ ...prev, [key]: nextMop }))
+                                  }}
+                                  style={{ padding: '0.22rem 0.5rem', fontSize: '0.78rem', borderRadius: 6, fontWeight: 600 }}
+                                >
+                                  <option value="Cash">Cash</option>
+                                  <option value="Online">Online</option>
+                                </select>
+                              )}
+
+                              {isPaid && isOwner && (
+                                <button
+                                  type="button"
+                                  className="btn-ghost"
+                                  style={{ fontSize: '0.68rem', padding: '1px 5px', color: '#64748b' }}
+                                  onClick={() => {
+                                    const nextMop = mop === 'Cash' ? 'Online' : 'Cash'
+                                    setPaymentMopMap((prev) => ({ ...prev, [key]: nextMop }))
+                                    if (record?.payment_id) {
+                                      void supabase
+                                        .from('contract_payments')
+                                        .update({ payment_method: nextMop, updated_at: new Date().toISOString() })
+                                        .eq('payment_id', record.payment_id)
+                                        .then(() => void load())
+                                    }
+                                  }}
+                                  title="Change mode of payment"
+                                >
+                                  Edit
+                                </button>
+                              )}
+                            </div>
+
+                            {/* Online Receipt Attachment / Preview */}
+                            {mop === 'Online' && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                                {receiptUrl ? (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <img
+                                      src={receiptUrl}
+                                      alt="Payment Receipt"
+                                      style={{
+                                        width: 34,
+                                        height: 34,
+                                        objectFit: 'cover',
+                                        borderRadius: 4,
+                                        cursor: 'pointer',
+                                        border: '1px solid #cbd5e1',
+                                        boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                                      }}
+                                      onClick={() => setPreviewReceipt(receiptUrl)}
+                                      title="Click to view full receipt"
+                                    />
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                      <label
+                                        style={{
+                                          fontSize: '0.7rem',
+                                          cursor: isUploading ? 'not-allowed' : 'pointer',
+                                          color: '#2563eb',
+                                          textDecoration: 'underline',
+                                          fontWeight: 600,
+                                        }}
+                                      >
+                                        {isUploading ? 'Uploading…' : 'Change image'}
+                                        <input
+                                          type="file"
+                                          accept="image/*"
+                                          style={{ display: 'none' }}
+                                          disabled={isUploading}
+                                          onChange={(e) => {
+                                            const f = e.target.files?.[0] || null
+                                            void handleUploadCubePaymentReceipt(c, monthIndex, f)
+                                            e.target.value = ''
+                                          }}
+                                        />
+                                      </label>
+                                      <button
+                                        type="button"
+                                        className="btn-ghost"
+                                        style={{ fontSize: '0.68rem', padding: 0, color: '#0284c7', textAlign: 'left', fontWeight: 600 }}
+                                        onClick={() => setPreviewReceipt(receiptUrl)}
+                                      >
+                                        View
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <label
+                                    style={{
+                                      fontSize: '0.72rem',
+                                      cursor: isUploading ? 'not-allowed' : 'pointer',
+                                      color: '#2563eb',
+                                      textDecoration: 'underline',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 4,
+                                      fontWeight: 600,
+                                      background: '#eff6ff',
+                                      padding: '3px 8px',
+                                      borderRadius: 6,
+                                      border: '1px dashed #93c5fd',
+                                    }}
+                                  >
+                                    <Upload size={12} />
+                                    {isUploading ? 'Uploading…' : 'Attach image'}
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      style={{ display: 'none' }}
+                                      disabled={isUploading}
+                                      onChange={(e) => {
+                                        const f = e.target.files?.[0] || null
+                                        void handleUploadCubePaymentReceipt(c, monthIndex, f)
+                                        e.target.value = ''
+                                      }}
+                                    />
+                                  </label>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         </td>
                         <td style={{ textAlign: 'right' }}>
                           {isPaid ? (
@@ -1293,24 +1580,58 @@ export default function ContractsPage() {
                 <label>Select Cube Space *</label>
                 <select
                   value={createForm.cube_id}
-                  onChange={(e) => setCreateForm({ ...createForm, cube_id: e.target.value })}
+                  onChange={(e) => {
+                    setCreateForm({ ...createForm, cube_id: e.target.value })
+                    setExpireExistingContract(false)
+                  }}
                 >
                   <option value="">Choose a cube…</option>
                   <optgroup label="Display Cubes">
                     {cubes.filter((c) => c.type === 'Display').map((c) => (
                       <option key={c.cube_id} value={c.cube_id}>
-                        Cube {c.cube_number} ({peso(c.price_per_month)}/mo) — {c.status}
+                        Cube {c.cube_number} ({peso(c.price_per_month)}/mo)
                       </option>
                     ))}
                   </optgroup>
                   <optgroup label="Pick-up Cubes">
                     {cubes.filter((c) => c.type === 'Pick-up').map((c) => (
                       <option key={c.cube_id} value={c.cube_id}>
-                        Cube {c.cube_number} ({peso(c.price_per_month)}/mo) — {c.status}
+                        Cube {c.cube_number} ({peso(c.price_per_month)}/mo)
                       </option>
                     ))}
                   </optgroup>
                 </select>
+
+                {activeContractOnCube && (
+                  <div
+                    style={{
+                      padding: '0.75rem 1rem',
+                      borderRadius: 10,
+                      border: '1px solid #f59e0b',
+                      background: '#fffbeb',
+                      marginTop: '0.6rem',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.35rem',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, color: '#92400e', fontSize: '0.88rem' }}>
+                      <AlertTriangle size={16} />
+                      <span>Cube currently has a live agreement ({activeContractOnCube.status})</span>
+                    </div>
+                    <div style={{ fontSize: '0.82rem', color: '#78350f', lineHeight: 1.4 }}>
+                      Currently leased to <strong>{(activeContractOnCube.users as any)?.full_name || 'Renter'}</strong> under Contract #{activeContractOnCube.contract_id} (valid until {activeContractOnCube.end_date}).
+                    </div>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.2rem', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 700, color: '#92400e' }}>
+                      <input
+                        type="checkbox"
+                        checked={expireExistingContract}
+                        onChange={(e) => setExpireExistingContract(e.target.checked)}
+                      />
+                      Expire previous agreement (#{activeContractOnCube.contract_id}) to activate this new contract
+                    </label>
+                  </div>
+                )}
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
@@ -1489,6 +1810,45 @@ export default function ContractsPage() {
         onConfirm={confirmDeclineContract}
         onCancel={() => setDeclineTarget(null)}
       />
+
+      {/* RECEIPT ZOOM / PREVIEW MODAL */}
+      {previewReceipt && (
+        <div className="modal-overlay" onClick={() => setPreviewReceipt(null)} style={{ zIndex: 100002 }}>
+          <div className="modal-card" style={{ maxWidth: 620, textAlign: 'center', background: '#fff' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800 }}>Payment Receipt Proof</h3>
+              <button className="modal-close" onClick={() => setPreviewReceipt(null)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div style={{ padding: '1rem', background: '#f8fafc', borderRadius: 8, margin: '1rem 0' }}>
+              <img
+                src={previewReceipt}
+                alt="Receipt proof"
+                style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain', borderRadius: 6, boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+              />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+              <a
+                href={previewReceipt}
+                target="_blank"
+                rel="noreferrer"
+                className="btn-ghost"
+                style={{ fontSize: '0.85rem' }}
+              >
+                Open in new tab
+              </a>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setPreviewReceipt(null)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   )
 }

@@ -20,6 +20,7 @@ export type Cube = {
   price_per_month: number
   status: 'Available' | 'Occupied'
   image_url: string | null
+  image_urls?: string[] | null
   width_cm: number | null
   height_cm: number | null
   deleted_at: string | null
@@ -127,6 +128,27 @@ export type Transaction = {
   products?: (Product & { cubes?: Cube | null }) | null
   cubes?: Pick<Cube, 'cube_number' | 'type'> | null
   users?: { full_name: string; role: Role } | null
+}
+
+export type PullOutItem = {
+  pull_out_id: number | string
+  type: 'Display' | 'Pick-up'
+  product_id?: number | null
+  cube_id?: number | null
+  renter_id?: number | null
+  transaction_id?: number | null
+  buyer_name?: string | null
+  product_name: string
+  price: number
+  quantity: number
+  reason: string
+  status: string
+  notes?: string | null
+  pulled_out_by?: number | null
+  pulled_out_at: string
+  created_at?: string
+  cubes?: { cube_number: string; type: string } | null
+  renter?: { full_name: string; phone_number?: string | null; social_link?: string | null; username?: string | null } | null
 }
 
 export type OtpCode = {

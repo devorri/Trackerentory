@@ -97,7 +97,7 @@ export default function RenterDashboard() {
     authorized_alternate: '',
     notes: '',
   })
-  const [contractTab, setContractTab] = useState<'active' | 'extension' | 'expired'>('active')
+  const [contractTab, setContractTab] = useState<'active' | 'pending' | 'extension' | 'expired'>('active')
 
   // ════════════ ADD PRODUCT DUAL FORM (Image 2) ════════════
   const [addProductType, setAddProductType] = useState<'display' | 'pickup'>('display')
@@ -137,6 +137,9 @@ export default function RenterDashboard() {
     category: '',
     cube_id: '',
   })
+  const [editProductExistingImages, setEditProductExistingImages] = useState<string[]>([])
+  const [editProductNewImages, setEditProductNewImages] = useState<File[]>([])
+  const [editProductNewPreviews, setEditProductNewPreviews] = useState<string[]>([])
 
   // ════════════ SUB-FILTERS & SEARCH ════════════
   const [reservationStatusFilter, setReservationStatusFilter] = useState<'All' | 'Pending' | 'Confirmed' | 'Cancelled' | 'Expired'>('All')
@@ -241,6 +244,7 @@ export default function RenterDashboard() {
 
   const categorizedContracts = useMemo(() => {
     const activeList: Contract[] = []
+    const pendingList: Contract[] = []
     const extensionList: Contract[] = []
     const expiredList: Contract[] = []
 
@@ -250,7 +254,9 @@ export default function RenterDashboard() {
         (ext) => ext.contract_id === c.contract_id && ext.status === 'Pending',
       )
 
-      if (c.status === 'Active' && daysLeft >= 0) {
+      if (c.status === 'Pending') {
+        pendingList.push(c)
+      } else if (c.status === 'Active' && daysLeft >= 0) {
         activeList.push(c)
       } else if ((daysLeft < 0 && daysLeft >= -3) || (hasPendingExtension && c.status !== 'Active')) {
         extensionList.push(c)
@@ -259,15 +265,44 @@ export default function RenterDashboard() {
       }
     })
 
-    return { activeList, extensionList, expiredList }
+    return { activeList, pendingList, extensionList, expiredList }
   }, [contracts, extensionRequests])
 
   // ════════════ ADD PRODUCT HANDLERS ════════════
   function handleDisplayPhotoFiles(files: FileList | null) {
-    const list = Array.from(files || [])
-    setDisplayImages(list)
+    if (!files || files.length === 0) return
+    const list = Array.from(files)
+    setDisplayImages((prev) => [...prev, ...list])
     const previews = list.map((file) => URL.createObjectURL(file))
-    setDisplayImagePreviews(previews)
+    setDisplayImagePreviews((prev) => [...prev, ...previews])
+  }
+
+  function handleRemoveDisplayPhoto(index: number) {
+    if (displayImagePreviews[index]) {
+      URL.revokeObjectURL(displayImagePreviews[index])
+    }
+    setDisplayImages((prev) => prev.filter((_, i) => i !== index))
+    setDisplayImagePreviews((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  function handleEditProductFilesAdd(files: FileList | null) {
+    if (!files || files.length === 0) return
+    const list = Array.from(files)
+    setEditProductNewImages((prev) => [...prev, ...list])
+    const previews = list.map((file) => URL.createObjectURL(file))
+    setEditProductNewPreviews((prev) => [...prev, ...previews])
+  }
+
+  function removeEditProductExistingImage(index: number) {
+    setEditProductExistingImages((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  function removeEditProductNewImage(index: number) {
+    if (editProductNewPreviews[index]) {
+      URL.revokeObjectURL(editProductNewPreviews[index])
+    }
+    setEditProductNewImages((prev) => prev.filter((_, i) => i !== index))
+    setEditProductNewPreviews((prev) => prev.filter((_, i) => i !== index))
   }
 
   async function handleAddDisplayProduct(e: React.FormEvent) {
@@ -481,6 +516,21 @@ export default function RenterDashboard() {
   async function saveEditedProduct() {
     if (!editingProduct) return
     setBusy(true)
+
+    let uploadedUrls: string[] = []
+    if (editProductNewImages.length > 0) {
+      const uploads = await Promise.all(
+        editProductNewImages.map((f) => uploadPublicImage(BUCKET_PRODUCT_IMAGES, f, String(user!.user_id)))
+      )
+      const err = uploads.find((u) => u.error || !u.url)
+      if (err) {
+        setBusy(false)
+        return alert('Failed uploading photos: ' + (err.error || 'unknown error'))
+      }
+      uploadedUrls = uploads.map((u) => u.url!)
+    }
+    const finalImages = [...editProductExistingImages, ...uploadedUrls]
+
     const { error } = await supabase
       .from('products')
       .update({
@@ -491,12 +541,17 @@ export default function RenterDashboard() {
         variant: editProductForm.variant.trim() || null,
         category: editProductForm.category.trim() || null,
         cube_id: Number(editProductForm.cube_id) || editingProduct.cube_id,
+        image_url: finalImages[0] || null,
+        image_urls: finalImages,
       })
       .eq('product_id', editingProduct.product_id)
 
     setBusy(false)
     if (error) return alert(error.message)
     setEditingProduct(null)
+    setEditProductNewImages([])
+    setEditProductNewPreviews([])
+    setEditProductExistingImages([])
     void load()
   }
 
@@ -789,12 +844,32 @@ export default function RenterDashboard() {
 
                   {/* Photo uploads */}
                   <div className="field" style={{ marginTop: '1rem' }}>
-                    <label>Product Photos</label>
-                    <input type="file" accept="image/*" multiple onChange={(e) => handleDisplayPhotoFiles(e.target.files)} />
+                    <label>Product Photos (Can select multiple)</label>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={(e) => {
+                        handleDisplayPhotoFiles(e.target.files)
+                        e.target.value = ''
+                      }}
+                    />
                     {displayImagePreviews.length > 0 && (
-                      <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginTop: '0.75rem' }}>
+                      <div className="photo-preview-grid">
                         {displayImagePreviews.map((src, i) => (
-                          <img key={i} src={src} alt="Preview" style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, border: '1px solid #cbd5e1' }} />
+                          <div key={i} className="photo-preview-item">
+                            <img src={src} alt={`Product shot ${i + 1}`} />
+                            <button
+                              type="button"
+                              className="photo-remove-btn"
+                              onClick={() => handleRemoveDisplayPhoto(i)}
+                              title="Remove photo"
+                              aria-label="Remove photo"
+                            >
+                              <X size={12} strokeWidth={2.5} />
+                            </button>
+                            {i === 0 && <span className="photo-badge-main">Cover</span>}
+                          </div>
                         ))}
                       </div>
                     )}
@@ -1245,14 +1320,21 @@ export default function RenterDashboard() {
               </div>
             </div>
 
-            {/* 3 TABS: Active, Extension, Expired (Item 18 & 19) */}
-            <div style={{ display: 'flex', gap: '0.65rem', marginBottom: '1.25rem', borderBottom: '2px solid #efefef', paddingBottom: '0.5rem' }}>
+            {/* 4 TABS: Active, Pending, Extension, Expired */}
+            <div style={{ display: 'flex', gap: '0.65rem', marginBottom: '1.25rem', borderBottom: '2px solid #efefef', paddingBottom: '0.5rem', flexWrap: 'wrap' }}>
               <button
                 type="button"
                 className={contractTab === 'active' ? 'btn' : 'btn-ghost'}
                 onClick={() => setContractTab('active')}
               >
                 Active Cubes ({categorizedContracts.activeList.length})
+              </button>
+              <button
+                type="button"
+                className={contractTab === 'pending' ? 'btn' : 'btn-ghost'}
+                onClick={() => setContractTab('pending')}
+              >
+                Pending ({categorizedContracts.pendingList.length})
               </button>
               <button
                 type="button"
@@ -1277,6 +1359,15 @@ export default function RenterDashboard() {
               </div>
             ) : (
               <div>
+                {contractTab === 'pending' && categorizedContracts.pendingList.length > 0 && (
+                  <div className="panel" style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '0.85rem 1.25rem', marginBottom: '1.25rem' }}>
+                    <strong style={{ color: '#1e40af', fontSize: '0.9rem' }}>Pending Owner Approval</strong>
+                    <p style={{ margin: '0.25rem 0 0', fontSize: '0.82rem', color: '#1e3a8a' }}>
+                      These cube lease agreements are awaiting review and activation by the store owner. Once approved, the cube will be active and ready for your products.
+                    </p>
+                  </div>
+                )}
+
                 {contractTab === 'extension' && categorizedContracts.extensionList.length > 0 && (
                   <div className="panel" style={{ background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 8, padding: '0.85rem 1.25rem', marginBottom: '1.25rem' }}>
                     <strong style={{ color: '#92400e', fontSize: '0.9rem' }}>3-Day Grace Period for Contract Extension</strong>
@@ -1298,6 +1389,8 @@ export default function RenterDashboard() {
                 {(() => {
                   const list = contractTab === 'active'
                     ? categorizedContracts.activeList
+                    : contractTab === 'pending'
+                    ? categorizedContracts.pendingList
                     : contractTab === 'extension'
                     ? categorizedContracts.extensionList
                     : categorizedContracts.expiredList
@@ -1328,13 +1421,13 @@ export default function RenterDashboard() {
                               display: 'flex',
                               flexDirection: 'column',
                               gap: '0.85rem',
-                              borderLeft: contractTab === 'expired' ? '4px solid #dc2626' : contractTab === 'extension' ? '4px solid #f59e0b' : '4px solid #16a34a',
+                              borderLeft: contractTab === 'expired' ? '4px solid #dc2626' : contractTab === 'extension' ? '4px solid #f59e0b' : contractTab === 'pending' ? '4px solid #3b82f6' : '4px solid #16a34a',
                             }}
                           >
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <strong style={{ fontSize: '1.2rem' }}>Cube #{c.cubes?.cube_number || c.cube_id}</strong>
-                              <span className={`status-pill ${c.status === 'Active' ? 'confirmed' : isExpired ? 'cancelled' : 'pending'}`}>
-                                {isExpired ? (contractTab === 'expired' ? 'Released' : 'Grace Period') : c.status}
+                              <span className={`status-pill ${c.status === 'Active' ? 'confirmed' : c.status === 'Pending' ? 'pending' : isExpired ? 'cancelled' : 'pending'}`}>
+                                {c.status === 'Pending' ? 'Pending Approval' : isExpired ? (contractTab === 'expired' ? 'Released' : 'Grace Period') : c.status}
                               </span>
                             </div>
 
@@ -1351,7 +1444,7 @@ export default function RenterDashboard() {
                             <div style={{ fontSize: '0.85rem', background: '#f8fafc', padding: '0.65rem 0.85rem', borderRadius: 8, border: '1px solid #e2e8f0' }}>
                               <div><strong>Agreement #{c.contract_id}</strong></div>
                               <div className="muted" style={{ marginTop: 2 }}>
-                                {c.start_date} → {c.end_date} ({daysLeft >= 0 ? `${daysLeft} day(s) left` : `${Math.abs(daysLeft)} day(s) expired`})
+                                {c.start_date} → {c.end_date} ({c.status === 'Pending' ? `${daysLeft} day(s) validity upon approval` : daysLeft >= 0 ? `${daysLeft} day(s) left` : `${Math.abs(daysLeft)} day(s) expired`})
                               </div>
                             </div>
 
@@ -1385,6 +1478,10 @@ export default function RenterDashboard() {
                                     + Request Extension
                                   </button>
                                 )
+                              ) : contractTab === 'pending' ? (
+                                <span className="badge warn" style={{ fontSize: '0.75rem', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>
+                                  Pending Approval
+                                </span>
                               ) : contractTab === 'expired' ? (
                                 <span className="badge bad" style={{ fontSize: '0.75rem' }}>
                                   Expired & Released
@@ -1536,6 +1633,9 @@ export default function RenterDashboard() {
                                   style={{ padding: '0.25rem 0.55rem', fontSize: '0.75rem' }}
                                   onClick={() => {
                                     setEditingProduct(p)
+                                    setEditProductExistingImages(p.image_urls?.length ? p.image_urls : p.image_url ? [p.image_url] : [])
+                                    setEditProductNewImages([])
+                                    setEditProductNewPreviews([])
                                     setEditProductForm({
                                       product_name: p.product_name,
                                       description: p.description || '',
@@ -1802,6 +1902,54 @@ export default function RenterDashboard() {
                 value={editProductForm.description}
                 onChange={(e) => setEditProductForm({ ...editProductForm, description: e.target.value })}
               />
+            </div>
+            <div className="field" style={{ marginTop: '0.75rem' }}>
+              <label>Product Photos (Can select multiple)</label>
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={(e) => {
+                  handleEditProductFilesAdd(e.target.files)
+                  e.target.value = ''
+                }}
+              />
+              {(editProductExistingImages.length > 0 || editProductNewPreviews.length > 0) && (
+                <div className="photo-preview-grid">
+                  {editProductExistingImages.map((src, i) => (
+                    <div key={`edit-exist-${i}`} className="photo-preview-item" title="Saved photo">
+                      <img src={src} alt={`Saved photo ${i + 1}`} />
+                      <button
+                        type="button"
+                        className="photo-remove-btn"
+                        onClick={() => removeEditProductExistingImage(i)}
+                        title="Remove photo"
+                        aria-label="Remove photo"
+                      >
+                        <X size={12} strokeWidth={2.5} />
+                      </button>
+                      {i === 0 && <span className="photo-badge-main">Cover</span>}
+                    </div>
+                  ))}
+                  {editProductNewPreviews.map((src, i) => (
+                    <div key={`edit-new-${i}`} className="photo-preview-item" title="New photo">
+                      <img src={src} alt={`New upload ${i + 1}`} />
+                      <button
+                        type="button"
+                        className="photo-remove-btn"
+                        onClick={() => removeEditProductNewImage(i)}
+                        title="Remove photo"
+                        aria-label="Remove photo"
+                      >
+                        <X size={12} strokeWidth={2.5} />
+                      </button>
+                      {editProductExistingImages.length === 0 && i === 0 && (
+                        <span className="photo-badge-main">Cover</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.25rem' }}>
               <button className="btn" type="button" disabled={busy} onClick={saveEditedProduct} style={{ flex: 1 }}>
