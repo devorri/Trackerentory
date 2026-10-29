@@ -16,6 +16,7 @@ import { supabase, BUCKET_DOCUMENTS } from '../lib/supabase'
 import { uploadPublicImage } from '../lib/storage'
 import { useAuth } from '../context/Auth'
 import { addMonths, daysUntil, peso, todayISO, type Contract, type Cube, type ContractExtension } from '../lib/types'
+import { expireContracts, cancelExpiredReservations } from '../lib/maintenance'
 import { SkeletonTable } from '../components/Skeleton'
 import TablePagination, { DEFAULT_PAGE_SIZE } from '../components/TablePagination'
 import ConfirmModal from '../components/ConfirmModal'
@@ -84,27 +85,82 @@ export default function ContractsPage() {
 
   async function load() {
     setLoading(true)
+    await Promise.all([expireContracts(), cancelExpiredReservations()])
+
     let q = supabase
       .from('contracts')
-      .select('*, cubes(*), users!renter_id(full_name, email, phone_number)')
-      .order('created_at', { ascending: false })
+      .select('*, cubes(*), users!renter_id(*)')
+      .order('contract_id', { ascending: false })
 
     if (user?.role === 'Renter') {
       q = q.eq('renter_id', user.user_id)
     }
 
-    const [cRes, cubeRes, renterRes, ownerRes] = await Promise.all([
+    const [cRes, cubeRes, renterRes, ownerRes, resRes] = await Promise.all([
       q,
       supabase.from('cubes').select('*').order('cube_number'),
-      supabase.from('users').select('user_id, full_name, email, phone_number').eq('role', 'Renter').order('full_name'),
+      supabase.from('users').select('*').eq('role', 'Renter').order('full_name'),
       supabase.from('users').select('full_name').eq('role', 'Owner').limit(1).maybeSingle(),
+      supabase.from('reservations').select('*').is('product_id', null).eq('status', 'Pending'),
     ])
 
-    setLoading(false)
-
+    let loadedContracts: Contract[] = []
     if (!cRes.error) {
-      setContracts((cRes.data || []) as Contract[])
+      loadedContracts = (cRes.data || []) as Contract[]
+    } else {
+      // Fallback if relational select fails
+      let fallbackQ = supabase.from('contracts').select('*').order('contract_id', { ascending: false })
+      if (user?.role === 'Renter') fallbackQ = fallbackQ.eq('renter_id', user.user_id)
+      const [fbCon, fbUsers] = await Promise.all([
+        fallbackQ,
+        supabase.from('users').select('*'),
+      ])
+      const cubeMap = new Map<number, Cube>(((cubeRes.data || []) as Cube[]).map((c) => [c.cube_id, c]))
+      const userMap = new Map<number, any>((fbUsers.data || []).map((u: any) => [u.user_id, u]))
+      loadedContracts = ((fbCon.data || []) as any[]).map((c) => ({
+        ...c,
+        cubes: c.cube_id ? cubeMap.get(c.cube_id) || null : null,
+        users: c.renter_id ? userMap.get(c.renter_id) || null : null,
+      }))
     }
+
+    // Sync any pending cube reservation in `reservations` that does not yet have a live contract row
+    if (!resRes.error && resRes.data && resRes.data.length > 0) {
+      const liveCubeIds = new Set(
+        loadedContracts
+          .filter((c) => c.status === 'Pending' || (c.status === 'Active' && daysUntil(c.end_date) >= 0))
+          .map((c) => c.cube_id),
+      )
+      for (const r of resRes.data as any[]) {
+        if (r.cube_id && r.customer_id && !liveCubeIds.has(r.cube_id)) {
+          if (user?.role === 'Renter' && r.customer_id !== user.user_id) continue
+          const start = todayISO()
+          const months = Math.max(1, Math.round((r.hours_valid || 720) / 720))
+          const end = addMonths(start, months)
+          const { data: inserted } = await supabase
+            .from('contracts')
+            .insert([
+              {
+                renter_id: r.customer_id,
+                cube_id: r.cube_id,
+                start_date: start,
+                end_date: end,
+                status: 'Pending',
+              },
+            ])
+            .select('*, cubes(*), users!renter_id(*)')
+            .maybeSingle()
+          if (inserted) {
+            loadedContracts = [inserted as Contract, ...loadedContracts]
+            liveCubeIds.add(r.cube_id)
+          }
+        }
+      }
+    }
+
+    setLoading(false)
+    setContracts(loadedContracts)
+
     if (!cubeRes.error) {
       setCubes((cubeRes.data || []) as Cube[])
     }
@@ -116,8 +172,8 @@ export default function ContractsPage() {
     try {
       let extQuery = supabase
         .from('contract_extensions')
-        .select('*, contracts(*, cubes(*)), cubes(*), users!renter_id(full_name, email, phone_number)')
-        .order('created_at', { ascending: false })
+        .select('*, contracts(*, cubes(*)), cubes(*), users!renter_id(*)')
+        .order('extension_id', { ascending: false })
       if (user?.role === 'Renter') {
         extQuery = extQuery.eq('renter_id', user.user_id)
       }
@@ -221,7 +277,7 @@ export default function ContractsPage() {
       }
     }
 
-    const { error } = await supabase.from('contracts').insert([{
+    let { error } = await supabase.from('contracts').insert([{
       renter_id: renterId,
       cube_id: cubeIdNum,
       start_date: createForm.start_date,
@@ -229,6 +285,17 @@ export default function ContractsPage() {
       status: createForm.status,
       contract_text: createForm.contract_text || DEFAULT_TERMS,
     }])
+
+    if (error && error.message.includes('contract_text')) {
+      const retry = await supabase.from('contracts').insert([{
+        renter_id: renterId,
+        cube_id: cubeIdNum,
+        start_date: createForm.start_date,
+        end_date: createForm.end_date,
+        status: createForm.status,
+      }])
+      error = retry.error
+    }
 
     if (error) {
       setSaving(false)
@@ -240,9 +307,17 @@ export default function ContractsPage() {
       return
     }
 
-    // Set cube to Occupied if status is Active
+    // Set cube to Occupied if status is Active, or Available if Pending
     if (createForm.status === 'Active') {
       await supabase.from('cubes').update({ status: 'Occupied' }).eq('cube_id', cubeIdNum)
+      await supabase
+        .from('reservations')
+        .update({ status: 'Confirmed' })
+        .eq('cube_id', cubeIdNum)
+        .eq('customer_id', renterId)
+        .eq('status', 'Pending')
+    } else if (createForm.status === 'Pending') {
+      await supabase.from('cubes').update({ status: 'Available' }).eq('cube_id', cubeIdNum)
     }
 
     if (approvingExtensionId) {
@@ -308,17 +383,34 @@ export default function ContractsPage() {
     if (!editingContract) return
     setSaving(true)
 
-    const { error } = await supabase
+    const targetCubeId = Number(editForm.cube_id) || editingContract.cube_id
+    const targetRenterId = Number(editForm.renter_id) || editingContract.renter_id
+
+    let { error } = await supabase
       .from('contracts')
       .update({
-        cube_id: Number(editForm.cube_id) || editingContract.cube_id,
-        renter_id: Number(editForm.renter_id) || editingContract.renter_id,
+        cube_id: targetCubeId,
+        renter_id: targetRenterId,
         start_date: editForm.start_date,
         end_date: editForm.end_date,
         status: editForm.status,
         contract_text: editForm.contract_text || null,
       })
       .eq('contract_id', editingContract.contract_id)
+
+    if (error && error.message.includes('contract_text')) {
+      const retry = await supabase
+        .from('contracts')
+        .update({
+          cube_id: targetCubeId,
+          renter_id: targetRenterId,
+          start_date: editForm.start_date,
+          end_date: editForm.end_date,
+          status: editForm.status,
+        })
+        .eq('contract_id', editingContract.contract_id)
+      error = retry.error
+    }
 
     setSaving(false)
     if (error) {
@@ -328,6 +420,22 @@ export default function ContractsPage() {
         alert('Error updating contract: ' + error.message)
       }
       return
+    }
+
+    if (targetCubeId) {
+      if (editForm.status === 'Active') {
+        await supabase.from('cubes').update({ status: 'Occupied' }).eq('cube_id', targetCubeId)
+        if (targetRenterId) {
+          await supabase
+            .from('reservations')
+            .update({ status: 'Confirmed' })
+            .eq('cube_id', targetCubeId)
+            .eq('customer_id', targetRenterId)
+            .eq('status', 'Pending')
+        }
+      } else if (editForm.status === 'Pending' || editForm.status === 'Expired') {
+        await supabase.from('cubes').update({ status: 'Available' }).eq('cube_id', targetCubeId)
+      }
     }
 
     setEditingContract(null)
@@ -906,7 +1014,7 @@ export default function ContractsPage() {
               style={{ fontSize: '0.85rem', padding: '0.45rem 0.9rem' }}
               onClick={() => setFilterStatus(st)}
             >
-              {st}
+              {st === 'Pending' && metrics.pending > 0 ? `Pending (${metrics.pending})` : st}
             </button>
           ))}
           {isOwner && (

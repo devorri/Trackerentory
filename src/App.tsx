@@ -54,18 +54,27 @@ function InnerApp() {
 
   useEffect(() => {
     if (!isAdmin) return
-    void supabase
-      .from('contracts')
-      .select('contract_id', { count: 'exact', head: true })
-      .eq('status', 'Pending')
-      .then(({ count }) => setPendingContractsCount(count || 0))
-
-    void supabase
-      .from('reservations')
-      .select('reservation_id', { count: 'exact', head: true })
-      .is('product_id', null)
-      .eq('status', 'Pending')
-      .then(({ count }) => setPendingReservationsCount(count || 0))
+    async function loadPendingCounts() {
+      const [conRes, resRes] = await Promise.all([
+        supabase.from('contracts').select('contract_id, cube_id, renter_id').eq('status', 'Pending'),
+        supabase.from('reservations').select('reservation_id, cube_id, customer_id').is('product_id', null).eq('status', 'Pending'),
+      ])
+      const pendingConList = conRes.data || []
+      const pendingResList = (resRes.data || []).filter((r: any) => Boolean(r.cube_id))
+      const uniqueCubeKeys = new Set<string>()
+      for (const c of pendingConList as any[]) {
+        uniqueCubeKeys.add(`cube-${c.cube_id ?? c.contract_id}`)
+      }
+      for (const r of pendingResList as any[]) {
+        uniqueCubeKeys.add(`cube-${r.cube_id ?? r.reservation_id}`)
+      }
+      const totalPending = uniqueCubeKeys.size
+      setPendingContractsCount(totalPending)
+      setPendingReservationsCount(totalPending)
+    }
+    void loadPendingCounts()
+    const timer = window.setInterval(() => void loadPendingCounts(), 10000)
+    return () => window.clearInterval(timer)
   }, [isAdmin, user])
 
   useEffect(() => {

@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom'
 import { Trash2, RotateCcw, X, ArrowUpDown } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
-import { type Cube, peso } from '../lib/types'
+import { type Cube, peso, daysUntil, isReservationExpired } from '../lib/types'
+import { expireContracts, cancelExpiredReservations } from '../lib/maintenance'
 import { SkeletonTable } from '../components/Skeleton'
 import TablePagination, { DEFAULT_PAGE_SIZE } from '../components/TablePagination'
 import { uploadPublicImage } from '../lib/storage'
@@ -50,12 +51,38 @@ export default function CubeManagement() {
   const [editNewFiles, setEditNewFiles] = useState<File[]>([])
   const [editNewPreviews, setEditNewPreviews] = useState<string[]>([])
 
+  const [reservedCubeIds, setReservedCubeIds] = useState<Set<number>>(new Set())
+  const [activeCubeIds, setActiveCubeIds] = useState<Set<number>>(new Set())
+
   async function loadCubes() {
     setLoading(true)
-    const { data, error } = await supabase.from('cubes').select('*').order('cube_number')
+    await Promise.all([expireContracts(), cancelExpiredReservations()])
+    const [cubeRes, conRes, resRes] = await Promise.all([
+      supabase.from('cubes').select('*').order('cube_number'),
+      supabase.from('contracts').select('*').in('status', ['Pending', 'Active']),
+      supabase.from('reservations').select('*').is('product_id', null).eq('status', 'Pending'),
+    ])
     setLoading(false)
-    if (error) return alert(error.message)
-    setCubes((data || []) as Cube[])
+    if (cubeRes.error) return alert(cubeRes.error.message)
+    setCubes((cubeRes.data || []) as Cube[])
+
+    const activeSet = new Set<number>()
+    const reservedSet = new Set<number>()
+    for (const c of (conRes.data || []) as any[]) {
+      if (!c.cube_id) continue
+      if (c.status === 'Active' && daysUntil(c.end_date) >= 0) {
+        activeSet.add(c.cube_id)
+      } else if (c.status === 'Pending') {
+        reservedSet.add(c.cube_id)
+      }
+    }
+    for (const r of (resRes.data || []) as any[]) {
+      if (r.cube_id && !isReservationExpired(r) && !activeSet.has(r.cube_id)) {
+        reservedSet.add(r.cube_id)
+      }
+    }
+    setActiveCubeIds(activeSet)
+    setReservedCubeIds(reservedSet)
   }
 
   useEffect(() => {
@@ -550,9 +577,19 @@ export default function CubeManagement() {
                   </td>
                   <td>{peso(c.price_per_month)}</td>
                   <td>
-                    <span className={`status-pill ${c.status === 'Available' ? 'confirmed' : 'pending'}`}>
-                      {c.status}
-                    </span>
+                    {reservedCubeIds.has(c.cube_id) ? (
+                      <span className="status-pill pending" style={{ background: '#fef3c7', color: '#92400e' }}>
+                        Reserved (Pending)
+                      </span>
+                    ) : activeCubeIds.has(c.cube_id) || c.status === 'Occupied' ? (
+                      <span className="status-pill pending">
+                        Occupied
+                      </span>
+                    ) : (
+                      <span className="status-pill confirmed">
+                        Available
+                      </span>
+                    )}
                   </td>
                   <td style={{ textAlign: 'right' }}>
                     {currentTab === 'Trash' ? (

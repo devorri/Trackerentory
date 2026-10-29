@@ -87,12 +87,12 @@ export default function RenterAccountsPage() {
     const [rentersRes, contractsRes] = await Promise.all([
       supabase
         .from('users')
-        .select('user_id, full_name, username, email, phone_number, social_link, status, role')
+        .select('*')
         .eq('role', 'Renter')
         .order('full_name', { ascending: true }),
       supabase
         .from('contracts')
-        .select('*, cubes(*), users!renter_id(user_id, full_name, username, email, phone_number, social_link, status, role)')
+        .select('*, cubes(*), users!renter_id(*)')
         .order('end_date', { ascending: true }),
     ])
 
@@ -454,7 +454,7 @@ export default function RenterAccountsPage() {
               style={{ fontSize: '0.78rem', padding: '0.3rem 0.75rem' }}
               onClick={() => setStatusFilter(s.id as StatusFilter)}
             >
-              {s.label}
+              {s.id === 'Pending' && counts.pending > 0 ? `Pending Approval (${counts.pending})` : s.label}
             </button>
           ))}
         </div>

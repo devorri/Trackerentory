@@ -3,7 +3,8 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { X, ArrowRight, Search, ChevronLeft, ChevronRight, Camera, CheckCircle2, Box } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
-import { type Reservation, type Cube, type Product, peso, isReservationExpired, todayISO, addMonths } from '../lib/types'
+import { type Reservation, type Cube, type Product, type Contract, peso, isReservationExpired, todayISO, addMonths, daysUntil } from '../lib/types'
+import { cancelExpiredReservations, expireContracts } from '../lib/maintenance'
 import { SkeletonCard } from '../components/Skeleton'
 import ProductGalleryModal from '../components/ProductGalleryModal'
 
@@ -14,6 +15,7 @@ export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [cubes, setCubes] = useState<Cube[]>([])
   const [reservations, setReservations] = useState<Reservation[]>([])
+  const [contracts, setContracts] = useState<Contract[]>([])
   const [loading, setLoading] = useState(false)
   const [reservingFor, setReservingFor] = useState<number | null>(null)
   const [reservingCube, setReservingCube] = useState<number | null>(null)
@@ -88,31 +90,31 @@ export default function ProductsPage() {
         return
       }
 
+      await Promise.all([expireContracts(), cancelExpiredReservations()])
+
       const { data: existing, error: existingError } = await supabase
         .from('contracts')
-        .select('contract_id')
+        .select('*')
         .eq('cube_id', cube_id)
         .in('status', ['Pending', 'Active'])
-        .limit(1)
       if (existingError) throw existingError
-      if (existing?.length) {
+
+      const liveContracts = (existing || []).filter((c: any) => {
+        if (c.status === 'Pending') return true
+        if (c.status === 'Active') return daysUntil(c.end_date) >= 0
+        return false
+      })
+
+      if (liveContracts.length > 0) {
         setLoading(false)
+        await loadProducts()
         return alert('This cube already has a pending or active rental agreement.')
       }
 
-      const expiry = new Date(Date.now() + cubeMonths * 30 * 24 * 60 * 60 * 1000).toISOString()
-      const { error } = await supabase.from('reservations').insert([
-        { cube_id, customer_id: user.user_id, expiry_time: expiry, hours_valid: cubeMonths * 720, status: 'Pending' },
-      ])
-      if (error) {
-        setLoading(false)
-        return alert('Reservation failed: ' + error.message)
-      }
-
-      // Also create pending contract record for Contracts Management
+      // 1. Create pending contract record for Contracts Management & Renter Pending List
       const start = todayISO()
       const end = addMonths(start, cubeMonths)
-      const { error: contractError } = await supabase.from('contracts').insert([
+      let { error: contractError } = await supabase.from('contracts').insert([
         {
           renter_id: user.user_id,
           cube_id,
@@ -122,11 +124,39 @@ export default function ProductsPage() {
           contract_text: null,
         },
       ])
+      if (contractError && contractError.message.includes('contract_text')) {
+        const retry = await supabase.from('contracts').insert([
+          {
+            renter_id: user.user_id,
+            cube_id,
+            start_date: start,
+            end_date: end,
+            status: 'Pending',
+          },
+        ])
+        contractError = retry.error
+      }
       if (contractError) throw contractError
-      await supabase.from('cubes').update({ status: 'Occupied' }).eq('cube_id', cube_id)
+
+      // 2. Also insert into reservations table (with fallback if hours_valid or cube_id column is absent)
+      const expiry = new Date(Date.now() + cubeMonths * 30 * 24 * 60 * 60 * 1000).toISOString()
+      const { error: resError } = await supabase.from('reservations').insert([
+        { cube_id, customer_id: user.user_id, expiry_time: expiry, hours_valid: cubeMonths * 720, status: 'Pending' },
+      ])
+      if (resError) {
+        const { error: fallbackResError } = await supabase.from('reservations').insert([
+          { cube_id, customer_id: user.user_id, expiry_time: expiry, status: 'Pending' },
+        ])
+        if (fallbackResError) {
+          console.warn('Reservations table cube insert fallback:', fallbackResError.message)
+        }
+      }
+
+      // Keep cube status as Available while contract is Pending so it stays in the Catalogue with a "Reserved" badge
+      await supabase.from('cubes').update({ status: 'Available' }).eq('cube_id', cube_id)
 
       setLoading(false)
-      alert('Cube reserved successfully! The owner will review your contract agreement in Contracts.')
+      alert('Cube reserved successfully! Your reservation is now in Pending awaiting approval.')
       setReservingCube(null)
       await loadProducts()
     } catch (err) {
@@ -138,11 +168,12 @@ export default function ProductsPage() {
 
   async function loadProducts() {
     setLoading(true)
-    await supabase.from('reservations').update({ status: 'Cancelled' }).eq('status', 'Pending').lt('expiry_time', new Date().toISOString())
-    const [pRes, rRes, cRes] = await Promise.all([
+    await Promise.all([expireContracts(), cancelExpiredReservations()])
+    const [pRes, rRes, cRes, conRes] = await Promise.all([
       supabase.from('products').select('*, cubes(cube_number, type, status)').is('deleted_at', null).order('created_at', { ascending: false }),
       supabase.from('reservations').select('*, cubes(*)').in('status', ['Pending', 'Confirmed']),
       supabase.from('cubes').select('*').is('deleted_at', null).order('cube_number'),
+      supabase.from('contracts').select('*').in('status', ['Pending', 'Active']),
     ])
     setLoading(false)
     if (!pRes.error) {
@@ -154,12 +185,31 @@ export default function ProductsPage() {
         return true
       })
       setProducts(displayOnly)
+    } else {
+      const pFallback = await supabase.from('products').select('*, cubes(cube_number, type, status)').order('product_id', { ascending: false })
+      if (!pFallback.error) {
+        const allProds = (pFallback.data || []) as (Product & { cubes?: Cube | null })[]
+        setProducts(allProds.filter((p) => !p.deleted_at && p.cubes?.type !== 'Pick-up'))
+      }
     }
     if (!rRes.error) {
       setReservations(rRes.data || [])
+    } else {
+      const rFallback = await supabase.from('reservations').select('*').in('status', ['Pending', 'Confirmed'])
+      if (!rFallback.error) {
+        setReservations((rFallback.data || []) as Reservation[])
+      }
     }
     if (!cRes.error) {
       setCubes((cRes.data || []) as Cube[])
+    } else {
+      const cFallback = await supabase.from('cubes').select('*').order('cube_number')
+      if (!cFallback.error) {
+        setCubes(((cFallback.data || []) as Cube[]).filter((c) => !c.deleted_at))
+      }
+    }
+    if (!conRes.error) {
+      setContracts((conRes.data || []) as Contract[])
     }
   }
 
@@ -198,15 +248,43 @@ export default function ProductsPage() {
     })
   }, [products, selectedCategory, search])
 
+  // Cubes with an Active (approved & non-expired) contract must be removed from the Catalogue
+  const activeContractCubeIds = useMemo(() => {
+    const set = new Set<number>()
+    for (const c of contracts) {
+      if (c.cube_id && c.status === 'Active' && daysUntil(c.end_date) >= 0) {
+        set.add(c.cube_id)
+      }
+    }
+    return set
+  }, [contracts])
+
+  // Cubes with a Pending reservation or Pending contract stay in Catalogue with a "Reserved" badge
   const cubeReservationSet = useMemo(() => {
     const set = new Set<number>()
     for (const r of reservations) {
-      if (r.cube_id && !isReservationExpired(r)) set.add(r.cube_id)
+      if (r.cube_id && !r.product_id && r.status === 'Pending' && !isReservationExpired(r)) {
+        set.add(r.cube_id)
+      }
+    }
+    for (const c of contracts) {
+      if (c.cube_id && c.status === 'Pending') {
+        set.add(c.cube_id)
+      }
     }
     return set
-  }, [reservations])
+  }, [reservations, contracts])
 
-  const availableCubes = cubes.filter((c) => c.status === 'Available')
+  const availableCubes = useMemo(() => {
+    return cubes.filter((c) => {
+      // Remove cubes that already have an active/approved contract
+      if (activeContractCubeIds.has(c.cube_id)) return false
+      // Keep cubes that are reserved (pending approval) so they display as "Reserved" in the Catalogue
+      if (cubeReservationSet.has(c.cube_id)) return true
+      // Otherwise only show Available cubes
+      return c.status === 'Available'
+    })
+  }, [cubes, activeContractCubeIds, cubeReservationSet])
 
   function handleProductClick(p: Product) {
     setGalleryProduct(p)
@@ -431,7 +509,7 @@ export default function ProductsPage() {
           ) : (
             <div className="grid products-grid">
               {availableCubes.map((cube) => {
-                const isReserved = cubeReservationSet.has(cube.cube_id) || cube.status === 'Occupied'
+                const isReserved = cubeReservationSet.has(cube.cube_id)
 
                 return (
                   <article
@@ -689,9 +767,15 @@ export default function ProductsPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.25rem 1.5rem', borderBottom: '1px solid #e2e8f0' }}>
               <div>
                 <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 800 }}>Cube #{galleryCube.cube_number}</h3>
-                <span className="badge" style={{ background: '#dcfce7', color: '#166534', marginTop: 4, fontSize: '0.72rem' }}>
-                  {galleryCube.type} Cube • {galleryCube.status}
-                </span>
+                {cubeReservationSet.has(galleryCube.cube_id) ? (
+                  <span className="badge danger" style={{ marginTop: 4, fontSize: '0.72rem' }}>
+                    {galleryCube.type} Cube • Reserved
+                  </span>
+                ) : (
+                  <span className="badge" style={{ background: '#dcfce7', color: '#166534', marginTop: 4, fontSize: '0.72rem' }}>
+                    {galleryCube.type} Cube • Available
+                  </span>
+                )}
               </div>
               <button
                 type="button"
@@ -855,7 +939,11 @@ export default function ProductsPage() {
               >
                 Close
               </button>
-              {galleryCube.status === 'Available' && (
+              {cubeReservationSet.has(galleryCube.cube_id) ? (
+                <button type="button" className="btn" disabled>
+                  Reserved
+                </button>
+              ) : (
                 <button
                   type="button"
                   className="btn"

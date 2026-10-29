@@ -8,17 +8,23 @@ import {
   Clock,
   ArrowUpDown,
   AlertTriangle,
+  CheckCircle2,
+  X,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import {
   type Reservation,
+  type Cube,
+  type Product,
   isReservationExpired,
   getReservationHoursLeft,
   parseReservationExpiry,
   peso,
+  todayISO,
+  addMonths,
 } from '../lib/types'
-import { cancelExpiredReservations } from '../lib/maintenance'
+import { cancelExpiredReservations, expireContracts } from '../lib/maintenance'
 import { SkeletonTable } from '../components/Skeleton'
 import TablePagination, { DEFAULT_PAGE_SIZE } from '../components/TablePagination'
 
@@ -67,24 +73,107 @@ export default function ReservationsPage() {
   async function load() {
     if (!user) return
     setLoading(true)
-    await cancelExpiredReservations()
-    const { data, error } = await supabase
-      .from('reservations')
-      .select('*, products(*, cubes(*)), cubes(*), customer:users!customer_id(full_name, email, phone_number)')
-      .order('expiry_time', { ascending: false })
+    await Promise.all([cancelExpiredReservations(), expireContracts()])
+
+    const [resQuery, conQuery, cubeQuery, prodQuery, userQuery] = await Promise.all([
+      supabase.from('reservations').select('*').order('expiry_time', { ascending: false }),
+      supabase.from('contracts').select('*').order('contract_id', { ascending: false }),
+      supabase.from('cubes').select('*'),
+      supabase.from('products').select('*'),
+      supabase.from('users').select('*'),
+    ])
     setLoading(false)
-    if (error) {
-      console.error(error)
-    } else {
-      const reservations = (data || []) as Reservation[]
-      const visible =
-        user.role === 'Customer'
-          ? reservations.filter((r) => r.customer_id === user.user_id)
-          : user.role === 'Renter'
-            ? reservations.filter((r) => r.products?.renter_id === user.user_id || r.customer_id === user.user_id)
-            : reservations.filter((r) => r.cube_id && !r.product_id)
-      setRows(visible)
+
+    const cubeMap = new Map<number, Cube>()
+    for (const c of (cubeQuery.data || []) as Cube[]) {
+      cubeMap.set(c.cube_id, c)
     }
+
+    const prodMap = new Map<number, Product>()
+    for (const p of (prodQuery.data || []) as Product[]) {
+      prodMap.set(p.product_id, {
+        ...p,
+        cubes: p.cube_id ? cubeMap.get(p.cube_id) || null : null,
+      })
+    }
+
+    const userMap = new Map<number, { full_name: string; email?: string; phone_number?: string }>()
+    for (const u of (userQuery.data || []) as any[]) {
+      userMap.set(u.user_id, {
+        full_name: u.full_name,
+        email: u.email,
+        phone_number: u.phone_number,
+      })
+    }
+
+    const rawContracts = (conQuery.data || []) as any[]
+    const reservations: Reservation[] = ((resQuery.data || []) as any[]).map((r) => {
+      const prod = r.product_id ? prodMap.get(r.product_id) || null : null
+      const cube = r.cube_id ? cubeMap.get(r.cube_id) || null : prod?.cubes || null
+      const cust = r.customer_id ? userMap.get(r.customer_id) : undefined
+      return {
+        ...r,
+        products: prod,
+        cubes: cube,
+        customer: cust,
+      } as Reservation
+    })
+
+    // Sync cube reservation rows with contracts and synthesize missing cube reservation entries from contracts
+    for (const r of reservations) {
+      if (r.cube_id && !r.product_id) {
+        const matchingContract = rawContracts.find(
+          (c) => c.cube_id === r.cube_id && c.renter_id === r.customer_id,
+        )
+        if (matchingContract) {
+          ;(r as any).contract_id = matchingContract.contract_id
+          if (matchingContract.status === 'Active' && r.status === 'Pending') {
+            r.status = 'Confirmed'
+          } else if (matchingContract.status === 'Expired' && r.status === 'Pending') {
+            r.status = 'Cancelled'
+          }
+        }
+      }
+    }
+
+    for (const c of rawContracts) {
+      if (!c.cube_id) continue
+      const mappedStatus: Reservation['status'] =
+        c.status === 'Active' ? 'Confirmed' : c.status === 'Expired' ? 'Cancelled' : 'Pending'
+      const alreadyExists = reservations.some(
+        (r) =>
+          !r.product_id &&
+          r.cube_id === c.cube_id &&
+          r.customer_id === c.renter_id &&
+          r.status === mappedStatus,
+      )
+      if (!alreadyExists) {
+        const startD = c.start_date ? new Date(c.start_date) : new Date()
+        const endD = c.end_date ? new Date(`${c.end_date}T23:59:59`) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+        const hoursValid = Math.max(24, Math.round((endD.getTime() - startD.getTime()) / (1000 * 60 * 60)))
+        reservations.push({
+          reservation_id: -Number(c.contract_id),
+          product_id: null,
+          cube_id: c.cube_id,
+          customer_id: c.renter_id,
+          expiry_time: endD.toISOString(),
+          hours_valid: hoursValid,
+          status: mappedStatus,
+          cubes: cubeMap.get(c.cube_id) || null,
+          customer: userMap.get(c.renter_id),
+          ...({ contract_id: c.contract_id, start_date: c.start_date, end_date: c.end_date } as any),
+        })
+      }
+    }
+
+    const visible =
+      user.role === 'Customer'
+        ? reservations.filter((r) => r.customer_id === user.user_id)
+        : user.role === 'Renter'
+          ? reservations.filter((r) => r.products?.renter_id === user.user_id || r.customer_id === user.user_id)
+          : reservations.filter((r) => r.cube_id && !r.product_id)
+
+    setRows(visible)
   }
 
   useEffect(() => {
@@ -128,17 +217,101 @@ export default function ReservationsPage() {
     void load()
   }
 
+  async function approveCubeReservation(r: Reservation) {
+    if (!r.cube_id || !r.customer_id) return
+    setBusyId(r.reservation_id)
+    try {
+      const contractId = (r as any).contract_id || (r.reservation_id < 0 ? Math.abs(r.reservation_id) : null)
+      if (contractId) {
+        const { error: conErr } = await supabase
+          .from('contracts')
+          .update({ status: 'Active' })
+          .eq('contract_id', contractId)
+        if (conErr) throw conErr
+      } else {
+        const { data: existingPending } = await supabase
+          .from('contracts')
+          .select('contract_id')
+          .eq('cube_id', r.cube_id)
+          .eq('renter_id', r.customer_id)
+          .eq('status', 'Pending')
+          .limit(1)
+        if (existingPending && existingPending.length > 0) {
+          const { error: conErr } = await supabase
+            .from('contracts')
+            .update({ status: 'Active' })
+            .eq('contract_id', existingPending[0].contract_id)
+          if (conErr) throw conErr
+        } else {
+          const start = todayISO()
+          const months = Math.max(1, Math.round((r.hours_valid || 720) / 720))
+          const end = addMonths(start, months)
+          const { error: insErr } = await supabase.from('contracts').insert([
+            {
+              renter_id: r.customer_id,
+              cube_id: r.cube_id,
+              start_date: start,
+              end_date: end,
+              status: 'Active',
+            },
+          ])
+          if (insErr) throw insErr
+        }
+      }
+
+      if (r.reservation_id > 0) {
+        await supabase.from('reservations').update({ status: 'Confirmed' }).eq('reservation_id', r.reservation_id)
+      }
+      await supabase
+        .from('reservations')
+        .update({ status: 'Confirmed' })
+        .eq('cube_id', r.cube_id)
+        .eq('customer_id', r.customer_id)
+        .eq('status', 'Pending')
+
+      // Mark cube as Occupied so it is removed from the Catalogue
+      await supabase.from('cubes').update({ status: 'Occupied' }).eq('cube_id', r.cube_id)
+
+      setBusyId(null)
+      alert(`Cube #${r.cubes?.cube_number || r.cube_id} reservation approved and rental contract activated!`)
+      void load()
+    } catch (err) {
+      setBusyId(null)
+      console.error(err)
+      alert(err instanceof Error ? err.message : 'Failed to approve cube reservation.')
+    }
+  }
+
   async function cancelCubeReservation(r: Reservation) {
     setBusyId(r.reservation_id)
-    const { error } = await supabase.from('reservations').update({ status: 'Cancelled' }).eq('reservation_id', r.reservation_id)
-    if (!error && r.cube_id && r.customer_id) {
-      await supabase.from('contracts').delete().eq('cube_id', r.cube_id).eq('renter_id', r.customer_id).eq('status', 'Pending')
-      await supabase.from('cubes').update({ status: 'Available' }).eq('cube_id', r.cube_id)
+    try {
+      if (r.reservation_id > 0) {
+        await supabase.from('reservations').update({ status: 'Cancelled' }).eq('reservation_id', r.reservation_id)
+      }
+      const contractId = (r as any).contract_id || (r.reservation_id < 0 ? Math.abs(r.reservation_id) : null)
+      if (contractId) {
+        await supabase.from('contracts').delete().eq('contract_id', contractId).eq('status', 'Pending')
+      }
+      if (r.cube_id && r.customer_id) {
+        await supabase.from('contracts').delete().eq('cube_id', r.cube_id).eq('renter_id', r.customer_id).eq('status', 'Pending')
+        await supabase
+          .from('reservations')
+          .update({ status: 'Cancelled' })
+          .eq('cube_id', r.cube_id)
+          .eq('customer_id', r.customer_id)
+          .eq('status', 'Pending')
+      }
+      if (r.cube_id) {
+        await supabase.from('cubes').update({ status: 'Available' }).eq('cube_id', r.cube_id)
+      }
+      setBusyId(null)
+      alert('Cube reservation request cancelled and cube returned to Available.')
+      void load()
+    } catch (err) {
+      setBusyId(null)
+      console.error(err)
+      alert(err instanceof Error ? err.message : 'Failed to cancel cube reservation.')
     }
-    setBusyId(null)
-    if (error) return alert(error.message)
-    alert('Cube reservation request cancelled.')
-    void load()
   }
 
   // Counts for tabs
@@ -214,7 +387,13 @@ export default function ReservationsPage() {
         const aType = a.cube_id && !a.product_id ? 'Cube' : 'Product'
         const bType = b.cube_id && !b.product_id ? 'Cube' : 'Product'
 
-        if (sortMode === 'expiry_asc') return aExp - bExp
+        const aPending = a.status === 'Pending' && !isReservationExpired(a) ? 0 : 1
+        const bPending = b.status === 'Pending' && !isReservationExpired(b) ? 0 : 1
+
+        if (sortMode === 'expiry_asc') {
+          if (aPending !== bPending) return aPending - bPending
+          return aExp - bExp
+        }
         if (sortMode === 'expiry_desc') return bExp - aExp
         if (sortMode === 'price_desc') return bPrice - aPrice
         if (sortMode === 'price_asc') return aPrice - bPrice
@@ -230,7 +409,7 @@ export default function ReservationsPage() {
         if (sortMode === 'type_desc') return bType.localeCompare(aType)
         return 0
       })
-  }, [rows, typeFilter, statusFilter, sortMode, search])
+  }, [rows, typeFilter, cubeTypeFilter, statusFilter, sortMode, search])
 
   useEffect(() => {
     setPage(1)
@@ -377,7 +556,13 @@ export default function ReservationsPage() {
                 style={{ fontSize: '0.82rem', padding: '0.4rem 0.8rem' }}
                 onClick={() => { setStatusFilter(st); setPage(1) }}
               >
-                {st === 'all' ? 'All Status' : st === 'Cancelled' ? 'Cancelled / Expired' : st}
+                {st === 'all'
+                  ? 'All Status'
+                  : st === 'Cancelled'
+                  ? 'Cancelled / Expired'
+                  : st === 'Pending' && counts.pending > 0
+                  ? `Pending (${counts.pending})`
+                  : st}
               </button>
             ))}
           </div>
@@ -443,7 +628,7 @@ export default function ReservationsPage() {
       </div>
 
       {loading ? (
-        <SkeletonTable rows={5} cols={isStaffOrOwner ? 7 : 8} />
+        <SkeletonTable rows={5} cols={8} />
       ) : (
         <div className="table-wrap">
           <table className="table reservations-table">
@@ -470,7 +655,7 @@ export default function ReservationsPage() {
                 <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSortCol('status_asc', 'status_desc')}>
                   Status {renderSortIndicator('status_asc', 'status_desc')}
                 </th>
-                {!isStaffOrOwner && <th style={{ textAlign: 'right', minWidth: 120 }}>Actions</th>}
+                <th style={{ textAlign: 'right', minWidth: 160 }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -632,38 +817,83 @@ export default function ReservationsPage() {
                       </span>
                     </td>
 
-                    {/* ACTIONS (Only for Customers/Renters to cancel their requests; Owner/Staff manages contracts in /contracts) */}
-                    {!isStaffOrOwner && (
-                      <td style={{ textAlign: 'right' }}>
-                        <div className="row" style={{ justifyContent: 'flex-end', gap: '0.4rem' }}>
-                          {isCube ? (
-                            isPending && (
+                    {/* ACTIONS */}
+                    <td style={{ textAlign: 'right' }}>
+                      <div className="row" style={{ justifyContent: 'flex-end', gap: '0.4rem' }}>
+                        {isStaffOrOwner ? (
+                          isCube && isPending ? (
+                            <>
+                              <button
+                                className="btn"
+                                type="button"
+                                disabled={isBusy}
+                                onClick={() => void approveCubeReservation(r)}
+                                style={{
+                                  padding: '0.35rem 0.65rem',
+                                  fontSize: '0.78rem',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.3rem',
+                                  background: '#16a34a',
+                                  color: '#fff',
+                                  border: 'none',
+                                }}
+                                title="Approve cube reservation & activate contract"
+                              >
+                                <CheckCircle2 size={14} /> Approve
+                              </button>
                               <button
                                 className="btn-ghost"
                                 type="button"
                                 disabled={isBusy}
                                 onClick={() => void cancelCubeReservation(r)}
-                                style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem' }}
+                                style={{
+                                  padding: '0.35rem 0.65rem',
+                                  fontSize: '0.78rem',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.3rem',
+                                  color: '#dc2626',
+                                }}
+                                title="Decline cube reservation & release cube"
                               >
-                                Cancel Request
+                                <X size={14} /> Decline
                               </button>
-                            )
+                            </>
                           ) : (
-                            user.role === 'Customer' && isPending && (
-                              <button
-                                className="btn-ghost"
-                                type="button"
-                                disabled={isBusy}
-                                onClick={() => void cancelProductReservation(r.reservation_id)}
-                                style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem' }}
-                              >
-                                Cancel
-                              </button>
-                            )
-                          )}
-                        </div>
-                      </td>
-                    )}
+                            <span className="muted" style={{ fontSize: '0.78rem' }}>
+                              {r.status === 'Confirmed' ? 'Approved' : '—'}
+                            </span>
+                          )
+                        ) : isCube ? (
+                          isPending ? (
+                            <button
+                              className="btn-ghost"
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => void cancelCubeReservation(r)}
+                              style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem' }}
+                            >
+                              Cancel Request
+                            </button>
+                          ) : (
+                            <span className="muted" style={{ fontSize: '0.78rem' }}>—</span>
+                          )
+                        ) : user.role === 'Customer' && isPending ? (
+                          <button
+                            className="btn-ghost"
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => void cancelProductReservation(r.reservation_id)}
+                            style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem' }}
+                          >
+                            Cancel
+                          </button>
+                        ) : (
+                          <span className="muted" style={{ fontSize: '0.78rem' }}>—</span>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 )
               })}

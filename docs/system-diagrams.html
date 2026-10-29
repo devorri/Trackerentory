@@ -1,0 +1,1293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TrackErentory — Complete System Diagrams (IPO, Context, DFD, Flowchart, ERD)</title>
+  <style>
+    :root {
+      --bg: #f1f5f9;
+      --card: #ffffff;
+      --text: #0f172a;
+      --muted: #475569;
+      --border: #cbd5e1;
+      --accent: #1e293b;
+      --blue-hdr: #2b5c8f;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', Inter, -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header.top-bar {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: #0f172a;
+      color: #ffffff;
+      padding: 0.9rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+    }
+    header.top-bar h1 {
+      margin: 0;
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    header.top-bar .nav-pills {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    header.top-bar .nav-pills a {
+      color: #e2e8f0;
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 600;
+      padding: 0.4rem 0.8rem;
+      border-radius: 6px;
+      background: rgba(255,255,255,0.1);
+      transition: background 0.15s;
+    }
+    header.top-bar .nav-pills a:hover {
+      background: rgba(255,255,255,0.22);
+      color: #fff;
+    }
+    .container {
+      max-width: 1520px;
+      margin: 2rem auto;
+      padding: 0 1.5rem 4rem;
+      display: flex;
+      flex-direction: column;
+      gap: 2.5rem;
+    }
+    .diagram-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: 0 4px 16px rgba(15, 23, 42, 0.05);
+      overflow: hidden;
+    }
+    .diagram-header {
+      padding: 1.15rem 1.5rem;
+      border-bottom: 1px solid #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
+      background: #f8fafc;
+    }
+    .diagram-header h2 {
+      margin: 0;
+      font-size: 1.2rem;
+      color: #0f172a;
+    }
+    .diagram-header p {
+      margin: 0.25rem 0 0;
+      font-size: 0.86rem;
+      color: var(--muted);
+    }
+    .btn-group {
+      display: flex;
+      gap: 0.5rem;
+    }
+    button.export-btn {
+      background: #0f172a;
+      color: #ffffff;
+      border: 1px solid #0f172a;
+      border-radius: 8px;
+      padding: 0.5rem 0.95rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    button.export-btn.secondary {
+      background: #ffffff;
+      color: #0f172a;
+      border: 1px solid #cbd5e1;
+    }
+    button.export-btn:hover {
+      opacity: 0.9;
+    }
+    .svg-Scroll {
+      width: 100%;
+      overflow-x: auto;
+      padding: 1.5rem;
+      background: #ffffff;
+      display: flex;
+      justify-content: center;
+    }
+    svg {
+      max-width: 100%;
+      height: auto;
+      display: block;
+    }
+    @media print {
+      header.top-bar, .btn-group {
+        display: none !important;
+      }
+      body {
+        background: #fff;
+      }
+      .diagram-card {
+        box-shadow: none;
+        border: none;
+        page-break-after: always;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <header class="top-bar">
+    <h1>TrackErentory — System Architecture Diagrams (100% Aligned)</h1>
+    <nav class="nav-pills">
+      <a href="#ipo-section">1. IPO Chart</a>
+      <a href="#context-section">2. Context Diagram</a>
+      <a href="#dfd-section">3. Data Flow Diagram</a>
+      <a href="#flowchart-section">4. System Flowchart</a>
+      <a href="#erd-section">5. Complete ERD (10 Tables)</a>
+    </nav>
+  </header>
+
+  <div class="container">
+
+    <!-- ═════════════════════════════════════════════════════════════════════════
+         1. INPUT - PROCESS - OUTPUT (IPO) DIAGRAM
+         ═════════════════════════════════════════════════════════════════════════ -->
+    <section id="ipo-section" class="diagram-card">
+      <div class="diagram-header">
+        <div>
+          <h2>1. Input–Process–Output (IPO) Chart</h2>
+          <p>Updated with 2FA OTP Authentication, Cube &amp; Product Reservations, Display &amp; Pick-up Tracking, Pull-Out Items Management, and PDF Financial Reporting.</p>
+        </div>
+        <div class="btn-group">
+          <button class="export-btn" onclick="downloadSvgAsPng('svg-ipo', 'TrackErentory_1_IPO_Diagram.png', 2.5)">Download High-Res PNG</button>
+          <button class="export-btn secondary" onclick="downloadRawSvg('svg-ipo', 'TrackErentory_1_IPO_Diagram.svg')">Download SVG</button>
+        </div>
+      </div>
+      <div class="svg-Scroll">
+        <svg id="svg-ipo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 760" width="1360" height="738">
+          <rect width="1400" height="760" fill="#ffffff" />
+          <style>
+            .ipo-title { font-family: 'Segoe UI', Arial, sans-serif; font-size: 34px; font-weight: 800; fill: #000000; text-anchor: middle; letter-spacing: 1px; }
+            .ipo-sec { font-family: 'Segoe UI', Arial, sans-serif; font-size: 16.5px; font-weight: 700; fill: #000000; }
+            .ipo-txt { font-family: 'Segoe UI', Arial, sans-serif; font-size: 14.5px; font-weight: 400; fill: #111111; }
+          </style>
+
+          <!-- Column Titles -->
+          <text x="235" y="62" class="ipo-title">INPUT</text>
+          <text x="700" y="62" class="ipo-title">PROCESSES</text>
+          <text x="1165" y="62" class="ipo-title">OUTPUT</text>
+
+          <!-- 3 Rounded Containers -->
+          <rect x="45" y="88" width="380" height="635" rx="34" ry="34" fill="#ffffff" stroke="#000000" stroke-width="5.5" />
+          <rect x="510" y="88" width="380" height="635" rx="34" ry="34" fill="#ffffff" stroke="#000000" stroke-width="5.5" />
+          <rect x="975" y="88" width="380" height="635" rx="34" ry="34" fill="#ffffff" stroke="#000000" stroke-width="5.5" />
+
+          <!-- Block Arrows -->
+          <polygon points="440,393 475,393 475,375 500,405 475,435 475,417 440,417" fill="#000000" />
+          <polygon points="905,393 940,393 940,375 965,405 940,435 940,417 905,417" fill="#000000" />
+
+          <!-- INPUT CONTENT -->
+          <text x="72" y="136" class="ipo-sec">• Account &amp; Authentication Data</text>
+          <text x="86" y="160" class="ipo-txt">- Full Name, Username, Password, Email, Role,</text>
+          <text x="86" y="180" class="ipo-txt">  Phone Number, Social Link &amp; Staff Salary</text>
+          <text x="86" y="200" class="ipo-txt">- 6-Digit Email OTP Code (2FA / Registration)</text>
+
+          <text x="72" y="242" class="ipo-sec">• Cube &amp; Lease Contract Data</text>
+          <text x="86" y="266" class="ipo-txt">- Cube Number, Location, Type (Display /</text>
+          <text x="86" y="286" class="ipo-txt">  Pick-up), Monthly Rate, Dimensions &amp; Photos</text>
+          <text x="86" y="306" class="ipo-txt">- Cube Rental Reservation (1–12 Months)</text>
+          <text x="86" y="326" class="ipo-txt">- Contract Dates, Extension Requests &amp; Monthly</text>
+          <text x="86" y="346" class="ipo-txt">  Cube Rental Payments (Cash / Online + Receipt)</text>
+
+          <text x="72" y="388" class="ipo-sec">• Product &amp; Customer Reservation Data</text>
+          <text x="86" y="412" class="ipo-txt">- Display Product Name, Category, Variant,</text>
+          <text x="86" y="432" class="ipo-txt">  Price, Stock Quantity &amp; Product Photos</text>
+          <text x="86" y="452" class="ipo-txt">- Customer Product Reservation (1–4 Hours)</text>
+
+          <text x="72" y="494" class="ipo-sec">• Transaction &amp; Pull-Out Entries</text>
+          <text x="86" y="518" class="ipo-txt">- Pick-up Buyer Orders &amp; Alternate Pickup Name</text>
+          <text x="86" y="538" class="ipo-txt">- Counter Sales, Payment Status &amp; Proof</text>
+          <text x="86" y="558" class="ipo-txt">- Pull-Out Qty, Reason (Expired / Unclaimed)</text>
+
+          <text x="72" y="600" class="ipo-sec">• Report &amp; Monitoring Filters</text>
+          <text x="86" y="624" class="ipo-txt">- Report Type (Display, Pick-up, Cube Rental)</text>
+          <text x="86" y="644" class="ipo-txt">- Date Range (Daily, Monthly, Yearly, Custom)</text>
+          <text x="86" y="664" class="ipo-txt">  &amp; Renter Filter Selection</text>
+
+          <!-- PROCESSES CONTENT -->
+          <text x="537" y="136" class="ipo-sec">• Account Registration &amp; 2FA OTP Auth</text>
+          <text x="551" y="160" class="ipo-txt">- Credential validation &amp; 6-digit Email OTP</text>
+          <text x="551" y="180" class="ipo-txt">  verification for Sign In, Sign Up &amp; Reset</text>
+          <text x="551" y="200" class="ipo-txt">- Staff &amp; Renter account &amp; Trash management</text>
+
+          <text x="537" y="242" class="ipo-sec">• Cube &amp; Contract Management</text>
+          <text x="551" y="266" class="ipo-txt">- Cube setup, reservation &amp; contract approval</text>
+          <text x="551" y="286" class="ipo-txt">- 3-day grace period extension processing</text>
+          <text x="551" y="306" class="ipo-txt">- Monthly cube payment encoding &amp; automated</text>
+          <text x="551" y="326" class="ipo-txt">  expiration of past-due contracts</text>
+
+          <text x="537" y="368" class="ipo-sec">• Catalogue &amp; Reservation Processing</text>
+          <text x="551" y="392" class="ipo-txt">- Display product publishing &amp; stock tracking</text>
+          <text x="551" y="412" class="ipo-txt">- Atomic stock-safe 1–4 hr product reservation</text>
+          <text x="551" y="432" class="ipo-txt">- Automatic cancellation of expired reservations</text>
+
+          <text x="537" y="474" class="ipo-sec">• Display &amp; Pick-up Transaction Recording</text>
+          <text x="551" y="498" class="ipo-txt">- Renter pick-up order encoding &amp; counter claims</text>
+          <text x="551" y="518" class="ipo-txt">- Payment &amp; receipt verification (Cash / Online)</text>
+          <text x="551" y="538" class="ipo-txt">- Automated product stock deduction / restoration</text>
+
+          <text x="537" y="580" class="ipo-sec">• Pull-Out &amp; Financial Report Generation</text>
+          <text x="551" y="604" class="ipo-txt">- Expired contract scanning &amp; item pull-out</text>
+          <text x="551" y="624" class="ipo-txt">  logging (excluded from sales revenue)</text>
+          <text x="551" y="644" class="ipo-txt">- Consolidation of paid Display, Pick-up &amp; Cube</text>
+          <text x="551" y="664" class="ipo-txt">  Rental sales into printable PDF reports</text>
+
+          <!-- OUTPUT CONTENT -->
+          <text x="1002" y="136" class="ipo-sec">• Verified Accounts &amp; Role Portals</text>
+          <text x="1016" y="160" class="ipo-txt">- Authenticated Role Dashboards (Owner,</text>
+          <text x="1016" y="180" class="ipo-txt">  Staff, Renter, Customer)</text>
+          <text x="1016" y="200" class="ipo-txt">- Updated Staff Roster &amp; Renter Directory</text>
+
+          <text x="1002" y="242" class="ipo-sec">• Confirmed Contracts &amp; Cube Status</text>
+          <text x="1016" y="266" class="ipo-txt">- Active / Expired Lease Agreements &amp; Printable</text>
+          <text x="1016" y="286" class="ipo-txt">  Contract Hard Copies</text>
+          <text x="1016" y="306" class="ipo-txt">- 7-Day Contract Expiry Alert Notices</text>
+          <text x="1016" y="326" class="ipo-txt">- Updated Cube Occupancy &amp; Payment Ledgers</text>
+
+          <text x="1002" y="368" class="ipo-sec">• Live Storefront &amp; Reservation Status</text>
+          <text x="1016" y="392" class="ipo-txt">- Real-Time Display Product Catalogue &amp; Stock</text>
+          <text x="1016" y="412" class="ipo-txt">- Available Rental Cubes Gallery</text>
+          <text x="1016" y="432" class="ipo-txt">- Confirmed / Cancelled Reservation Timers</text>
+
+          <text x="1002" y="474" class="ipo-sec">• Updated Transaction &amp; Pull-Out Logs</text>
+          <text x="1016" y="498" class="ipo-txt">- Verified Pickup Tracking &amp; Display Sales Logs</text>
+          <text x="1016" y="518" class="ipo-txt">- Pull-Out Items Registry (Display &amp; Pick-up)</text>
+          <text x="1016" y="538" class="ipo-txt">- Renter Pull-Out Notification &amp; Return Status</text>
+
+          <text x="1002" y="580" class="ipo-sec">• Consolidated Sales &amp; Financial Reports</text>
+          <text x="1016" y="604" class="ipo-txt">- Owner Revenue Analytics &amp; Renter Net Income</text>
+          <text x="1016" y="624" class="ipo-txt">- Printable / Downloadable PDF Reports for</text>
+          <text x="1016" y="644" class="ipo-txt">  Display Sales, Pick-up Sales &amp; Cube Rentals</text>
+        </svg>
+      </div>
+    </section>
+
+    <!-- ═════════════════════════════════════════════════════════════════════════
+         2. CONTEXT DIAGRAM (LEVEL 0 DFD)
+         ═════════════════════════════════════════════════════════════════════════ -->
+    <section id="context-section" class="diagram-card">
+      <div class="diagram-header">
+        <div>
+          <h2>2. Context Diagram (Level 0 DFD)</h2>
+          <p>Shows all 4 external entities (Owner/Admin, Staff, Renter, Customer) interacting with the central TrackErentory system without overlapping lines.</p>
+        </div>
+        <div class="btn-group">
+          <button class="export-btn" onclick="downloadSvgAsPng('svg-context', 'TrackErentory_2_Context_Diagram.png', 2.5)">Download High-Res PNG</button>
+          <button class="export-btn secondary" onclick="downloadRawSvg('svg-context', 'TrackErentory_2_Context_Diagram.svg')">Download SVG</button>
+        </div>
+      </div>
+      <div class="svg-Scroll">
+        <svg id="svg-context" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 860" width="1400" height="836">
+          <rect width="1440" height="860" fill="#ffffff" />
+          <defs>
+            <marker id="arrow-ctx" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 1 L 9 5 L 0 9 z" fill="#000000" />
+            </marker>
+          </defs>
+          <style>
+            .ctx-entity { font-family: 'Segoe UI', Arial, sans-serif; font-size: 22px; font-weight: 800; fill: #000000; text-anchor: middle; text-decoration: underline; }
+            .ctx-sys-title { font-family: 'Segoe UI', Arial, sans-serif; font-size: 15.5px; font-weight: 800; fill: #000000; text-anchor: middle; }
+            .ctx-sys-sub { font-family: 'Segoe UI', Arial, sans-serif; font-size: 14px; font-weight: 600; fill: #111111; text-anchor: middle; text-decoration: underline; }
+            .ctx-flow { font-family: 'Segoe UI', Arial, sans-serif; font-size: 13.5px; font-weight: 500; fill: #000000; }
+            .ctx-flow-b { font-family: 'Segoe UI', Arial, sans-serif; font-size: 13.5px; font-weight: 700; fill: #000000; }
+          </style>
+
+          <!-- Central System Circle -->
+          <circle cx="720" cy="430" r="215" fill="#ffffff" stroke="#000000" stroke-width="3" />
+          <text x="720" y="302" class="ctx-sys-title">WEB-BASED CONTRACT, RENTAL, SALES,</text>
+          <text x="720" y="324" class="ctx-sys-title">AND PICKUP MONITORING SYSTEM FOR</text>
+          <text x="720" y="346" class="ctx-sys-title">ARCE CONCEPT BOUTIQUE</text>
+          <text x="720" y="368" class="ctx-sys-title">(TrackErentory)</text>
+
+          <text x="720" y="408" class="ctx-sys-sub">2FA OTP &amp; User Management</text>
+          <text x="720" y="436" class="ctx-sys-sub">Cube &amp; Contract Monitoring</text>
+          <text x="720" y="464" class="ctx-sys-sub">Product &amp; Reservation Tracking</text>
+          <text x="720" y="492" class="ctx-sys-sub">Display &amp; Pickup Transactions</text>
+          <text x="720" y="520" class="ctx-sys-sub">Pull-Out Items Management</text>
+          <text x="720" y="548" class="ctx-sys-sub">Sales &amp; PDF Report Generation</text>
+
+          <!-- 1. OWNER / ADMIN (Top-Left) -->
+          <rect x="60" y="55" width="230" height="105" fill="#ffffff" stroke="#000000" stroke-width="2.5" />
+          <text x="175" y="115" class="ctx-entity">OWNER (ADMIN)</text>
+
+          <!-- Owner -> System (Top arrow) -->
+          <polyline points="290,85 620,85 620,238" fill="none" stroke="#000000" stroke-width="2" marker-end="url(#arrow-ctx)" />
+          <text x="310" y="46" class="ctx-flow-b">Input to System:</text>
+          <text x="310" y="64" class="ctx-flow">Login &amp; OTP, Staff/Renter Management, Cube &amp; Product Setup,</text>
+          <text x="310" y="80" class="ctx-flow">Contract &amp; Extension Approvals, Cube Payments, Pull-Outs, Report Filters</text>
+
+          <!-- System -> Owner (Lower-left arrow) -->
+          <polyline points="518,355 175,355 175,160" fill="none" stroke="#000000" stroke-width="2" marker-end="url(#arrow-ctx)" />
+          <text x="190" y="275" class="ctx-flow-b">Output from System:</text>
+          <text x="190" y="295" class="ctx-flow">Consolidated Sales &amp; PDF Reports,</text>
+          <text x="190" y="313" class="ctx-flow">Contract &amp; Cube Statuses, Pickup/Display</text>
+          <text x="190" y="331" class="ctx-flow">Logs, Pull-Out Alerts, User Directories</text>
+
+          <!-- 2. STAFF (Top-Right) -->
+          <rect x="1150" y="55" width="230" height="105" fill="#ffffff" stroke="#000000" stroke-width="2.5" />
+          <text x="1265" y="115" class="ctx-entity">STAFF</text>
+
+          <!-- Staff -> System (Top-right arrow) -->
+          <polyline points="1150,85 820,85 820,238" fill="none" stroke="#000000" stroke-width="2" marker-end="url(#arrow-ctx)" />
+          <text x="835" y="46" class="ctx-flow-b">Input to System:</text>
+          <text x="835" y="64" class="ctx-flow">Login &amp; OTP, Counter Sales &amp; Pickup Confirmations,</text>
+          <text x="835" y="80" class="ctx-flow">Payment &amp; Receipt Verifications, Inventory &amp; Pull-Out Updates</text>
+
+          <!-- System -> Staff (Lower-right arrow) -->
+          <polyline points="922,355 1265,355 1265,160" fill="none" stroke="#000000" stroke-width="2" marker-end="url(#arrow-ctx)" />
+          <text x="955" y="275" class="ctx-flow-b">Output from System:</text>
+          <text x="955" y="295" class="ctx-flow">Pickup &amp; Display Tracking Lists,</text>
+          <text x="955" y="313" class="ctx-flow">Pending Cube Reservations, Product</text>
+          <text x="955" y="331" class="ctx-flow">Stock Status, Renter Contacts, Pull-Out Logs</text>
+
+          <!-- 3. RENTER (Bottom-Left) -->
+          <rect x="60" y="700" width="230" height="105" fill="#ffffff" stroke="#000000" stroke-width="2.5" />
+          <text x="175" y="760" class="ctx-entity">RENTER</text>
+
+          <!-- Renter -> System -->
+          <polyline points="290,775 620,775 620,622" fill="none" stroke="#000000" stroke-width="2" marker-end="url(#arrow-ctx)" />
+          <text x="310" y="748" class="ctx-flow-b">Input to System:</text>
+          <text x="310" y="766" class="ctx-flow">Registration/Login &amp; OTP, Display Product Listings, Pick-up</text>
+          <text x="310" y="796" class="ctx-flow">Buyer Orders &amp; Receipts, Cube Reservations, Extension Requests</text>
+
+          <!-- System -> Renter -->
+          <polyline points="518,505 175,505 175,700" fill="none" stroke="#000000" stroke-width="2" marker-end="url(#arrow-ctx)" />
+          <text x="190" y="535" class="ctx-flow-b">Output from System:</text>
+          <text x="190" y="555" class="ctx-flow">Assigned Cube &amp; Printable Contract,</text>
+          <text x="190" y="573" class="ctx-flow">7-Day Expiry Notices, Product Reservation</text>
+          <text x="190" y="591" class="ctx-flow">Alerts, Pickup Status, Sales &amp; Income</text>
+
+          <!-- 4. CUSTOMER (Bottom-Right) -->
+          <rect x="1150" y="700" width="230" height="105" fill="#ffffff" stroke="#000000" stroke-width="2.5" />
+          <text x="1265" y="760" class="ctx-entity">CUSTOMER</text>
+
+          <!-- Customer -> System -->
+          <polyline points="1150,775 820,775 820,622" fill="none" stroke="#000000" stroke-width="2" marker-end="url(#arrow-ctx)" />
+          <text x="835" y="748" class="ctx-flow-b">Input to System:</text>
+          <text x="835" y="766" class="ctx-flow">Registration/Login &amp; OTP, Catalogue Search &amp; Filters,</text>
+          <text x="835" y="796" class="ctx-flow">Product Reservations (1–4 hrs), Cube Reservations (1–12 mos)</text>
+
+          <!-- System -> Customer -->
+          <polyline points="922,505 1265,505 1265,700" fill="none" stroke="#000000" stroke-width="2" marker-end="url(#arrow-ctx)" />
+          <text x="955" y="535" class="ctx-flow-b">Output from System:</text>
+          <text x="955" y="555" class="ctx-flow">Live Display Product Catalogue &amp; Stock,</text>
+          <text x="955" y="573" class="ctx-flow">Available Rental Cubes &amp; Monthly Rates,</text>
+          <text x="955" y="591" class="ctx-flow">Reservation Confirmations &amp; Expiry Timers</text>
+        </svg>
+      </div>
+    </section>
+
+    <!-- ═════════════════════════════════════════════════════════════════════════
+         3. DATA FLOW DIAGRAM (DFD)
+         ═════════════════════════════════════════════════════════════════════════ -->
+    <section id="dfd-section" class="diagram-card">
+      <div class="diagram-header">
+        <div>
+          <h2>3. Data Flow Diagram (DFD)</h2>
+          <p>Updated top-down data flow architecture aligned 100% with the 4 roles, 2FA OTP authentication, 4 operational workflows, 10 database tables, and reporting engine.</p>
+        </div>
+        <div class="btn-group">
+          <button class="export-btn" onclick="downloadSvgAsPng('svg-dfd', 'TrackErentory_3_Data_Flow_Diagram.png', 2.5)">Download High-Res PNG</button>
+          <button class="export-btn secondary" onclick="downloadRawSvg('svg-dfd', 'TrackErentory_3_Data_Flow_Diagram.svg')">Download SVG</button>
+        </div>
+      </div>
+      <div class="svg-Scroll">
+        <svg id="svg-dfd" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 980" width="1320" height="950">
+          <rect width="1360" height="980" fill="#ffffff" />
+          <defs>
+            <marker id="arrow-dfd" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 1 L 9 5 L 0 9 z" fill="#000000" />
+            </marker>
+          </defs>
+          <style>
+            .dfd-role-hdr { font-family: 'Segoe UI', Arial, sans-serif; font-size: 20px; font-weight: 700; fill: #000000; text-anchor: middle; }
+            .dfd-role-txt { font-family: 'Segoe UI', Arial, sans-serif; font-size: 13.5px; fill: #111111; }
+            .dfd-box-title { font-family: 'Segoe UI', Arial, sans-serif; font-size: 19px; font-weight: 700; fill: #000000; text-anchor: middle; }
+            .dfd-box-sub { font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; font-weight: 500; fill: #222222; text-anchor: middle; }
+            .dfd-lbl { font-family: 'Segoe UI', Arial, sans-serif; font-size: 13.5px; font-weight: 600; fill: #000000; text-anchor: middle; }
+          </style>
+
+          <!-- TOP ROW: 4 ROLES -->
+          <!-- 1. Owner (Admin) -->
+          <rect x="50" y="30" width="290" height="44" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="195" y="59" class="dfd-role-hdr">Owner (Admin)</text>
+          <line x1="65" y1="74" x2="65" y2="195" stroke="#000000" stroke-width="1.8" />
+          <text x="78" y="98" class="dfd-role-txt">• Manages Staff &amp; Renter Accounts</text>
+          <text x="78" y="120" class="dfd-role-txt">• Approves Contracts &amp; Extensions</text>
+          <text x="78" y="142" class="dfd-role-txt">• Records Cube Payments &amp; Pull-Outs</text>
+          <text x="78" y="164" class="dfd-role-txt">• Generates Sales &amp; PDF Reports</text>
+
+          <!-- 2. Staff -->
+          <rect x="370" y="30" width="290" height="44" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="515" y="59" class="dfd-role-hdr">Staff</text>
+          <line x1="385" y1="74" x2="385" y2="195" stroke="#000000" stroke-width="1.8" />
+          <text x="398" y="98" class="dfd-role-txt">• Processes Counter Sales &amp; Pickups</text>
+          <text x="398" y="120" class="dfd-role-txt">• Verifies Payments &amp; Receipts</text>
+          <text x="398" y="142" class="dfd-role-txt">• Manages Cubes &amp; Display Products</text>
+          <text x="398" y="164" class="dfd-role-txt">• Processes Pull-Outs &amp; Renter Info</text>
+
+          <!-- 3. Renter -->
+          <rect x="690" y="30" width="290" height="44" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="835" y="59" class="dfd-role-hdr">Renter</text>
+          <line x1="705" y1="74" x2="705" y2="195" stroke="#000000" stroke-width="1.8" />
+          <text x="718" y="98" class="dfd-role-txt">• Reserves Cubes &amp; Extends Contracts</text>
+          <text x="718" y="120" class="dfd-role-txt">• Lists Display Products &amp; Stock</text>
+          <text x="718" y="142" class="dfd-role-txt">• Encodes Pick-up Buyer Orders</text>
+          <text x="718" y="164" class="dfd-role-txt">• Tracks Reservations, Pickups &amp; Income</text>
+
+          <!-- 4. Customer -->
+          <rect x="1010" y="30" width="295" height="44" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="1157" y="59" class="dfd-role-hdr">Customer</text>
+          <line x1="1025" y1="74" x2="1025" y2="195" stroke="#000000" stroke-width="1.8" />
+          <text x="1038" y="98" class="dfd-role-txt">• Browses Display Product Catalogue</text>
+          <text x="1038" y="120" class="dfd-role-txt">• Reserves Display Products (1–4 hrs)</text>
+          <text x="1038" y="142" class="dfd-role-txt">• Reserves Rental Cubes (1–12 mos)</text>
+          <text x="1038" y="164" class="dfd-role-txt">• Manages / Cancels Reservations</text>
+
+          <!-- Bus line from 4 roles into USER MANAGEMENT -->
+          <line x1="65" y1="195" x2="1025" y2="195" stroke="#000000" stroke-width="1.8" />
+          <line x1="680" y1="195" x2="680" y2="245" stroke="#000000" stroke-width="2" marker-end="url(#arrow-dfd)" />
+
+          <!-- USER MANAGEMENT & 2FA OTP -->
+          <rect x="410" y="250" width="540" height="68" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="680" y="280" class="dfd-box-title">USER MANAGEMENT &amp; 2FA OTP AUTH</text>
+          <text x="680" y="302" class="dfd-box-sub">(Sign In / Sign Up, 6-Digit Email OTP Verification, Password Reset, Account Control)</text>
+
+          <!-- Arrow from User Management to Users Database -->
+          <polyline points="680,318 680,345 1030,345 1030,375" fill="none" stroke="#000000" stroke-width="2" marker-end="url(#arrow-dfd)" />
+
+          <!-- Users Database (Right) -->
+          <rect x="760" y="380" width="540" height="96" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="1030" y="414" class="dfd-box-title">Users &amp; OTP Database</text>
+          <text x="1030" y="438" class="dfd-box-sub">Tables: users, otp_codes</text>
+          <text x="1030" y="458" class="dfd-box-sub">(Owner/Staff/Renter/Customer profiles, 2FA OTP codes, salaries, statuses &amp; Trash)</text>
+
+          <!-- Arrow from Users Database to Role-Based Access & Account Management (Left) -->
+          <line x1="760" y1="428" x2="435" y2="428" stroke="#000000" stroke-width="2" marker-end="url(#arrow-dfd)" />
+          <text x="598" y="406" class="dfd-lbl">Validated Users, 2FA Sessions</text>
+          <text x="598" y="422" class="dfd-lbl">&amp; Role Access Permissions</text>
+
+          <!-- Role-Based Access & Account Portal Routing (Left) -->
+          <rect x="65" y="380" width="365" height="96" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="247" y="414" class="dfd-box-title">Role-Based Access &amp;</text>
+          <text x="247" y="438" class="dfd-box-title">Account Management</text>
+          <text x="247" y="460" class="dfd-box-sub">(Owner Portal, Staff Portal, Renter &amp; Customer Hub)</text>
+
+          <!-- Branch down from Role-Based Access to 4 Core Operational Processes -->
+          <line x1="247" y1="476" x2="247" y2="525" stroke="#000000" stroke-width="2" />
+          <line x1="185" y1="525" x2="1175" y2="525" stroke="#000000" stroke-width="2" />
+          <line x1="185" y1="525" x2="185" y2="565" stroke="#000000" stroke-width="2" marker-end="url(#arrow-dfd)" />
+          <line x1="515" y1="525" x2="515" y2="565" stroke="#000000" stroke-width="2" marker-end="url(#arrow-dfd)" />
+          <line x1="845" y1="525" x2="845" y2="565" stroke="#000000" stroke-width="2" marker-end="url(#arrow-dfd)" />
+          <line x1="1175" y1="525" x2="1175" y2="565" stroke="#000000" stroke-width="2" marker-end="url(#arrow-dfd)" />
+
+          <!-- 4 CORE OPERATIONAL MODULES -->
+          <!-- Box 1: Cube & Contract Process -->
+          <rect x="45" y="570" width="280" height="105" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="185" y="600" class="dfd-box-title">Cube &amp; Contract</text>
+          <text x="185" y="622" class="dfd-box-title">Management</text>
+          <text x="185" y="644" class="dfd-box-sub">(Cube Setup, Cube Reservations,</text>
+          <text x="185" y="661" class="dfd-box-sub">Contracts, Extensions &amp; Payments)</text>
+
+          <!-- Box 2: Product & Catalogue Management -->
+          <rect x="375" y="570" width="280" height="105" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="515" y="600" class="dfd-box-title">Product &amp; Reservation</text>
+          <text x="515" y="622" class="dfd-box-title">Management</text>
+          <text x="515" y="644" class="dfd-box-sub">(Display Catalogue, Stock Control,</text>
+          <text x="515" y="661" class="dfd-box-sub">1–4 Hr Customer Reservations)</text>
+
+          <!-- Box 3: Display & Pick-up Management -->
+          <rect x="705" y="570" width="280" height="105" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="845" y="600" class="dfd-box-title">Display &amp; Pick-up</text>
+          <text x="845" y="622" class="dfd-box-title">Management</text>
+          <text x="845" y="644" class="dfd-box-sub">(Buyer Orders, Counter Sales,</text>
+          <text x="845" y="661" class="dfd-box-sub">Payment &amp; Pickup Verification)</text>
+
+          <!-- Box 4: Pull-Out Items Management -->
+          <rect x="1035" y="570" width="280" height="105" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="1175" y="600" class="dfd-box-title">Pull-Out Items</text>
+          <text x="1175" y="622" class="dfd-box-title">Management</text>
+          <text x="1175" y="644" class="dfd-box-sub">(Expired Contract Stock &amp; Unclaimed</text>
+          <text x="1175" y="661" class="dfd-box-sub">Order Pull-Outs &amp; Renter Returns)</text>
+
+          <!-- Arrows from 4 operational boxes into Operational Database -->
+          <line x1="185" y1="675" x2="185" y2="735" stroke="#000000" stroke-width="2" marker-end="url(#arrow-dfd)" />
+          <line x1="515" y1="675" x2="515" y2="735" stroke="#000000" stroke-width="2" marker-end="url(#arrow-dfd)" />
+          <line x1="845" y1="675" x2="845" y2="735" stroke="#000000" stroke-width="2" marker-end="url(#arrow-dfd)" />
+          <line x1="1175" y1="675" x2="1175" y2="735" stroke="#000000" stroke-width="2" marker-end="url(#arrow-dfd)" />
+
+          <!-- OPERATIONAL DATABASE -->
+          <rect x="110" y="740" width="1140" height="84" fill="#ffffff" stroke="#000000" stroke-width="2.2" />
+          <text x="680" y="775" style="font-family:'Segoe UI',Arial,sans-serif; font-size:26px; font-weight:700; fill:#000; text-anchor:middle;">Operational Database</text>
+          <text x="680" y="803" class="dfd-box-sub">Tables: cubes, contracts, contract_extensions, contract_payments, products, reservations, transactions, pull_out_items</text>
+
+          <!-- Arrow down to Reporting & Analytics -->
+          <line x1="260" y1="824" x2="260" y2="868" stroke="#000000" stroke-width="2" marker-end="url(#arrow-dfd)" />
+
+          <!-- BOTTOM ROW: Reporting & Analytics -> Reports -> Users receive Outputs -->
+          <rect x="110" y="874" width="320" height="76" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="270" y="905" class="dfd-box-title">Reporting &amp; Analytics</text>
+          <text x="270" y="928" class="dfd-box-sub">(Sales, Rental Revenue &amp; Renter Payouts)</text>
+
+          <line x1="430" y1="912" x2="510" y2="912" stroke="#000000" stroke-width="2" marker-end="url(#arrow-dfd)" />
+
+          <rect x="515" y="874" width="330" height="76" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="680" y="905" class="dfd-box-title">Consolidated Reports</text>
+          <text x="680" y="928" class="dfd-box-sub">(Printable PDF Reports &amp; Live Dashboards)</text>
+
+          <line x1="845" y1="912" x2="925" y2="912" stroke="#000000" stroke-width="2" marker-end="url(#arrow-dfd)" />
+
+          <rect x="930" y="874" width="320" height="76" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="1090" y="905" class="dfd-box-title">Users Receive Outputs</text>
+          <text x="1090" y="928" class="dfd-box-sub">(Role Dashboards, Alerts &amp; PDF Exports)</text>
+        </svg>
+      </div>
+    </section>
+
+    <!-- ═════════════════════════════════════════════════════════════════════════
+         4. SYSTEM FLOWCHART
+         ═════════════════════════════════════════════════════════════════════════ -->
+    <section id="flowchart-section" class="diagram-card">
+      <div class="diagram-header">
+        <div>
+          <h2>4. System Flowchart</h2>
+          <p>100% aligned with the IPO, Context Diagram, and DFD: includes Username/Password + 6-Digit Email OTP (2FA) verification and all 4 role workflows (Owner/Admin, Staff, Renter, Customer).</p>
+        </div>
+        <div class="btn-group">
+          <button class="export-btn" onclick="downloadSvgAsPng('svg-flowchart', 'TrackErentory_4_System_Flowchart.png', 2.5)">Download High-Res PNG</button>
+          <button class="export-btn secondary" onclick="downloadRawSvg('svg-flowchart', 'TrackErentory_4_System_Flowchart.svg')">Download SVG</button>
+        </div>
+      </div>
+      <div class="svg-Scroll">
+        <svg id="svg-flowchart" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1240" width="1400" height="1205">
+          <rect width="1440" height="1240" fill="#ffffff" />
+          <defs>
+            <marker id="arrow-fc" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 1 L 9 5 L 0 9 z" fill="#000000" />
+            </marker>
+          </defs>
+          <style>
+            .fc-bold { font-family: 'Segoe UI', Arial, sans-serif; font-size: 16px; font-weight: 700; fill: #000000; text-anchor: middle; }
+            .fc-txt { font-family: 'Segoe UI', Arial, sans-serif; font-size: 13.5px; font-weight: 500; fill: #000000; text-anchor: middle; }
+            .fc-sm { font-family: 'Segoe UI', Arial, sans-serif; font-size: 12.5px; font-weight: 500; fill: #000000; text-anchor: middle; }
+            .fc-yn { font-family: 'Segoe UI', Arial, sans-serif; font-size: 14px; font-weight: 700; fill: #000000; }
+          </style>
+
+          <!-- START -->
+          <ellipse cx="720" cy="42" rx="115" ry="26" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="720" y="48" class="fc-bold">START</text>
+          <line x1="720" y1="68" x2="720" y2="96" stroke="#000000" stroke-width="1.8" marker-end="url(#arrow-fc)" />
+
+          <!-- Enter username & password (or Register / Reset via OTP) -->
+          <rect x="550" y="100" width="340" height="58" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="720" y="125" class="fc-bold">Enter Username &amp; Password</text>
+          <text x="720" y="145" class="fc-sm">(or Register Customer/Renter / Reset Password)</text>
+          <line x1="720" y1="158" x2="720" y2="186" stroke="#000000" stroke-width="1.8" marker-end="url(#arrow-fc)" />
+
+          <!-- Diamond 1: Are login credentials valid & account active? -->
+          <polygon points="720,190 865,245 720,300 575,245" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="720" y="238" class="fc-sm">Are credentials valid &amp;</text>
+          <text x="720" y="256" class="fc-sm">account active?</text>
+
+          <!-- No loop back to Enter Username & Password -->
+          <polyline points="575,245 485,245 485,129 546,129" fill="none" stroke="#000000" stroke-width="1.8" marker-end="url(#arrow-fc)" />
+          <text x="518" y="236" class="fc-yn">No</text>
+
+          <!-- Yes -> 6-Digit Email OTP (2FA) -->
+          <line x1="720" y1="300" x2="720" y2="334" stroke="#000000" stroke-width="1.8" marker-end="url(#arrow-fc)" />
+          <text x="732" y="322" class="fc-yn">Yes</text>
+
+          <!-- Parallelogram: Enter 6-Digit Email OTP (2FA) -->
+          <polygon points="565,338 895,338 875,388 545,388" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="720" y="360" class="fc-bold">Send &amp; Enter 6-Digit Email OTP</text>
+          <text x="720" y="378" class="fc-sm">(Two-Factor Authentication Verification)</text>
+          <line x1="720" y1="388" x2="720" y2="416" stroke="#000000" stroke-width="1.8" marker-end="url(#arrow-fc)" />
+
+          <!-- Diamond 2: Is OTP code valid? -->
+          <polygon points="720,420 845,468 720,516 595,468" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="720" y="465" class="fc-sm">Is 6-digit OTP</text>
+          <text x="720" y="482" class="fc-sm">valid?</text>
+
+          <!-- No loop back to OTP input -->
+          <polyline points="595,468 485,468 485,363 551,363" fill="none" stroke="#000000" stroke-width="1.8" marker-end="url(#arrow-fc)" />
+          <text x="528" y="458" class="fc-yn">No</text>
+
+          <!-- Yes -> Diamond 3: Is the user Owner (Admin)? -->
+          <line x1="720" y1="516" x2="720" y2="548" stroke="#000000" stroke-width="1.8" marker-end="url(#arrow-fc)" />
+          <text x="732" y="538" class="fc-yn">Yes</text>
+
+          <polygon points="720,552 855,604 720,656 585,604" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="720" y="600" class="fc-sm">Is the user</text>
+          <text x="720" y="618" class="fc-sm">Owner (Admin)?</text>
+
+          <!-- ═════════ RIGHT SIDE: OWNER (ADMIN) BRANCH ═════════ -->
+          <line x1="855" y1="604" x2="1080" y2="604" stroke="#000000" stroke-width="1.8" marker-end="url(#arrow-fc)" />
+          <text x="945" y="594" class="fc-yn">Yes</text>
+
+          <rect x="1084" y="576" width="260" height="56" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="1214" y="601" class="fc-bold">Owner (Admin) Portal</text>
+          <text x="1214" y="620" class="fc-sm">(/owner)</text>
+
+          <line x1="1214" y1="632" x2="1214" y2="664" stroke="#000000" stroke-width="1.8" marker-end="url(#arrow-fc)" />
+
+          <!-- Select Function (Owner) -->
+          <polygon points="1094,668 1348,668 1330,710 1076,710" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="1212" y="694" class="fc-bold">Select Function</text>
+          <line x1="1212" y1="710" x2="1212" y2="738" stroke="#000000" stroke-width="1.8" />
+
+          <!-- Owner Functions Stack -->
+          <rect x="1062" y="738" width="300" height="52" fill="#ffffff" stroke="#000000" stroke-width="1.8" />
+          <text x="1212" y="761" class="fc-txt">Manages Staff &amp; Renter Accounts</text>
+          <text x="1212" y="779" class="fc-sm">(Active Status, Salaries &amp; Trash Recovery)</text>
+          <line x1="1212" y1="790" x2="1212" y2="810" stroke="#000000" stroke-width="1.8" />
+
+          <rect x="1062" y="810" width="300" height="52" fill="#ffffff" stroke="#000000" stroke-width="1.8" />
+          <text x="1212" y="833" class="fc-txt">Approves Cube Contracts, Extensions</text>
+          <text x="1212" y="851" class="fc-sm">&amp; Logs Monthly Cube Rental Payments</text>
+          <line x1="1212" y1="862" x2="1212" y2="882" stroke="#000000" stroke-width="1.8" />
+
+          <rect x="1062" y="882" width="300" height="52" fill="#ffffff" stroke="#000000" stroke-width="1.8" />
+          <text x="1212" y="905" class="fc-txt">Oversees Cubes, Display Products,</text>
+          <text x="1212" y="923" class="fc-sm">Pickup/Display Tracking &amp; Pull-Out Items</text>
+          <line x1="1212" y1="934" x2="1212" y2="954" stroke="#000000" stroke-width="1.8" />
+
+          <rect x="1062" y="954" width="300" height="52" fill="#ffffff" stroke="#000000" stroke-width="1.8" />
+          <text x="1212" y="977" class="fc-txt">Reviews Sales &amp; Rental Dashboards</text>
+          <text x="1212" y="995" class="fc-sm">&amp; Exports Printable PDF Reports</text>
+
+          <!-- ═════════ LEFT SIDE: STAFF, RENTER, OR CUSTOMER BRANCH ═════════ -->
+          <line x1="585" y1="604" x2="430" y2="604" stroke="#000000" stroke-width="1.8" marker-end="url(#arrow-fc)" />
+          <text x="515" y="594" class="fc-yn">No</text>
+
+          <rect x="150" y="576" width="276" height="56" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="288" y="600" class="fc-bold">Staff, Renter, or</text>
+          <text x="288" y="620" class="fc-bold">Customer Portal</text>
+
+          <polyline points="150,604 105,604 105,689 355,689" fill="none" stroke="#000000" stroke-width="1.8" marker-end="url(#arrow-fc)" />
+
+          <!-- Select Function (Non-Owner) -->
+          <polygon points="368,668 612,668 594,710 350,710" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="481" y="694" class="fc-bold">Select Function</text>
+          <line x1="481" y1="710" x2="481" y2="736" stroke="#000000" stroke-width="1.8" />
+
+          <!-- Diamond 4: Role? -->
+          <polygon points="481,736 565,782 481,828 397,782" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="481" y="787" class="fc-bold">Role?</text>
+
+          <!-- ── COLUMN 1: STAFF (Left) ── -->
+          <line x1="397" y1="782" x2="275" y2="782" stroke="#000000" stroke-width="1.8" />
+          <polygon points="95,762 280,762 266,802 81,802" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="180" y="788" class="fc-bold">STAFF</text>
+          <line x1="180" y1="802" x2="180" y2="824" stroke="#000000" stroke-width="1.8" />
+
+          <rect x="42" y="824" width="276" height="46" fill="#ffffff" stroke="#000000" stroke-width="1.8" />
+          <text x="180" y="844" class="fc-txt">Processes Counter Display Sales</text>
+          <text x="180" y="861" class="fc-sm">&amp; Claims Customer Reservations</text>
+          <line x1="180" y1="870" x2="180" y2="886" stroke="#000000" stroke-width="1.8" />
+
+          <rect x="42" y="886" width="276" height="46" fill="#ffffff" stroke="#000000" stroke-width="1.8" />
+          <text x="180" y="906" class="fc-txt">Verifies Buyer Pickups, Payments</text>
+          <text x="180" y="923" class="fc-sm">&amp; Receipt Proof in Pickup Tracking</text>
+          <line x1="180" y1="932" x2="180" y2="948" stroke="#000000" stroke-width="1.8" />
+
+          <rect x="42" y="948" width="276" height="46" fill="#ffffff" stroke="#000000" stroke-width="1.8" />
+          <text x="180" y="968" class="fc-txt">Manages Cubes, Display Products</text>
+          <text x="180" y="985" class="fc-sm">&amp; Pending Cube Reservations</text>
+          <line x1="180" y1="994" x2="180" y2="1010" stroke="#000000" stroke-width="1.8" />
+
+          <rect x="42" y="1010" width="276" height="46" fill="#ffffff" stroke="#000000" stroke-width="1.8" />
+          <text x="180" y="1030" class="fc-txt">Records Pull-Out Items &amp; Updates</text>
+          <text x="180" y="1047" class="fc-sm">Renter Account Contact Details</text>
+
+          <!-- ── COLUMN 2: RENTER (Center) ── -->
+          <line x1="481" y1="828" x2="481" y2="846" stroke="#000000" stroke-width="1.8" />
+          <polygon points="396,846 578,846 564,884 382,884" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="480" y="871" class="fc-bold">RENTER</text>
+          <line x1="480" y1="884" x2="480" y2="900" stroke="#000000" stroke-width="1.8" />
+
+          <rect x="342" y="900" width="276" height="46" fill="#ffffff" stroke="#000000" stroke-width="1.8" />
+          <text x="480" y="920" class="fc-txt">Reserves Cubes, Views Contracts</text>
+          <text x="480" y="937" class="fc-sm">&amp; Requests 3-Day Grace Extensions</text>
+          <line x1="480" y1="946" x2="480" y2="960" stroke="#000000" stroke-width="1.8" />
+
+          <rect x="342" y="960" width="276" height="46" fill="#ffffff" stroke="#000000" stroke-width="1.8" />
+          <text x="480" y="980" class="fc-txt">Adds Display Products &amp; Encodes</text>
+          <text x="480" y="997" class="fc-sm">Pick-up Buyer Orders &amp; Receipts</text>
+          <line x1="480" y1="1006" x2="480" y2="1020" stroke="#000000" stroke-width="1.8" />
+
+          <rect x="342" y="1020" width="276" height="46" fill="#ffffff" stroke="#000000" stroke-width="1.8" />
+          <text x="480" y="1040" class="fc-txt">Monitors Reservations, Pickups,</text>
+          <text x="480" y="1057" class="fc-sm">Product Inventory &amp; Sales Income</text>
+
+          <!-- ── COLUMN 3: CUSTOMER (Right-Center) ── -->
+          <line x1="565" y1="782" x2="690" y2="782" stroke="#000000" stroke-width="1.8" />
+          <polygon points="696,762 882,762 868,802 682,802" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="782" y="788" class="fc-bold">CUSTOMER</text>
+          <line x1="782" y1="802" x2="782" y2="824" stroke="#000000" stroke-width="1.8" />
+
+          <rect x="644" y="824" width="276" height="50" fill="#ffffff" stroke="#000000" stroke-width="1.8" />
+          <text x="782" y="846" class="fc-txt">Browses &amp; Searches Display</text>
+          <text x="782" y="864" class="fc-sm">Products by Category &amp; Variant</text>
+          <line x1="782" y1="874" x2="782" y2="892" stroke="#000000" stroke-width="1.8" />
+
+          <rect x="644" y="892" width="276" height="50" fill="#ffffff" stroke="#000000" stroke-width="1.8" />
+          <text x="782" y="914" class="fc-txt">Reserves Display Products</text>
+          <text x="782" y="932" class="fc-sm">(1–4 Hours Atomic Stock Hold)</text>
+          <line x1="782" y1="942" x2="782" y2="960" stroke="#000000" stroke-width="1.8" />
+
+          <rect x="644" y="960" width="276" height="50" fill="#ffffff" stroke="#000000" stroke-width="1.8" />
+          <text x="782" y="982" class="fc-txt">Reserves Available Rental Cubes</text>
+          <text x="782" y="1000" class="fc-sm">(1–12 Months) &amp; Manages Reservations</text>
+
+          <!-- CONVERGE TO RETURN TO DASHBOARD -->
+          <rect x="440" y="1088" width="280" height="52" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="580" y="1112" class="fc-bold">Return to</text>
+          <text x="580" y="1131" class="fc-bold">Dashboard / Portal</text>
+
+          <!-- Connect Staff, Renter, Customer, Owner into Return to Dashboard -->
+          <polyline points="180,1056 180,1114 436,1114" fill="none" stroke="#000000" stroke-width="1.8" marker-end="url(#arrow-fc)" />
+          <polyline points="480,1066 480,1084" fill="none" stroke="#000000" stroke-width="1.8" marker-end="url(#arrow-fc)" />
+          <polyline points="782,1010 782,1102 724,1102" fill="none" stroke="#000000" stroke-width="1.8" marker-end="url(#arrow-fc)" />
+          <polyline points="1212,1006 1212,1124 724,1124" fill="none" stroke="#000000" stroke-width="1.8" marker-end="url(#arrow-fc)" />
+
+          <!-- LOGOUT? Diamond -->
+          <line x1="580" y1="1140" x2="580" y2="1162" stroke="#000000" stroke-width="1.8" marker-end="url(#arrow-fc)" />
+          <polygon points="580,1166 655,1198 580,1230 505,1198" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="580" y="1203" class="fc-bold">LOGOUT?</text>
+
+          <!-- No -> Loop back to Return to Dashboard -->
+          <polyline points="505,1198 375,1198 375,1128 436,1128" fill="none" stroke="#000000" stroke-width="1.8" marker-end="url(#arrow-fc)" />
+          <text x="392" y="1188" class="fc-yn">No</text>
+
+          <!-- Yes -> END -->
+          <line x1="655" y1="1198" x2="770" y2="1198" stroke="#000000" stroke-width="1.8" marker-end="url(#arrow-fc)" />
+          <text x="695" y="1188" class="fc-yn">Yes</text>
+
+          <ellipse cx="875" cy="1198" rx="100" ry="26" fill="#ffffff" stroke="#000000" stroke-width="2" />
+          <text x="875" y="1204" class="fc-bold">END</text>
+        </svg>
+      </div>
+    </section>
+
+    <!-- ═════════════════════════════════════════════════════════════════════════
+         5. COMPLETE ENTITY RELATIONSHIP DIAGRAM (ERD - ALL 10 TABLES)
+         ═════════════════════════════════════════════════════════════════════════ -->
+    <section id="erd-section" class="diagram-card">
+      <div class="diagram-header">
+        <div>
+          <h2>5. Complete Entity Relationship Diagram (ERD)</h2>
+          <p>Includes all 10 tables from <code>db/schema.sql</code> (<code>users</code>, <code>otp_codes</code>, <code>cubes</code>, <code>contracts</code>, <code>contract_extensions</code>, <code>contract_payments</code>, <code>products</code>, <code>reservations</code>, <code>transactions</code>, <code>pull_out_items</code>) with clean non-overlapping crow's-foot connector lines.</p>
+        </div>
+        <div class="btn-group">
+          <button class="export-btn" onclick="downloadSvgAsPng('svg-erd', 'TrackErentory_5_Complete_ERD.png', 2.5)">Download High-Res PNG</button>
+          <button class="export-btn secondary" onclick="downloadRawSvg('svg-erd', 'TrackErentory_5_Complete_ERD.svg')">Download SVG</button>
+        </div>
+      </div>
+      <div class="svg-Scroll">
+        <svg id="svg-erd" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1680 1160" width="1640" height="1132">
+          <rect width="1680" height="1160" fill="#f8fafc" />
+          <defs>
+            <!-- Parent PK: One and Only One (||) exiting RIGHT border (0,0) -->
+            <g id="cf-one-right">
+              <line x1="0" y1="0" x2="22" y2="0" stroke="#334155" stroke-width="2" />
+              <line x1="7" y1="-7" x2="7" y2="7" stroke="#0f172a" stroke-width="2.2" />
+              <line x1="13" y1="-7" x2="13" y2="7" stroke="#0f172a" stroke-width="2.2" />
+            </g>
+            <!-- Parent PK: Zero or One (|o) exiting RIGHT border (0,0) -->
+            <g id="cf-zero-one-right">
+              <line x1="0" y1="0" x2="24" y2="0" stroke="#334155" stroke-width="2" />
+              <line x1="7" y1="-7" x2="7" y2="7" stroke="#0f172a" stroke-width="2.2" />
+              <circle cx="15" cy="0" r="4.5" fill="#f8fafc" stroke="#0f172a" stroke-width="2" />
+            </g>
+            <!-- Child FK: Zero or Many (o<) entering LEFT border (0,0) -->
+            <g id="cf-zero-many-left">
+              <line x1="-26" y1="0" x2="0" y2="0" stroke="#334155" stroke-width="2" />
+              <line x1="-14" y1="0" x2="0" y2="-7" stroke="#0f172a" stroke-width="2.1" />
+              <line x1="-14" y1="0" x2="0" y2="7" stroke="#0f172a" stroke-width="2.1" />
+              <circle cx="-19" cy="0" r="4.5" fill="#f8fafc" stroke="#0f172a" stroke-width="2" />
+            </g>
+            <!-- Child FK: Zero or Many (>o) entering RIGHT border (0,0) -->
+            <g id="cf-zero-many-right">
+              <line x1="26" y1="0" x2="0" y2="0" stroke="#334155" stroke-width="2" />
+              <line x1="14" y1="0" x2="0" y2="-7" stroke="#0f172a" stroke-width="2.1" />
+              <line x1="14" y1="0" x2="0" y2="7" stroke="#0f172a" stroke-width="2.1" />
+              <circle cx="19" cy="0" r="4.5" fill="#f8fafc" stroke="#0f172a" stroke-width="2" />
+            </g>
+            <!-- Child FK: One or Many (|<) entering LEFT border (0,0) -->
+            <g id="cf-one-many-left">
+              <line x1="-26" y1="0" x2="0" y2="0" stroke="#334155" stroke-width="2" />
+              <line x1="-14" y1="0" x2="0" y2="-7" stroke="#0f172a" stroke-width="2.1" />
+              <line x1="-14" y1="0" x2="0" y2="7" stroke="#0f172a" stroke-width="2.1" />
+              <line x1="-18" y1="-7" x2="-18" y2="7" stroke="#0f172a" stroke-width="2.2" />
+            </g>
+            <!-- Child FK: One or Many (>|) entering RIGHT border (0,0) -->
+            <g id="cf-one-many-right">
+              <line x1="26" y1="0" x2="0" y2="0" stroke="#334155" stroke-width="2" />
+              <line x1="14" y1="0" x2="0" y2="-7" stroke="#0f172a" stroke-width="2.1" />
+              <line x1="14" y1="0" x2="0" y2="7" stroke="#0f172a" stroke-width="2.1" />
+              <line x1="18" y1="-7" x2="18" y2="7" stroke="#0f172a" stroke-width="2.2" />
+            </g>
+          </defs>
+          <style>
+            .erd-hdr { font-family: 'Segoe UI', Arial, sans-serif; font-size: 16px; font-weight: 700; fill: #ffffff; }
+            .erd-pk { font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; font-weight: 700; fill: #0f172a; }
+            .erd-fk { font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; font-weight: 600; fill: #1e3a8a; }
+            .erd-col { font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; font-weight: 400; fill: #1e293b; }
+            .erd-type { font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; fill: #64748b; text-anchor: end; }
+            .erd-line { fill: none; stroke: #475569; stroke-width: 1.85; stroke-linejoin: round; }
+            .erd-line-hi { fill: none; stroke: #2b5c8f; stroke-width: 1.95; stroke-linejoin: round; }
+            .erd-card-bg { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
+            .erd-hdr-bg { fill: #2b5c8f; }
+          </style>
+
+          <!-- ═══════════════════════════════════════════════════════════════════
+               ORTHOGONAL RELATIONSHIP LINES (WITH DEDICATED 120px CHANNELS)
+               ═══════════════════════════════════════════════════════════════════ -->
+
+          <!-- 1. users.user_id (330, 96) relationships -->
+          <!-- users -> otp_codes.user_id (330, 489) -->
+          <path d="M 352,96 L 368,96 L 368,489 L 356,489" class="erd-line-hi" />
+          <!-- users -> reservations.customer_id (450, 535) -->
+          <path d="M 368,489 L 368,535 L 424,535" class="erd-line" />
+          <!-- users -> pull_out_items.renter_id (330, 815) & pulled_out_by (330, 1045) -->
+          <path d="M 368,535 L 368,815 L 356,815" class="erd-line" />
+          <path d="M 368,815 L 368,1045 L 356,1045" class="erd-line" />
+          <!-- users -> contract_extensions.renter_id (450, 792) -->
+          <path d="M 368,792 L 424,792" class="erd-line" />
+          <!-- users -> contracts.renter_id (860, 119) -->
+          <path d="M 368,96 L 368,18 L 812,18 L 812,119 L 834,119" class="erd-line" />
+          <!-- users -> contract_payments.renter_id (860, 442) & processed_by (860, 649) -->
+          <path d="M 812,119 L 812,442 L 834,442" class="erd-line" />
+          <path d="M 812,442 L 812,649 L 834,649" class="erd-line" />
+          <!-- users -> products.renter_id (1270, 119) -->
+          <path d="M 812,18 L 1222,18 L 1222,119 L 1244,119" class="erd-line" />
+          <!-- users -> transactions.renter_id (1270, 578) & processed_by (1270, 854) -->
+          <path d="M 1222,119 L 1222,578 L 1244,578" class="erd-line" />
+          <path d="M 1222,578 L 1222,854 L 1244,854" class="erd-line" />
+
+          <!-- 2. cubes.cube_id (740, 96) relationships -->
+          <!-- cubes -> contracts.cube_id (860, 142) -->
+          <path d="M 762,96 L 788,96 L 788,142 L 834,142" class="erd-line-hi" />
+          <!-- cubes -> contract_payments.cube_id (860, 465) -->
+          <path d="M 788,142 L 788,465 L 834,465" class="erd-line-hi" />
+          <!-- cubes -> reservations.cube_id (740, 512) -->
+          <path d="M 788,465 L 788,512 L 766,512" class="erd-line-hi" />
+          <!-- cubes -> contract_extensions.cube_id (740, 815) -->
+          <path d="M 788,512 L 788,815 L 766,815" class="erd-line-hi" />
+          <!-- cubes -> pull_out_items.cube_id (330, 792) -->
+          <path d="M 788,668 L 392,668 L 392,792 L 356,792" class="erd-line-hi" />
+          <!-- cubes -> products.cube_id (1270, 142) -->
+          <path d="M 788,96 L 788,30 L 1204,30 L 1204,142 L 1244,142" class="erd-line-hi" />
+          <!-- cubes -> transactions.cube_id (1270, 555) -->
+          <path d="M 1204,142 L 1204,555 L 1244,555" class="erd-line-hi" />
+
+          <!-- 3. contracts.contract_id (1150, 96) relationships -->
+          <!-- contracts -> contract_payments.contract_id (1150, 419) -->
+          <path d="M 1172,96 L 1186,96 L 1186,419 L 1176,419" class="erd-line" />
+          <!-- contracts -> contract_extensions.contract_id (740, 769) -->
+          <path d="M 1186,419 L 1186,755 L 774,755 L 774,769 L 766,769" class="erd-line" />
+
+          <!-- 4. products.product_id (1570, 96) relationships -->
+          <!-- products -> transactions.product_id (1570, 509) -->
+          <path d="M 1592,96 L 1618,96 L 1618,509 L 1596,509" class="erd-line-hi" />
+          <!-- products -> reservations.product_id (740, 489) -->
+          <path d="M 1618,96 L 1618,408 L 774,408 L 774,489 L 766,489" class="erd-line-hi" />
+          <!-- products -> pull_out_items.product_id (330, 769) -->
+          <path d="M 774,408 L 410,408 L 410,769 L 356,769" class="erd-line-hi" />
+
+          <!-- 5. transactions.transaction_id (1570, 486) relationships -->
+          <!-- transactions -> pull_out_items.transaction_id (330, 838) -->
+          <path d="M 1594,486 L 1642,486 L 1642,1135 L 384,1135 L 384,838 L 356,838" class="erd-line" />
+
+
+          <!-- ═══════════════════════════════════════════════════════════════════
+               CROW'S FOOT CARDINALITY SYMBOLS AT EVERY PK & FK PORT
+               ═══════════════════════════════════════════════════════════════════ -->
+
+          <!-- Parent PK Symbols (One and Only One || / Zero or One |o) -->
+          <use href="#cf-one-right" x="330" y="96" />       <!-- users.user_id -->
+          <use href="#cf-one-right" x="740" y="96" />       <!-- cubes.cube_id -->
+          <use href="#cf-one-right" x="1150" y="96" />      <!-- contracts.contract_id -->
+          <use href="#cf-one-right" x="1570" y="96" />      <!-- products.product_id -->
+          <use href="#cf-zero-one-right" x="1570" y="486" /><!-- transactions.transaction_id -->
+
+          <!-- Child FK Symbols on Column 1 (otp_codes, pull_out_items) -->
+          <use href="#cf-zero-many-right" x="330" y="489" /> <!-- otp_codes.user_id -->
+          <use href="#cf-zero-many-right" x="330" y="769" /> <!-- pull_out_items.product_id -->
+          <use href="#cf-zero-many-right" x="330" y="792" /> <!-- pull_out_items.cube_id -->
+          <use href="#cf-zero-many-right" x="330" y="815" /> <!-- pull_out_items.renter_id -->
+          <use href="#cf-zero-many-right" x="330" y="838" /> <!-- pull_out_items.transaction_id -->
+          <use href="#cf-zero-many-right" x="330" y="1045" /><!-- pull_out_items.pulled_out_by -->
+
+          <!-- Child FK Symbols on Column 2 (reservations, contract_extensions) -->
+          <use href="#cf-zero-many-right" x="740" y="489" /> <!-- reservations.product_id -->
+          <use href="#cf-zero-many-right" x="740" y="512" /> <!-- reservations.cube_id -->
+          <use href="#cf-zero-many-left"  x="450" y="535" /> <!-- reservations.customer_id -->
+          <use href="#cf-one-many-right"  x="740" y="769" /> <!-- contract_extensions.contract_id -->
+          <use href="#cf-one-many-left"   x="450" y="792" /> <!-- contract_extensions.renter_id -->
+          <use href="#cf-one-many-right"  x="740" y="815" /> <!-- contract_extensions.cube_id -->
+
+          <!-- Child FK Symbols on Column 3 (contracts, contract_payments) -->
+          <use href="#cf-zero-many-left"  x="860" y="119" />  <!-- contracts.renter_id -->
+          <use href="#cf-zero-many-left"  x="860" y="142" />  <!-- contracts.cube_id -->
+          <use href="#cf-one-many-right"  x="1150" y="419" /> <!-- contract_payments.contract_id -->
+          <use href="#cf-zero-many-left"  x="860" y="442" />  <!-- contract_payments.renter_id -->
+          <use href="#cf-zero-many-left"  x="860" y="465" />  <!-- contract_payments.cube_id -->
+          <use href="#cf-zero-many-left"  x="860" y="649" />  <!-- contract_payments.processed_by -->
+
+          <!-- Child FK Symbols on Column 4 (products, transactions) -->
+          <use href="#cf-zero-many-left"  x="1270" y="119" /> <!-- products.renter_id -->
+          <use href="#cf-zero-many-left"  x="1270" y="142" /> <!-- products.cube_id -->
+          <use href="#cf-zero-many-right" x="1570" y="509" /> <!-- transactions.product_id -->
+          <use href="#cf-zero-many-left"  x="1270" y="555" /> <!-- transactions.cube_id -->
+          <use href="#cf-zero-many-left"  x="1270" y="578" /> <!-- transactions.renter_id -->
+          <use href="#cf-zero-many-left"  x="1270" y="854" /> <!-- transactions.processed_by -->
+
+
+          <!-- ═══════════════════════════════════════════════════════════════════
+               TABLE 1: users (x:40, y:40, w:290, h:332)
+               ═══════════════════════════════════════════════════════════════════ -->
+          <g transform="translate(40, 40)">
+            <rect width="290" height="332" rx="6" class="erd-card-bg" />
+            <path d="M 0,6 Q 0,0 6,0 L 284,0 Q 290,0 290,6 L 290,38 L 0,38 Z" class="erd-hdr-bg" />
+            <text x="16" y="25" class="erd-hdr">users</text>
+
+            <text x="16" y="60" class="erd-pk">user_id 🔑</text><text x="274" y="60" class="erd-type">serial PK</text>
+            <text x="16" y="83" class="erd-col">full_name</text><text x="274" y="83" class="erd-type">text</text>
+            <text x="16" y="106" class="erd-pk">username UNIQUE</text><text x="274" y="106" class="erd-type">text</text>
+            <text x="16" y="129" class="erd-col">password</text><text x="274" y="129" class="erd-type">text</text>
+            <text x="16" y="152" class="erd-col">email</text><text x="274" y="152" class="erd-type">varchar</text>
+            <text x="16" y="175" class="erd-col">role</text><text x="274" y="175" class="erd-type">text</text>
+            <text x="16" y="198" class="erd-col">status</text><text x="274" y="198" class="erd-type">text</text>
+            <text x="16" y="221" class="erd-col">salary</text><text x="274" y="221" class="erd-type">numeric(12,2)</text>
+            <text x="16" y="244" class="erd-col">phone_number</text><text x="274" y="244" class="erd-type">varchar</text>
+            <text x="16" y="267" class="erd-col">social_link</text><text x="274" y="267" class="erd-type">varchar</text>
+            <text x="16" y="290" class="erd-col">deleted_at</text><text x="274" y="290" class="erd-type">timestamptz</text>
+            <text x="16" y="313" class="erd-col">created_at</text><text x="274" y="313" class="erd-type">timestamptz</text>
+          </g>
+
+          <!-- ═══════════════════════════════════════════════════════════════════
+               TABLE 2: otp_codes (x:40, y:410, w:290, h:240)
+               ═══════════════════════════════════════════════════════════════════ -->
+          <g transform="translate(40, 410)">
+            <rect width="290" height="240" rx="6" class="erd-card-bg" />
+            <path d="M 0,6 Q 0,0 6,0 L 284,0 Q 290,0 290,6 L 290,38 L 0,38 Z" class="erd-hdr-bg" />
+            <text x="16" y="25" class="erd-hdr">otp_codes</text>
+
+            <text x="16" y="60" class="erd-pk">id 🔑</text><text x="274" y="60" class="erd-type">serial PK</text>
+            <text x="16" y="83" class="erd-fk">user_id 🔗</text><text x="274" y="83" class="erd-type">integer FK</text>
+            <text x="16" y="106" class="erd-col">email</text><text x="274" y="106" class="erd-type">varchar</text>
+            <text x="16" y="129" class="erd-col">code</text><text x="274" y="129" class="erd-type">varchar(6)</text>
+            <text x="16" y="152" class="erd-col">purpose</text><text x="274" y="152" class="erd-type">varchar</text>
+            <text x="16" y="175" class="erd-col">expires_at</text><text x="274" y="175" class="erd-type">timestamptz</text>
+            <text x="16" y="198" class="erd-col">used</text><text x="274" y="198" class="erd-type">boolean</text>
+            <text x="16" y="221" class="erd-col">created_at</text><text x="274" y="221" class="erd-type">timestamptz</text>
+          </g>
+
+          <!-- ═══════════════════════════════════════════════════════════════════
+               TABLE 3: pull_out_items (x:40, y:690, w:290, h:424)
+               ═══════════════════════════════════════════════════════════════════ -->
+          <g transform="translate(40, 690)">
+            <rect width="290" height="424" rx="6" class="erd-card-bg" />
+            <path d="M 0,6 Q 0,0 6,0 L 284,0 Q 290,0 290,6 L 290,38 L 0,38 Z" class="erd-hdr-bg" />
+            <text x="16" y="25" class="erd-hdr">pull_out_items</text>
+
+            <text x="16" y="60" class="erd-pk">pull_out_id 🔑</text><text x="274" y="60" class="erd-type">serial PK</text>
+            <text x="16" y="83" class="erd-fk">product_id 🔗</text><text x="274" y="83" class="erd-type">integer FK</text>
+            <text x="16" y="106" class="erd-fk">cube_id 🔗</text><text x="274" y="106" class="erd-type">integer FK</text>
+            <text x="16" y="129" class="erd-fk">renter_id 🔗</text><text x="274" y="129" class="erd-type">integer FK</text>
+            <text x="16" y="152" class="erd-fk">transaction_id 🔗</text><text x="274" y="152" class="erd-type">integer FK</text>
+            <text x="16" y="175" class="erd-col">type</text><text x="274" y="175" class="erd-type">varchar</text>
+            <text x="16" y="198" class="erd-col">buyer_name</text><text x="274" y="198" class="erd-type">varchar</text>
+            <text x="16" y="221" class="erd-col">product_name</text><text x="274" y="221" class="erd-type">varchar</text>
+            <text x="16" y="244" class="erd-col">price</text><text x="274" y="244" class="erd-type">numeric(12,2)</text>
+            <text x="16" y="267" class="erd-col">quantity</text><text x="274" y="267" class="erd-type">integer</text>
+            <text x="16" y="290" class="erd-col">reason</text><text x="274" y="290" class="erd-type">varchar</text>
+            <text x="16" y="313" class="erd-col">status</text><text x="274" y="313" class="erd-type">varchar</text>
+            <text x="16" y="336" class="erd-col">notes</text><text x="274" y="336" class="erd-type">text</text>
+            <text x="16" y="359" class="erd-fk">pulled_out_by 🔗</text><text x="274" y="359" class="erd-type">integer FK</text>
+            <text x="16" y="382" class="erd-col">pulled_out_at</text><text x="274" y="382" class="erd-type">timestamptz</text>
+            <text x="16" y="405" class="erd-col">created_at</text><text x="274" y="405" class="erd-type">timestamptz</text>
+          </g>
+
+          <!-- ═══════════════════════════════════════════════════════════════════
+               TABLE 4: cubes (x:450, y:40, w:290, h:332)
+               ═══════════════════════════════════════════════════════════════════ -->
+          <g transform="translate(450, 40)">
+            <rect width="290" height="332" rx="6" class="erd-card-bg" />
+            <path d="M 0,6 Q 0,0 6,0 L 284,0 Q 290,0 290,6 L 290,38 L 0,38 Z" class="erd-hdr-bg" />
+            <text x="16" y="25" class="erd-hdr">cubes</text>
+
+            <text x="16" y="60" class="erd-pk">cube_id 🔑</text><text x="274" y="60" class="erd-type">serial PK</text>
+            <text x="16" y="83" class="erd-pk">cube_number UNIQUE</text><text x="274" y="83" class="erd-type">text</text>
+            <text x="16" y="106" class="erd-col">location</text><text x="274" y="106" class="erd-type">text</text>
+            <text x="16" y="129" class="erd-col">type</text><text x="274" y="129" class="erd-type">text</text>
+            <text x="16" y="152" class="erd-col">price_per_month</text><text x="274" y="152" class="erd-type">numeric(12,2)</text>
+            <text x="16" y="175" class="erd-col">status</text><text x="274" y="175" class="erd-type">text</text>
+            <text x="16" y="198" class="erd-col">image_url</text><text x="274" y="198" class="erd-type">text</text>
+            <text x="16" y="221" class="erd-col">image_urls</text><text x="274" y="221" class="erd-type">text[]</text>
+            <text x="16" y="244" class="erd-col">width_cm</text><text x="274" y="244" class="erd-type">numeric(8,2)</text>
+            <text x="16" y="267" class="erd-col">height_cm</text><text x="274" y="267" class="erd-type">numeric(8,2)</text>
+            <text x="16" y="290" class="erd-col">deleted_at</text><text x="274" y="290" class="erd-type">timestamptz</text>
+            <text x="16" y="313" class="erd-col">created_at</text><text x="274" y="313" class="erd-type">timestamptz</text>
+          </g>
+
+          <!-- ═══════════════════════════════════════════════════════════════════
+               TABLE 5: reservations (x:450, y:410, w:290, h:240)
+               ═══════════════════════════════════════════════════════════════════ -->
+          <g transform="translate(450, 410)">
+            <rect width="290" height="240" rx="6" class="erd-card-bg" />
+            <path d="M 0,6 Q 0,0 6,0 L 284,0 Q 290,0 290,6 L 290,38 L 0,38 Z" class="erd-hdr-bg" />
+            <text x="16" y="25" class="erd-hdr">reservations</text>
+
+            <text x="16" y="60" class="erd-pk">reservation_id 🔑</text><text x="274" y="60" class="erd-type">serial PK</text>
+            <text x="16" y="83" class="erd-fk">product_id 🔗</text><text x="274" y="83" class="erd-type">integer FK</text>
+            <text x="16" y="106" class="erd-fk">cube_id 🔗</text><text x="274" y="106" class="erd-type">integer FK</text>
+            <text x="16" y="129" class="erd-fk">customer_id 🔗</text><text x="274" y="129" class="erd-type">integer FK</text>
+            <text x="16" y="152" class="erd-col">expiry_time</text><text x="274" y="152" class="erd-type">timestamptz</text>
+            <text x="16" y="175" class="erd-col">hours_valid</text><text x="274" y="175" class="erd-type">integer</text>
+            <text x="16" y="198" class="erd-col">status</text><text x="274" y="198" class="erd-type">text</text>
+            <text x="16" y="221" class="erd-col">created_at</text><text x="274" y="221" class="erd-type">timestamptz</text>
+          </g>
+
+          <!-- ═══════════════════════════════════════════════════════════════════
+               TABLE 6: contract_extensions (x:450, y:690, w:290, h:263)
+               ═══════════════════════════════════════════════════════════════════ -->
+          <g transform="translate(450, 690)">
+            <rect width="290" height="263" rx="6" class="erd-card-bg" />
+            <path d="M 0,6 Q 0,0 6,0 L 284,0 Q 290,0 290,6 L 290,38 L 0,38 Z" class="erd-hdr-bg" />
+            <text x="16" y="25" class="erd-hdr">contract_extensions</text>
+
+            <text x="16" y="60" class="erd-pk">extension_id 🔑</text><text x="274" y="60" class="erd-type">serial PK</text>
+            <text x="16" y="83" class="erd-fk">contract_id 🔗</text><text x="274" y="83" class="erd-type">integer FK</text>
+            <text x="16" y="106" class="erd-fk">renter_id 🔗</text><text x="274" y="106" class="erd-type">integer FK</text>
+            <text x="16" y="129" class="erd-fk">cube_id 🔗</text><text x="274" y="129" class="erd-type">integer FK</text>
+            <text x="16" y="152" class="erd-col">requested_months</text><text x="274" y="152" class="erd-type">integer</text>
+            <text x="16" y="175" class="erd-col">notes</text><text x="274" y="175" class="erd-type">text</text>
+            <text x="16" y="198" class="erd-col">status</text><text x="274" y="198" class="erd-type">text</text>
+            <text x="16" y="221" class="erd-col">created_at</text><text x="274" y="221" class="erd-type">timestamptz</text>
+            <text x="16" y="244" class="erd-col">updated_at</text><text x="274" y="244" class="erd-type">timestamptz</text>
+          </g>
+
+          <!-- ═══════════════════════════════════════════════════════════════════
+               TABLE 7: contracts (x:860, y:40, w:290, h:240)
+               ═══════════════════════════════════════════════════════════════════ -->
+          <g transform="translate(860, 40)">
+            <rect width="290" height="240" rx="6" class="erd-card-bg" />
+            <path d="M 0,6 Q 0,0 6,0 L 284,0 Q 290,0 290,6 L 290,38 L 0,38 Z" class="erd-hdr-bg" />
+            <text x="16" y="25" class="erd-hdr">contracts</text>
+
+            <text x="16" y="60" class="erd-pk">contract_id 🔑</text><text x="274" y="60" class="erd-type">serial PK</text>
+            <text x="16" y="83" class="erd-fk">renter_id 🔗</text><text x="274" y="83" class="erd-type">integer FK</text>
+            <text x="16" y="106" class="erd-fk">cube_id 🔗</text><text x="274" y="106" class="erd-type">integer FK</text>
+            <text x="16" y="129" class="erd-col">start_date</text><text x="274" y="129" class="erd-type">date</text>
+            <text x="16" y="152" class="erd-col">end_date</text><text x="274" y="152" class="erd-type">date</text>
+            <text x="16" y="175" class="erd-col">status</text><text x="274" y="175" class="erd-type">text</text>
+            <text x="16" y="198" class="erd-col">contract_text</text><text x="274" y="198" class="erd-type">text</text>
+            <text x="16" y="221" class="erd-col">created_at</text><text x="274" y="221" class="erd-type">timestamptz</text>
+          </g>
+
+          <!-- ═══════════════════════════════════════════════════════════════════
+               TABLE 8: contract_payments (x:860, y:340, w:290, h:401)
+               ═══════════════════════════════════════════════════════════════════ -->
+          <g transform="translate(860, 340)">
+            <rect width="290" height="401" rx="6" class="erd-card-bg" />
+            <path d="M 0,6 Q 0,0 6,0 L 284,0 Q 290,0 290,6 L 290,38 L 0,38 Z" class="erd-hdr-bg" />
+            <text x="16" y="25" class="erd-hdr">contract_payments</text>
+
+            <text x="16" y="60" class="erd-pk">payment_id 🔑</text><text x="274" y="60" class="erd-type">serial PK</text>
+            <text x="16" y="83" class="erd-fk">contract_id 🔗</text><text x="274" y="83" class="erd-type">integer FK</text>
+            <text x="16" y="106" class="erd-fk">renter_id 🔗</text><text x="274" y="106" class="erd-type">integer FK</text>
+            <text x="16" y="129" class="erd-fk">cube_id 🔗</text><text x="274" y="129" class="erd-type">integer FK</text>
+            <text x="16" y="152" class="erd-col">month_number</text><text x="274" y="152" class="erd-type">integer</text>
+            <text x="16" y="175" class="erd-col">due_date</text><text x="274" y="175" class="erd-type">date</text>
+            <text x="16" y="198" class="erd-col">amount</text><text x="274" y="198" class="erd-type">numeric</text>
+            <text x="16" y="221" class="erd-col">payment_status</text><text x="274" y="221" class="erd-type">text</text>
+            <text x="16" y="244" class="erd-col">payment_method</text><text x="274" y="244" class="erd-type">text</text>
+            <text x="16" y="267" class="erd-col">receipt_image_url</text><text x="274" y="267" class="erd-type">text</text>
+            <text x="16" y="290" class="erd-col">paid_at</text><text x="274" y="290" class="erd-type">timestamptz</text>
+            <text x="16" y="313" class="erd-fk">processed_by 🔗</text><text x="274" y="313" class="erd-type">integer FK</text>
+            <text x="16" y="336" class="erd-col">notes</text><text x="274" y="336" class="erd-type">text</text>
+            <text x="16" y="359" class="erd-col">created_at</text><text x="274" y="359" class="erd-type">timestamptz</text>
+            <text x="16" y="382" class="erd-col">updated_at</text><text x="274" y="382" class="erd-type">timestamptz</text>
+          </g>
+
+          <!-- ═══════════════════════════════════════════════════════════════════
+               TABLE 9: products (x:1270, y:40, w:300, h:355)
+               ═══════════════════════════════════════════════════════════════════ -->
+          <g transform="translate(1270, 40)">
+            <rect width="300" height="355" rx="6" class="erd-card-bg" />
+            <path d="M 0,6 Q 0,0 6,0 L 294,0 Q 300,0 300,6 L 300,38 L 0,38 Z" class="erd-hdr-bg" />
+            <text x="16" y="25" class="erd-hdr">products</text>
+
+            <text x="16" y="60" class="erd-pk">product_id 🔑</text><text x="284" y="60" class="erd-type">serial PK</text>
+            <text x="16" y="83" class="erd-fk">renter_id 🔗</text><text x="284" y="83" class="erd-type">integer FK</text>
+            <text x="16" y="106" class="erd-fk">cube_id 🔗</text><text x="284" y="106" class="erd-type">integer FK</text>
+            <text x="16" y="129" class="erd-col">product_name</text><text x="284" y="129" class="erd-type">text</text>
+            <text x="16" y="152" class="erd-col">description</text><text x="284" y="152" class="erd-type">text</text>
+            <text x="16" y="175" class="erd-col">price</text><text x="284" y="175" class="erd-type">numeric(12,2)</text>
+            <text x="16" y="198" class="erd-col">stock_quantity</text><text x="284" y="198" class="erd-type">integer</text>
+            <text x="16" y="221" class="erd-col">variant</text><text x="284" y="221" class="erd-type">text</text>
+            <text x="16" y="244" class="erd-col">category</text><text x="284" y="244" class="erd-type">text</text>
+            <text x="16" y="267" class="erd-col">image_url</text><text x="284" y="267" class="erd-type">text</text>
+            <text x="16" y="290" class="erd-col">image_urls</text><text x="284" y="290" class="erd-type">text[]</text>
+            <text x="16" y="313" class="erd-col">deleted_at</text><text x="284" y="313" class="erd-type">timestamptz</text>
+            <text x="16" y="336" class="erd-col">created_at</text><text x="284" y="336" class="erd-type">timestamptz</text>
+          </g>
+
+          <!-- ═══════════════════════════════════════════════════════════════════
+               TABLE 10: transactions (x:1270, y:430, w:300, h:447)
+               ═══════════════════════════════════════════════════════════════════ -->
+          <g transform="translate(1270, 430)">
+            <rect width="300" height="447" rx="6" class="erd-card-bg" />
+            <path d="M 0,6 Q 0,0 6,0 L 294,0 Q 300,0 300,6 L 300,38 L 0,38 Z" class="erd-hdr-bg" />
+            <text x="16" y="25" class="erd-hdr">transactions</text>
+
+            <text x="16" y="60" class="erd-pk">transaction_id 🔑</text><text x="284" y="60" class="erd-type">serial PK</text>
+            <text x="16" y="83" class="erd-fk">product_id 🔗</text><text x="284" y="83" class="erd-type">integer FK</text>
+            <text x="16" y="106" class="erd-col">product_name</text><text x="284" y="106" class="erd-type">text</text>
+            <text x="16" y="129" class="erd-fk">cube_id 🔗</text><text x="284" y="129" class="erd-type">integer FK</text>
+            <text x="16" y="152" class="erd-fk">renter_id 🔗</text><text x="284" y="152" class="erd-type">integer FK</text>
+            <text x="16" y="175" class="erd-col">buyer_name</text><text x="284" y="175" class="erd-type">text</text>
+            <text x="16" y="198" class="erd-col">authorized_pickup_name</text><text x="284" y="198" class="erd-type">text</text>
+            <text x="16" y="221" class="erd-col">payment_status</text><text x="284" y="221" class="erd-type">text</text>
+            <text x="16" y="244" class="erd-col">payment_method</text><text x="284" y="244" class="erd-type">text</text>
+            <text x="16" y="267" class="erd-col">quantity</text><text x="284" y="267" class="erd-type">integer</text>
+            <text x="16" y="290" class="erd-col">listed_quantity</text><text x="284" y="290" class="erd-type">integer</text>
+            <text x="16" y="313" class="erd-col">pickup_status</text><text x="284" y="313" class="erd-type">text</text>
+            <text x="16" y="336" class="erd-col">receipt_image_url</text><text x="284" y="336" class="erd-type">text</text>
+            <text x="16" y="359" class="erd-col">notes</text><text x="284" y="359" class="erd-type">text</text>
+            <text x="16" y="382" class="erd-col">transaction_date</text><text x="284" y="382" class="erd-type">timestamptz</text>
+            <text x="16" y="405" class="erd-col">updated_at</text><text x="284" y="405" class="erd-type">timestamptz</text>
+            <text x="16" y="428" class="erd-fk">processed_by 🔗</text><text x="284" y="428" class="erd-type">integer FK</text>
+          </g>
+
+          <!-- ═══════════════════════════════════════════════════════════════════
+               CROW'S FOOT NOTATION LEGEND BOX (x:860, y:790, w:290, h:275)
+               ═══════════════════════════════════════════════════════════════════ -->
+          <g transform="translate(860, 790)">
+            <rect width="290" height="275" rx="6" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" />
+            <path d="M 0,6 Q 0,0 6,0 L 284,0 Q 290,0 290,6 L 290,34 L 0,34 Z" fill="#0f172a" />
+            <text x="16" y="22" style="font-family:'Segoe UI',Arial,sans-serif; font-size:14px; font-weight:700; fill:#ffffff;">Crow's Foot ERD Legend</text>
+
+            <!-- Symbol 1: One and Only One (||) -->
+            <line x1="18" y1="60" x2="62" y2="60" stroke="#334155" stroke-width="2" />
+            <line x1="44" y1="52" x2="44" y2="68" stroke="#0f172a" stroke-width="2.2" />
+            <line x1="52" y1="52" x2="52" y2="68" stroke="#0f172a" stroke-width="2.2" />
+            <text x="74" y="64" class="erd-col">One and Only One (1..1)</text>
+
+            <!-- Symbol 2: Zero or One (|o) -->
+            <line x1="18" y1="95" x2="62" y2="95" stroke="#334155" stroke-width="2" />
+            <line x1="52" y1="87" x2="52" y2="103" stroke="#0f172a" stroke-width="2.2" />
+            <circle cx="40" cy="95" r="4.5" fill="#ffffff" stroke="#0f172a" stroke-width="2" />
+            <text x="74" y="99" class="erd-col">Zero or One (0..1)</text>
+
+            <!-- Symbol 3: One or Many (|<) -->
+            <line x1="18" y1="130" x2="62" y2="130" stroke="#334155" stroke-width="2" />
+            <line x1="46" y1="130" x2="62" y2="122" stroke="#0f172a" stroke-width="2.1" />
+            <line x1="46" y1="130" x2="62" y2="138" stroke="#0f172a" stroke-width="2.1" />
+            <line x1="40" y1="122" x2="40" y2="138" stroke="#0f172a" stroke-width="2.2" />
+            <text x="74" y="134" class="erd-col">One or Many (1..N)</text>
+
+            <!-- Symbol 4: Zero or Many (o<) -->
+            <line x1="18" y1="165" x2="62" y2="165" stroke="#334155" stroke-width="2" />
+            <line x1="46" y1="165" x2="62" y2="157" stroke="#0f172a" stroke-width="2.1" />
+            <line x1="46" y1="165" x2="62" y2="173" stroke="#0f172a" stroke-width="2.1" />
+            <circle cx="39" cy="165" r="4.5" fill="#ffffff" stroke="#0f172a" stroke-width="2" />
+            <text x="74" y="169" class="erd-col">Zero or Many (0..N)</text>
+
+            <line x1="16" y1="190" x2="274" y2="190" stroke="#e2e8f0" stroke-width="1.5" />
+            <text x="16" y="214" class="erd-pk">🔑 Primary Key (PK)</text>
+            <text x="16" y="238" class="erd-fk">🔗 Foreign Key (FK)</text>
+            <text x="16" y="260" class="erd-col">Total System Tables: 10 Tables</text>
+          </g>
+        </svg>
+      </div>
+    </section>
+
+  </div>
+
+  <script>
+    function downloadRawSvg(svgId, filename) {
+      const svgEl = document.getElementById(svgId);
+      if (!svgEl) return;
+      const serializer = new XMLSerializer();
+      let source = serializer.serializeToString(svgEl);
+      if (!source.match(/^<svg[^>]+xmlns="http\:\/\/www\.w3\.org\/2000\/svg"/)) {
+        source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+      }
+      const blob = new Blob([source], { type: 'image/svg+xml;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function downloadSvgAsPng(svgId, filename, scale = 2.5) {
+      const svgEl = document.getElementById(svgId);
+      if (!svgEl) return;
+      const viewBox = svgEl.viewBox.baseVal;
+      const width = viewBox && viewBox.width ? viewBox.width : svgEl.clientWidth;
+      const height = viewBox && viewBox.height ? viewBox.height : svgEl.clientHeight;
+
+      const serializer = new XMLSerializer();
+      let source = serializer.serializeToString(svgEl);
+      const svgBlob = new Blob([source], { type: 'image/svg+xml;charset=utf-8' });
+      const url = URL.createObjectURL(svgBlob);
+
+      const img = new Image();
+      img.onload = function () {
+        const canvas = document.createElement('canvas');
+        canvas.width = width * scale;
+        canvas.height = height * scale;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+
+        canvas.toDataURL('image/png');
+        const link = document.createElement('a');
+        link.download = filename;
+        link.href = canvas.toDataURL('image/png');
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      };
+      img.src = url;
+    }
+  </script>
+</body>
+</html>
+

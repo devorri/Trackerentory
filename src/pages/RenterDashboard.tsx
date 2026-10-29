@@ -170,18 +170,31 @@ export default function RenterDashboard() {
         .order('updated_at', { ascending: false }),
       supabase
         .from('reservations')
-        .select('*, products(*, cubes(*)), cubes(*), customer:users!customer_id(full_name, email, phone_number)')
+        .select('*, products(*, cubes(*)), cubes(*), customer:users!customer_id(*)')
         .order('expiry_time', { ascending: false }),
       supabase
         .from('contract_extensions')
         .select('*, contracts(*, cubes(*)), cubes(*)')
         .eq('renter_id', user.user_id)
-        .order('created_at', { ascending: false }),
+        .order('extension_id', { ascending: false }),
     ])
 
     if (!silent) setLoading(false)
-    if (!cRes.error) setCubes((cRes.data || []) as Cube[])
-    if (!conRes.error) setContracts((conRes.data || []) as Contract[])
+    const loadedCubes = ((cRes.data || []) as Cube[])
+    const cubeMap = new Map<number, Cube>(loadedCubes.map((cb) => [cb.cube_id, cb]))
+    if (!cRes.error) setCubes(loadedCubes)
+
+    let loadedContracts: Contract[] = []
+    if (!conRes.error) {
+      loadedContracts = (conRes.data || []) as Contract[]
+    } else {
+      const fbCon = await supabase.from('contracts').select('*').eq('renter_id', user.user_id).order('end_date')
+      loadedContracts = ((fbCon.data || []) as any[]).map((c) => ({
+        ...c,
+        cubes: c.cube_id ? cubeMap.get(c.cube_id) || null : null,
+      }))
+    }
+
     if (!pRes.error) setProducts((pRes.data || []) as Product[])
     if (!extRes.error && extRes.data) setExtensionRequests(extRes.data as ContractExtension[])
 
@@ -194,14 +207,46 @@ export default function RenterDashboard() {
       setTransactions(renterTx)
     }
 
+    let rawResList: Reservation[] = []
     if (!rRes.error) {
-      const myProds = (pRes.data || []) as Product[]
-      const myProdIds = new Set(myProds.map((p) => p.product_id))
-      const renterRes = ((rRes.data || []) as Reservation[]).filter(
-        (r) => r.product_id && myProdIds.has(r.product_id),
-      )
-      setReservations(renterRes)
+      rawResList = (rRes.data || []) as Reservation[]
+    } else {
+      const fbRes = await supabase.from('reservations').select('*').order('expiry_time', { ascending: false })
+      rawResList = (fbRes.data || []) as Reservation[]
     }
+
+    const myProds = (pRes.data || []) as Product[]
+    const myProdIds = new Set(myProds.map((p) => p.product_id))
+    const renterRes = rawResList.filter(
+      (r) => r.product_id && myProdIds.has(r.product_id),
+    )
+    setReservations(renterRes)
+
+    // Sync any pending cube reservation made by this renter that does not yet have a contract entry
+    const myPendingCubeRes = rawResList.filter(
+      (r) => r.cube_id && !r.product_id && r.customer_id === user.user_id && r.status === 'Pending' && !isReservationExpired(r),
+    )
+    for (const r of myPendingCubeRes) {
+      const hasContract = loadedContracts.some(
+        (c) => c.cube_id === r.cube_id && (c.status === 'Pending' || c.status === 'Active'),
+      )
+      if (!hasContract && r.cube_id) {
+        const start = todayISO()
+        const months = Math.max(1, Math.round((r.hours_valid || 720) / 720))
+        const end = addMonths(start, months)
+        loadedContracts.push({
+          contract_id: -r.reservation_id,
+          renter_id: user.user_id,
+          cube_id: r.cube_id,
+          start_date: start,
+          end_date: end,
+          status: 'Pending',
+          cubes: cubeMap.get(r.cube_id) || null,
+        } as Contract)
+      }
+    }
+
+    setContracts(loadedContracts)
   }
 
   useEffect(() => {
@@ -267,6 +312,43 @@ export default function RenterDashboard() {
 
     return { activeList, pendingList, extensionList, expiredList }
   }, [contracts, extensionRequests])
+
+  // Automatically switch to the 'pending' tab if the renter has pending cube requests and no active cubes yet
+  useEffect(() => {
+    if (
+      contractTab === 'active' &&
+      categorizedContracts.activeList.length === 0 &&
+      categorizedContracts.pendingList.length > 0
+    ) {
+      setContractTab('pending')
+    }
+  }, [categorizedContracts.activeList.length, categorizedContracts.pendingList.length])
+
+  async function cancelPendingCubeRequest(c: Contract) {
+    if (!window.confirm(`Cancel your reservation request for Cube #${c.cubes?.cube_number || c.cube_id}?`)) return
+    setBusy(true)
+    try {
+      if (c.contract_id > 0) {
+        await supabase.from('contracts').delete().eq('contract_id', c.contract_id).eq('status', 'Pending')
+      }
+      if (c.cube_id) {
+        await supabase
+          .from('reservations')
+          .update({ status: 'Cancelled' })
+          .eq('cube_id', c.cube_id)
+          .eq('customer_id', user!.user_id)
+          .eq('status', 'Pending')
+        await supabase.from('cubes').update({ status: 'Available' }).eq('cube_id', c.cube_id)
+      }
+      setBusy(false)
+      alert('Cube reservation request cancelled.')
+      void load()
+    } catch (err) {
+      setBusy(false)
+      console.error(err)
+      alert('Failed to cancel cube reservation request.')
+    }
+  }
 
   // ════════════ ADD PRODUCT HANDLERS ════════════
   function handleDisplayPhotoFiles(files: FileList | null) {
@@ -676,7 +758,12 @@ export default function RenterDashboard() {
             onClick={() => handleSectionChange('my-cube-contract')}
           >
             <KeyRound size={18} />
-            <span>My Cube and Contract</span>
+            <span style={{ flex: 1 }}>My Cube and Contract</span>
+            {categorizedContracts.pendingList.length > 0 && (
+              <span className="badge warn" style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem' }}>
+                {categorizedContracts.pendingList.length}
+              </span>
+            )}
           </button>
 
           <button
@@ -1038,6 +1125,44 @@ export default function RenterDashboard() {
                 </p>
               </div>
             </div>
+
+            {categorizedContracts.pendingList.length > 0 && (
+              <div
+                className="panel"
+                style={{
+                  background: '#eff6ff',
+                  border: '1px solid #93c5fd',
+                  borderRadius: 10,
+                  padding: '0.85rem 1.25rem',
+                  marginBottom: '1.25rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '0.75rem',
+                }}
+              >
+                <div>
+                  <strong style={{ color: '#1e40af', fontSize: '0.9rem' }}>
+                    You have {categorizedContracts.pendingList.length} Pending Cube Reservation(s)
+                  </strong>
+                  <p style={{ margin: '0.2rem 0 0', fontSize: '0.82rem', color: '#1e3a8a' }}>
+                    Your reserved cube request is awaiting owner approval in My Cube and Contract.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ fontSize: '0.8rem', padding: '0.4rem 0.85rem' }}
+                  onClick={() => {
+                    setContractTab('pending')
+                    handleSectionChange('my-cube-contract')
+                  }}
+                >
+                  View Pending Cube(s) →
+                </button>
+              </div>
+            )}
 
             {/* Filter toolbar */}
             <div style={{ display: 'flex', gap: '0.65rem', marginBottom: '1.25rem', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -1479,9 +1604,15 @@ export default function RenterDashboard() {
                                   </button>
                                 )
                               ) : contractTab === 'pending' ? (
-                                <span className="badge warn" style={{ fontSize: '0.75rem', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>
-                                  Pending Approval
-                                </span>
+                                <button
+                                  type="button"
+                                  className="btn-ghost"
+                                  disabled={busy}
+                                  style={{ fontSize: '0.78rem', padding: '0.35rem 0.65rem', color: '#dc2626' }}
+                                  onClick={() => void cancelPendingCubeRequest(c)}
+                                >
+                                  Cancel Request
+                                </button>
                               ) : contractTab === 'expired' ? (
                                 <span className="badge bad" style={{ fontSize: '0.75rem' }}>
                                   Expired & Released
