@@ -13,7 +13,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../context/Auth'
 import { supabase } from '../lib/supabase'
-import { peso, type PullOutItem, type Contract, type Product, type Transaction } from '../lib/types'
+import { peso, isContractInGracePeriod, type PullOutItem, type Contract, type Product, type Transaction } from '../lib/types'
 import { fetchPullOutItems, updatePullOutItemStatus, deletePullOutItem, addPullOutItem } from '../lib/pull-out'
 import { SkeletonTable } from '../components/Skeleton'
 import ConfirmModal from '../components/ConfirmModal'
@@ -76,7 +76,9 @@ export default function PullOutItemsPage() {
     if (contractRes.data) {
       const today = new Date().toISOString().slice(0, 10)
       const expired = (contractRes.data as Contract[]).filter(
-        (c) => c.status === 'Expired' || (c.end_date && c.end_date < today && c.status !== 'Pending')
+        (c) =>
+          (c.status === 'Expired' || (c.end_date && c.end_date < today && c.status !== 'Pending')) &&
+          !isContractInGracePeriod(c)
       )
       setExpiredContracts(expired)
     }

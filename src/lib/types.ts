@@ -40,7 +40,7 @@ export type Product = {
   image_urls?: string[] | null
   deleted_at: string | null
   created_at?: string
-  cubes?: Pick<Cube, 'cube_number' | 'type'> | null
+  cubes?: Pick<Cube, 'cube_number' | 'type' | 'location'> | null
   renter?: Pick<UserRow, 'user_id' | 'full_name' | 'username'> | null
 }
 
@@ -67,7 +67,7 @@ export type Contract = {
   contract_text: string | null
   created_at?: string
   cubes?: Cube | null
-  users?: { full_name: string } | null
+  users?: { full_name: string; email?: string; phone_number?: string } | null
 }
 
 export type ContractExtension = {
@@ -126,7 +126,7 @@ export type Transaction = {
   updated_at: string | null
   processed_by: number | null
   products?: (Product & { cubes?: Cube | null }) | null
-  cubes?: Pick<Cube, 'cube_number' | 'type'> | null
+  cubes?: Pick<Cube, 'cube_number' | 'type' | 'location'> | null
   users?: { full_name: string; role: Role } | null
 }
 
@@ -162,10 +162,46 @@ export type OtpCode = {
 }
 
 export function daysUntil(dateStr: string): number {
-  const end = new Date(dateStr)
-  end.setHours(23, 59, 59, 999)
-  const ms = end.getTime() - Date.now()
-  return Math.ceil(ms / (1000 * 60 * 60 * 24))
+  if (!dateStr) return 0
+  const targetStr = String(dateStr).slice(0, 10)
+  const todayStr = todayISO()
+  const [ty, tm, td] = targetStr.split('-').map(Number)
+  const [cy, cm, cd] = todayStr.split('-').map(Number)
+  if (!ty || !tm || !td) return 0
+  const targetMs = Date.UTC(ty, tm - 1, td)
+  const todayMs = Date.UTC(cy, cm - 1, cd)
+  return Math.round((targetMs - todayMs) / (1000 * 60 * 60 * 24))
+}
+
+/** Check if a contract is in its 3-day post-expiration grace period (waiting for extension) */
+export function isContractInGracePeriod(c: { status: string; end_date: string; contract_text?: string | null }): boolean {
+  if (!c || c.status === 'Pending') return false
+  if (c.contract_text && c.contract_text.includes('<!--TRK_META:')) {
+    const match = c.contract_text.match(/<!--TRK_META:([\s\S]*?)-->\s*$/)
+    if (match && match[1]) {
+      try {
+        const parsed = JSON.parse(match[1])
+        if (Array.isArray(parsed?.extensions) && parsed.extensions.some((e: any) => e.status === 'Approved')) {
+          return false
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+  const d = daysUntil(c.end_date)
+  if (c.status === 'Active' && d >= 0) return false
+  return (c.status === 'Expired' && d <= 0 && d >= -3) || (d < 0 && d >= -3)
+}
+
+/** Remaining days (1 to 3) to request an extension during the 3-day grace period */
+export function getGracePeriodDaysLeft(c: { status: string; end_date: string }): number {
+  if (!isContractInGracePeriod(c)) return 0
+  const d = daysUntil(c.end_date)
+  if (d >= -1) return 3
+  if (d === -2) return 2
+  if (d === -3) return 1
+  return 0
 }
 
 export function peso(n: number | null | undefined) {

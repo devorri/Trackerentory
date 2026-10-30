@@ -83,14 +83,20 @@ export default function ProductGalleryModal({
       onClick={onClose}
       style={{
         position: 'fixed',
-        inset: 0,
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: '100vw',
+        height: '100dvh',
         zIndex: 100000,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: '1.25rem',
+        padding: '1rem',
         overflowY: 'auto',
-        background: 'transparent',
+        background: 'rgba(0, 0, 0, 0.5)',
+        backdropFilter: 'blur(4px)',
       }}
     >
       <div

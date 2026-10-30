@@ -1,9 +1,19 @@
 import { useEffect, useState, useMemo } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Zap, X } from 'lucide-react'
+import { Zap, X, Clock } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
-import { peso, type Product, type Transaction, type Cube, type UserRow, type Reservation, isReservationExpired } from '../lib/types'
+import {
+  peso,
+  type Product,
+  type Transaction,
+  type Cube,
+  type UserRow,
+  type Reservation,
+  isReservationExpired,
+  getReservationHoursLeft,
+} from '../lib/types'
+import { cancelExpiredReservations } from '../lib/maintenance'
 import { uploadPublicImage } from '../lib/storage'
 import { BUCKET_DOCUMENTS } from '../lib/supabase'
 import { SkeletonTable } from '../components/Skeleton'
@@ -31,9 +41,9 @@ const emptyForm: FormState = {
   product_name: '',
   buyer_name: '',
   authorized_pickup_name: '',
-  payment_status: 'Pending',
+  payment_status: 'Paid',
   payment_method: 'Cash',
-  pickup_status: 'Waiting',
+  pickup_status: 'Picked-up',
   quantity: '1',
   notes: '',
   receipt_image_url: '',
@@ -59,6 +69,10 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
   const [loading, setLoading] = useState(false)
   const [previewReceipt, setPreviewReceipt] = useState<string | null>(null)
 
+  // Per-reservation payment mode / receipt state for inline confirmation in Display Tracking
+  const [resPaymentMode, setResPaymentMode] = useState<Record<number, 'Cash' | 'Online'>>({})
+  const [resReceiptUrl, setResReceiptUrl] = useState<Record<number, string>>({})
+
   // Pull Out Modal State
   const [pullOutTarget, setPullOutTarget] = useState<Transaction | null>(null)
   const [pullOutQty, setPullOutQty] = useState('1')
@@ -72,6 +86,7 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
 
   async function load() {
     setLoading(true)
+    await cancelExpiredReservations()
     const [tRes, pRes, cRes, rRes, resRes] = await Promise.all([
       supabase
         .from('transactions')
@@ -123,13 +138,27 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
     }))
   }
 
-  useEffect(() => { void load() }, [searchParams])
+  useEffect(() => {
+    void load()
+  }, [searchParams])
 
   const renterMap = useMemo(() => {
     const map = new Map<number, string>()
     renters.forEach((r) => map.set(r.user_id, r.full_name))
     return map
   }, [renters])
+
+  // Active Pending Product Reservations for Display Tracking
+  const pendingDisplayReservations = useMemo(() => {
+    return reservations.filter((r) => {
+      if (!r.product_id) return false
+      if (r.status !== 'Pending' || isReservationExpired(r)) return false
+      const cType = r.products?.cubes?.type || r.cubes?.type || 'Display'
+      if (filter === 'Pick-up' && cType !== 'Pick-up') return false
+      if (filter === 'Display' && cType !== 'Display') return false
+      return true
+    })
+  }, [reservations, filter])
 
   if (!user || (user.role !== 'Owner' && user.role !== 'Staff' && user.role !== 'Renter')) {
     return (
@@ -146,16 +175,21 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
 
   const me = user
 
-  // Filter products for the form based on selected renter or cube
+  // Filter products for the form based on selected renter or cube (exclude Pick-up cubes when on Display Tracking)
   const availableFormProducts = products.filter((p) => {
+    if (p.deleted_at) return false
+    if (filter === 'Display' && p.cubes?.type === 'Pick-up') return false
     if (form.renter_id && p.renter_id !== Number(form.renter_id)) return false
     if (form.cube_id && p.cube_id !== Number(form.cube_id)) return false
     return true
   })
 
   function handleProductNameChange(productName: string) {
-    const prod = availableFormProducts.find((candidate) =>
-      `${candidate.product_name}${candidate.variant ? ` (${candidate.variant})` : ''}`.toLowerCase() === productName.trim().toLowerCase()
+    const normalized = productName.trim().toLowerCase()
+    const prod = availableFormProducts.find(
+      (candidate) =>
+        `${candidate.product_name}${candidate.variant ? ` (${candidate.variant})` : ''}`.toLowerCase() === normalized ||
+        candidate.product_name.toLowerCase() === normalized,
     )
     setForm((prev) => ({
       ...prev,
@@ -167,9 +201,18 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
   }
 
   async function saveNew() {
-    if (!form.product_name.trim() || !form.buyer_name.trim()) return alert('Product and pickup name are required.')
+    if (!form.product_name.trim() || !form.buyer_name.trim()) {
+      return alert('Product and buyer name are required.')
+    }
     setBusy(true)
-    const matchedProduct = products.find((product) => product.product_id === Number(form.product_id))
+    const normalizedName = form.product_name.trim().toLowerCase()
+    const matchedProduct =
+      products.find((product) => product.product_id === Number(form.product_id)) ||
+      availableFormProducts.find(
+        (candidate) =>
+          `${candidate.product_name}${candidate.variant ? ` (${candidate.variant})` : ''}`.toLowerCase() === normalizedName ||
+          candidate.product_name.toLowerCase() === normalizedName,
+      )
     const selectedCube = cubes.find((cube) => cube.cube_id === Number(form.cube_id || matchedProduct?.cube_id))
     if (selectedCube?.type === 'Pick-up' && !selectedReservationId) {
       setBusy(false)
@@ -178,32 +221,36 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
     const quantity = Math.max(1, Number(form.quantity) || 1)
     if (matchedProduct && quantity > matchedProduct.stock_quantity) {
       setBusy(false)
-      return alert(`Only ${matchedProduct.stock_quantity} unit(s) are available.`)
+      return alert(`Only ${matchedProduct.stock_quantity} unit(s) of "${matchedProduct.product_name}" are available.`)
     }
-    const { error } = await supabase.from('transactions').insert([{
-      product_id: matchedProduct?.product_id || null,
-      product_name: form.product_name.trim(),
-      cube_id: Number(form.cube_id) || matchedProduct?.cube_id || null,
-      renter_id: Number(form.renter_id) || matchedProduct?.renter_id || null,
-      buyer_name: form.buyer_name.trim(),
-      authorized_pickup_name: form.authorized_pickup_name.trim() || null,
-      payment_status: form.payment_status,
-      payment_method: form.payment_method,
-      pickup_status: form.pickup_status,
-      quantity,
-      listed_quantity: matchedProduct?.stock_quantity ?? null,
-      notes: form.notes.trim() || null,
-      receipt_image_url: form.receipt_image_url.trim() || null,
-      processed_by: me.user_id,
-      updated_at: new Date().toISOString(),
-    }])
+    const { error } = await supabase.from('transactions').insert([
+      {
+        product_id: matchedProduct?.product_id || null,
+        product_name: form.product_name.trim(),
+        cube_id: Number(form.cube_id) || matchedProduct?.cube_id || null,
+        renter_id: Number(form.renter_id) || matchedProduct?.renter_id || null,
+        buyer_name: form.buyer_name.trim(),
+        authorized_pickup_name: form.authorized_pickup_name.trim() || null,
+        payment_status: form.payment_status,
+        payment_method: form.payment_method,
+        pickup_status: form.pickup_status,
+        quantity,
+        listed_quantity: matchedProduct?.stock_quantity ?? null,
+        notes: form.notes.trim() || null,
+        receipt_image_url: form.receipt_image_url.trim() || null,
+        processed_by: me.user_id,
+        updated_at: new Date().toISOString(),
+      },
+    ])
     setBusy(false)
     if (error) return alert(error.message)
 
     if (form.payment_status === 'Paid' && matchedProduct) {
-      const prod = matchedProduct
-      if (prod && prod.stock_quantity > 0) {
-        await supabase.from('products').update({ stock_quantity: Math.max(0, prod.stock_quantity - quantity) }).eq('product_id', prod.product_id)
+      if (matchedProduct.stock_quantity > 0) {
+        await supabase
+          .from('products')
+          .update({ stock_quantity: Math.max(0, matchedProduct.stock_quantity - quantity) })
+          .eq('product_id', matchedProduct.product_id)
       }
     }
 
@@ -220,6 +267,77 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
     void load()
   }
 
+  async function confirmCustomerReservationInline(r: Reservation) {
+    if (!r.product_id) return
+    const prod = products.find((p) => p.product_id === r.product_id) || r.products
+    const currentStock = Number(prod?.stock_quantity ?? 0)
+    if (prod && currentStock <= 0) {
+      return alert(`"${prod.product_name}" is already out of stock (Sold Out).`)
+    }
+    const mode = resPaymentMode[r.reservation_id] || 'Cash'
+    const receipt = resReceiptUrl[r.reservation_id] || null
+    setBusy(true)
+    try {
+      // 1. Mark reservation as Confirmed
+      const { error: resErr } = await supabase
+        .from('reservations')
+        .update({ status: 'Confirmed' })
+        .eq('reservation_id', r.reservation_id)
+      if (resErr) throw resErr
+
+      // 2. Insert Paid & Picked-up transaction
+      const prodName = prod
+        ? `${prod.product_name}${prod.variant ? ` (${prod.variant})` : ''}`
+        : `Product #${r.product_id}`
+      const { error: txErr } = await supabase.from('transactions').insert([
+        {
+          product_id: r.product_id,
+          product_name: prodName,
+          cube_id: prod?.cube_id || r.cube_id || null,
+          renter_id: prod?.renter_id || null,
+          buyer_name: r.customer?.full_name || 'Reserved Customer',
+          payment_status: 'Paid',
+          payment_method: mode,
+          pickup_status: 'Picked-up',
+          quantity: 1,
+          listed_quantity: currentStock || 1,
+          receipt_image_url: receipt,
+          notes: `Claimed from Customer Reservation #${r.reservation_id}`,
+          processed_by: me.user_id,
+          updated_at: new Date().toISOString(),
+        },
+      ])
+      if (txErr) throw txErr
+
+      // 3. Deduct stock_quantity on public.products so Catalogue & Renter/Owner dashboards reflect Sold
+      if (prod && currentStock > 0) {
+        await supabase
+          .from('products')
+          .update({ stock_quantity: Math.max(0, currentStock - 1) })
+          .eq('product_id', r.product_id)
+      }
+
+      setBusy(false)
+      void load()
+    } catch (err) {
+      setBusy(false)
+      console.error(err)
+      alert(err instanceof Error ? err.message : 'Failed to confirm customer reservation.')
+    }
+  }
+
+  async function cancelCustomerReservationInline(r: Reservation) {
+    if (!window.confirm(`Cancel reservation for ${r.customer?.full_name || 'this customer'} on "${r.products?.product_name || 'this product'}"?`)) return
+    setBusy(true)
+    const { error } = await supabase
+      .from('reservations')
+      .update({ status: 'Cancelled' })
+      .eq('reservation_id', r.reservation_id)
+    setBusy(false)
+    if (error) return alert(error.message)
+    void load()
+  }
+
   async function updateRow(t: Transaction, patch: Partial<Transaction>) {
     setBusy(true)
     const { error } = await supabase
@@ -231,12 +349,25 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
       })
       .eq('transaction_id', t.transaction_id)
 
-    // Deduct stock if payment was just verified as Paid
-    if (patch.payment_status === 'Paid' && t.payment_status !== 'Paid' && t.product_id) {
+    const wasPaid = t.payment_status === 'Paid'
+    const wasPickedUp = t.pickup_status === 'Picked-up'
+    const nowPaid = (patch.payment_status ?? t.payment_status) === 'Paid'
+    const nowPickedUp = (patch.pickup_status ?? t.pickup_status) === 'Picked-up'
+    const cType = t.products?.cubes?.type || t.cubes?.type
+
+    // Deduct stock if payment was just verified as Paid OR if a pre-paid Pick-up item was just marked Picked-up
+    const shouldDeductStock =
+      t.product_id &&
+      ((!wasPaid && nowPaid) || (wasPaid && !wasPickedUp && nowPickedUp && cType === 'Pick-up'))
+
+    if (shouldDeductStock && t.product_id) {
       const prod = products.find((p) => p.product_id === t.product_id)
       if (prod && prod.stock_quantity > 0) {
         const qty = t.quantity || 1
-        await supabase.from('products').update({ stock_quantity: Math.max(0, prod.stock_quantity - qty) }).eq('product_id', prod.product_id)
+        await supabase
+          .from('products')
+          .update({ stock_quantity: Math.max(0, prod.stock_quantity - qty) })
+          .eq('product_id', prod.product_id)
       }
     }
 
@@ -306,7 +437,6 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
 
     // 2. Update transaction
     if (remainingQty > 0) {
-      // Partial pull out (e.g. 1 out of 3 dresses pulled out)
       await supabase
         .from('transactions')
         .update({
@@ -316,7 +446,6 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
         })
         .eq('transaction_id', t.transaction_id)
     } else {
-      // Full pull out
       await supabase
         .from('transactions')
         .update({
@@ -341,12 +470,15 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
     }
   }
 
-  const visible = rows.filter((t) => {
-    if (filter === 'All') return true
-    return (t.products?.cubes?.type || t.cubes?.type) === filter
-  }).sort((a, b) => new Date(b.updated_at || b.transaction_date).getTime() - new Date(a.updated_at || a.transaction_date).getTime())
+  const visible = rows
+    .filter((t) => {
+      if (filter === 'All') return true
+      return (t.products?.cubes?.type || t.cubes?.type || 'Display') === filter
+    })
+    .sort((a, b) => new Date(b.updated_at || b.transaction_date).getTime() - new Date(a.updated_at || a.transaction_date).getTime())
 
-  const computedTitle = pageTitle || (filter === 'Pick-up' ? 'Pickup Tracking' : filter === 'Display' ? 'Display Tracking' : 'Pickup & Display Tracking')
+  const computedTitle =
+    pageTitle || (filter === 'Pick-up' ? 'Pickup Tracking' : filter === 'Display' ? 'Display Tracking' : 'Pickup & Display Tracking')
 
   return (
     <section>
@@ -361,188 +493,225 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
 
       {/* Pick-up details are entered only by renters. Counter roles update status below. */}
       {filter === 'Pick-up' && (
-        <div className="panel no-print" style={{ marginBottom: '1.75rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '1rem 1.25rem' }}>
+        <div
+          className="panel no-print"
+          style={{
+            marginBottom: '1.75rem',
+            background: '#f8fafc',
+            border: '1px solid #e2e8f0',
+            borderRadius: 8,
+            padding: '1rem 1.25rem',
+          }}
+        >
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
-            <span className="badge" style={{ background: '#0284c7', color: '#fff' }}>Counter Pickup Verification</span>
+            <span className="badge" style={{ background: '#0284c7', color: '#fff' }}>
+              Counter Pickup Verification
+            </span>
             <strong style={{ color: '#0f172a', fontSize: '0.95rem' }}>Renter-Submitted Handover Tracking</strong>
           </div>
           <p className="muted" style={{ margin: 0, fontSize: '0.85rem', lineHeight: 1.5 }}>
-            Pick-up products and claimant names are submitted by Renters from their dashboard. Counter staff and owners review claimant identity below, collect or verify payments, and click <strong>Verify Paid</strong> and <strong>Confirm Claimed</strong> to complete customer pickup.
+            Pick-up products and claimant names are submitted by Renters from their dashboard. Counter staff and owners review claimant identity below, collect or verify payments, and click <strong>Mark Picked-up</strong> to complete customer pickup.
           </p>
         </div>
       )}
 
-      {/* Manual Entry Form only on generic/all view (Item 11: hidden on Display Tracking) */}
-      {filter === 'All' && <div className="panel no-print" style={{ marginBottom: '2rem' }}>
-        <h2 style={{ marginTop: 0 }}>Record New Transaction / Hand-over</h2>
-        <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
-          
-          {/* RESERVATION QUICK SELECTOR */}
-          {reservations.length > 0 && (
-            <div className="field" style={{ gridColumn: '1 / -1', background: '#f8fafc', padding: '0.85rem', borderRadius: 8, border: '1px solid #cbd5e1' }}>
-              <label style={{ fontWeight: 700, color: '#1e293b', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                <Zap size={16} color="#0284c7" /> Auto-Fill from Customer Reservation
-              </label>
-              <select
-                value={selectedReservationId}
-                onChange={(e) => {
-                  const rid = e.target.value
-                  setSelectedReservationId(rid)
-                  if (!rid) return
-                  const found = reservations.find((r) => String(r.reservation_id) === rid)
-                  if (found) applyReservationToForm(found)
+      {/* Entry Form & Reservation Quick-Claim on Display Tracking and All views */}
+      {(filter === 'Display' || filter === 'All') && (
+        <div className="panel no-print" style={{ marginBottom: '2rem' }}>
+          <h2 style={{ marginTop: 0 }}>
+            {filter === 'Display' ? 'Record Display Sale / Claim Reserved Product' : 'Record New Transaction / Hand-over'}
+          </h2>
+          <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+            {/* RESERVATION QUICK SELECTOR */}
+            {pendingDisplayReservations.length > 0 && (
+              <div
+                className="field"
+                style={{
+                  gridColumn: '1 / -1',
+                  background: '#fef3c7',
+                  padding: '0.85rem 1rem',
+                  borderRadius: 8,
+                  border: '1px solid #f59e0b',
                 }}
               >
-                <option value="">Select customer reservation (auto-fills Buyer Name, Product, Cube, Renter)…</option>
-                {reservations
-                  .filter((r) => !isReservationExpired(r))
-                  .map((r) => (
+                <label style={{ fontWeight: 700, color: '#92400e', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <Zap size={16} color="#d97706" /> Active Customer Product Reservations ({pendingDisplayReservations.length}) — Select to Auto-Fill or Confirm in Table Below
+                </label>
+                <select
+                  value={selectedReservationId}
+                  onChange={(e) => {
+                    const rid = e.target.value
+                    setSelectedReservationId(rid)
+                    if (!rid) return
+                    const found = reservations.find((r) => String(r.reservation_id) === rid)
+                    if (found) applyReservationToForm(found)
+                  }}
+                >
+                  <option value="">Select customer product reservation (auto-fills Buyer Name, Product, Cube, Renter)…</option>
+                  {pendingDisplayReservations.map((r) => (
                     <option key={r.reservation_id} value={r.reservation_id}>
-                      {r.customer?.full_name || 'Customer'} — {r.products?.product_name || (r.cube_id ? `Cube #${r.cubes?.cube_number}` : 'Product')} {r.products?.variant ? `(${r.products.variant})` : ''} [{r.status}]
+                      {r.customer?.full_name || 'Customer'} — {r.products?.product_name || 'Product'}{' '}
+                      {r.products?.variant ? `(${r.products.variant})` : ''} · Cube{' '}
+                      {r.products?.cubes?.cube_number || r.cubes?.cube_number || '—'} [{getReservationHoursLeft(r)}h left]
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Renter selector */}
+            <div className="field">
+              <label>Renter Who Left It</label>
+              <select value={form.renter_id} onChange={(e) => setForm({ ...form, renter_id: e.target.value })}>
+                <option value="">Any / Filter by Renter…</option>
+                {renters.map((r) => (
+                  <option key={r.user_id} value={r.user_id}>
+                    {r.full_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Cube number selector */}
+            <div className="field">
+              <label>Cube Number</label>
+              <select value={form.cube_id} onChange={(e) => setForm({ ...form, cube_id: e.target.value })}>
+                <option value="">Any / Filter by Cube…</option>
+                {cubes
+                  .filter((c) => (filter === 'Display' ? c.type === 'Display' : true))
+                  .map((c) => (
+                    <option key={c.cube_id} value={c.cube_id}>
+                      {c.cube_number} ({c.type})
                     </option>
                   ))}
               </select>
             </div>
-          )}
 
-          {/* Renter selector */}
-          <div className="field">
-            <label>Renter Who Left It</label>
-            <select
-              value={form.renter_id}
-              onChange={(e) => setForm({ ...form, renter_id: e.target.value })}
-            >
-              <option value="">Any / Filter by Renter…</option>
-              {renters.map((r) => (
-                <option key={r.user_id} value={r.user_id}>
-                  {r.full_name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Cube number selector */}
-          <div className="field">
-            <label>Cube Number</label>
-            <select
-              value={form.cube_id}
-              onChange={(e) => setForm({ ...form, cube_id: e.target.value })}
-            >
-              <option value="">Any / Filter by Cube…</option>
-              {cubes.map((c) => (
-                <option key={c.cube_id} value={c.cube_id}>
-                  {c.cube_number} ({c.type})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="field">
-            <label>Product Left *</label>
-            <input
-              list="tracking-products"
-              value={form.product_name}
-              onChange={(e) => handleProductNameChange(e.target.value)}
-              placeholder="Type product name"
-            />
-            <datalist id="tracking-products">
-              {availableFormProducts.map((p) => {
-                const rName = p.renter_id ? renterMap.get(p.renter_id) : null
-                return (
-                  <option key={p.product_id} value={`${p.product_name}${p.variant ? ` (${p.variant})` : ''}`}>
-                    {peso(p.price)} {rName ? `[${rName}]` : ''}
-                  </option>
-                )
-              })}
-            </datalist>
-          </div>
-
-          <div className="field">
-            <label>Buyer Name *</label>
-            <input
-              placeholder="e.g. Maria Santos"
-              value={form.buyer_name}
-              onChange={(e) => setForm({ ...form, buyer_name: e.target.value })}
-            />
-          </div>
-
-          <div className="field">
-            <label>Authorized Alternate</label>
-            <input
-              placeholder="Person authorized to claim"
-              value={form.authorized_pickup_name}
-              onChange={(e) => setForm({ ...form, authorized_pickup_name: e.target.value })}
-            />
-          </div>
-
-          <div className="field">
-            <label>Payment Status</label>
-            <select value={form.payment_status} onChange={(e) => setForm({ ...form, payment_status: e.target.value as 'Pending' | 'Paid' })}>
-              <option value="Pending">Pending</option>
-              <option value="Paid">Paid</option>
-            </select>
-          </div>
-
-          <div className="field">
-            <label>Payment Process</label>
-            <select value={form.payment_method} onChange={(e) => setForm({ ...form, payment_method: e.target.value as 'Cash' | 'Online' })}>
-              <option value="Cash">Cash</option>
-              <option value="Online">Online</option>
-            </select>
-          </div>
-
-          <div className="field">
-            <label>Quantity Purchased</label>
-            <input type="number" min="1" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
-          </div>
-
-          <div className="field">
-            <label>Pickup Status</label>
-            <select value={form.pickup_status} onChange={(e) => setForm({ ...form, pickup_status: e.target.value as 'Waiting' | 'Picked-up' })}>
-              <option value="Waiting">Waiting</option>
-              <option value="Picked-up">Picked-up</option>
-            </select>
-          </div>
-
-          {/* Conditional receipt upload for Online payments only */}
-          {form.payment_method === 'Online' && (
             <div className="field">
-              <label>Receipt Proof (Online Payment)</label>
+              <label>Product Sold *</label>
               <input
-                type="file"
-                accept="image/*"
-                onChange={(e) => void onReceiptFile(e.target.files?.[0] || null, (url) => setForm({ ...form, receipt_image_url: url }))}
+                list="tracking-products"
+                value={form.product_name}
+                onChange={(e) => handleProductNameChange(e.target.value)}
+                placeholder="Select or type product name"
+              />
+              <datalist id="tracking-products">
+                {availableFormProducts.map((p) => {
+                  const rName = p.renter_id ? renterMap.get(p.renter_id) : null
+                  return (
+                    <option key={p.product_id} value={`${p.product_name}${p.variant ? ` (${p.variant})` : ''}`}>
+                      {peso(p.price)} · Stock: {p.stock_quantity} {rName ? `[${rName}]` : ''}
+                    </option>
+                  )
+                })}
+              </datalist>
+            </div>
+
+            <div className="field">
+              <label>Buyer Name *</label>
+              <input
+                placeholder="e.g. Maria Santos"
+                value={form.buyer_name}
+                onChange={(e) => setForm({ ...form, buyer_name: e.target.value })}
               />
             </div>
-          )}
-        </div>
 
-        {form.payment_method === 'Online' && form.receipt_image_url && (
-          <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <img src={form.receipt_image_url} alt="Receipt Preview" style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 6, border: '1px solid #ddd' }} />
-            <span style={{ fontSize: '0.8rem', color: '#666' }}>Receipt attached</span>
+            <div className="field">
+              <label>Authorized Alternate</label>
+              <input
+                placeholder="Person authorized to claim"
+                value={form.authorized_pickup_name}
+                onChange={(e) => setForm({ ...form, authorized_pickup_name: e.target.value })}
+              />
+            </div>
+
+            <div className="field">
+              <label>Payment Status</label>
+              <select
+                value={form.payment_status}
+                onChange={(e) => setForm({ ...form, payment_status: e.target.value as 'Pending' | 'Paid' })}
+              >
+                <option value="Paid">Paid</option>
+                <option value="Pending">Pending</option>
+              </select>
+            </div>
+
+            <div className="field">
+              <label>Payment Process</label>
+              <select
+                value={form.payment_method}
+                onChange={(e) => setForm({ ...form, payment_method: e.target.value as 'Cash' | 'Online' })}
+              >
+                <option value="Cash">Cash</option>
+                <option value="Online">Online</option>
+              </select>
+            </div>
+
+            <div className="field">
+              <label>Quantity Purchased</label>
+              <input
+                type="number"
+                min="1"
+                value={form.quantity}
+                onChange={(e) => setForm({ ...form, quantity: e.target.value })}
+              />
+            </div>
+
+            <div className="field">
+              <label>Pickup Status</label>
+              <select
+                value={form.pickup_status}
+                onChange={(e) => setForm({ ...form, pickup_status: e.target.value as 'Waiting' | 'Picked-up' })}
+              >
+                <option value="Picked-up">Picked-up</option>
+                <option value="Waiting">Waiting</option>
+              </select>
+            </div>
+
+            {/* Conditional receipt upload for Online payments only */}
+            {form.payment_method === 'Online' && (
+              <div className="field">
+                <label>Receipt Proof (Online Payment)</label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) =>
+                    void onReceiptFile(e.target.files?.[0] || null, (url) =>
+                      setForm({ ...form, receipt_image_url: url }),
+                    )
+                  }
+                />
+              </div>
+            )}
           </div>
-        )}
 
-        <div className="field" style={{ marginTop: '1rem' }}>
-          <label>Notes (e.g. special handling, time left, condition)</label>
-          <textarea
-            rows={2}
-            value={form.notes}
-            onChange={(e) => setForm({ ...form, notes: e.target.value })}
-          />
+          {form.payment_method === 'Online' && form.receipt_image_url && (
+            <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <img
+                src={form.receipt_image_url}
+                alt="Receipt Preview"
+                style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 6, border: '1px solid #ddd' }}
+              />
+              <span style={{ fontSize: '0.8rem', color: '#666' }}>Receipt attached</span>
+            </div>
+          )}
+
+          <div className="field" style={{ marginTop: '1rem' }}>
+            <label>Notes (e.g. special handling, time left, condition)</label>
+            <textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+          </div>
+
+          <button className="btn" type="button" disabled={busy} onClick={saveNew} style={{ marginTop: '0.5rem' }}>
+            {busy ? 'Saving…' : 'Save Sale Record'}
+          </button>
         </div>
-
-        <button className="btn" type="button" disabled={busy} onClick={saveNew} style={{ marginTop: '0.5rem' }}>
-          {busy ? 'Saving…' : 'Save Record'}
-        </button>
-      </div>}
+      )}
 
       {/* TRANSACTIONS TABLE */}
       {loading ? (
         <SkeletonTable rows={5} cols={filter === 'Display' ? 9 : filter === 'Pick-up' ? 9 : 8} />
       ) : filter === 'Display' ? (
-        /* ══════════ DISPLAY TRACKING TABLE (Image 2) ══════════ */
+        /* ══════════ DISPLAY TRACKING TABLE ══════════ */
         <div className="table-wrap">
           <table className="table">
             <thead>
@@ -559,6 +728,142 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
               </tr>
             </thead>
             <tbody>
+              {/* Pending Customer Reservations surfaced directly in Display Tracking */}
+              {pendingDisplayReservations.map((r) => {
+                const prod = products.find((p) => p.product_id === r.product_id) || r.products
+                const renterId = prod?.renter_id
+                const rName = renterId ? renterMap.get(renterId) || '—' : '—'
+                const cubeNum = prod?.cubes?.cube_number || r.cubes?.cube_number || '—'
+                const hoursLeft = getReservationHoursLeft(r)
+                const mode = resPaymentMode[r.reservation_id] || 'Cash'
+                const receipt = resReceiptUrl[r.reservation_id] || ''
+
+                return (
+                  <tr key={`res-${r.reservation_id}`} style={{ background: '#fffbeb' }}>
+                    <td>
+                      <strong>{r.customer?.full_name || 'Reserved Customer'}</strong>
+                      <div style={{ marginTop: 3 }}>
+                        <span
+                          className="badge warn"
+                          style={{
+                            fontSize: '0.68rem',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 3,
+                          }}
+                        >
+                          <Clock size={11} /> Reserved ({hoursLeft}h left)
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <strong>{prod?.product_name || `Product #${r.product_id}`}</strong>
+                      {prod?.variant && (
+                        <div className="muted" style={{ fontSize: '0.78rem' }}>
+                          Variant: {prod.variant}
+                        </div>
+                      )}
+                    </td>
+                    <td>{peso(prod?.price)}</td>
+                    <td>1</td>
+                    <td>
+                      <strong>{rName}</strong>
+                    </td>
+                    <td>
+                      <span className="badge info">{cubeNum}</span>
+                    </td>
+                    <td>
+                      <span className="status-pill pending">Reserved (Unpaid)</span>
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <select
+                          value={mode}
+                          onChange={(e) =>
+                            setResPaymentMode((prev) => ({
+                              ...prev,
+                              [r.reservation_id]: e.target.value as 'Cash' | 'Online',
+                            }))
+                          }
+                          style={{ padding: '0.25rem 0.45rem', fontSize: '0.78rem', borderRadius: 6 }}
+                        >
+                          <option value="Cash">Cash</option>
+                          <option value="Online">Online</option>
+                        </select>
+                        {mode === 'Online' && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {receipt ? (
+                              <img
+                                src={receipt}
+                                alt="Receipt"
+                                style={{
+                                  width: 34,
+                                  height: 34,
+                                  objectFit: 'cover',
+                                  borderRadius: 4,
+                                  cursor: 'pointer',
+                                  border: '1px solid #cbd5e1',
+                                }}
+                                onClick={() => setPreviewReceipt(receipt)}
+                                title="Click to view receipt"
+                              />
+                            ) : null}
+                            <label
+                              style={{
+                                fontSize: '0.72rem',
+                                cursor: 'pointer',
+                                color: '#2563eb',
+                                textDecoration: 'underline',
+                              }}
+                            >
+                              {receipt ? 'Change image' : 'Attach image'}
+                              <input
+                                type="file"
+                                accept="image/*"
+                                style={{ display: 'none' }}
+                                onChange={(e) =>
+                                  void onReceiptFile(e.target.files?.[0] || null, (url) =>
+                                    setResReceiptUrl((prev) => ({ ...prev, [r.reservation_id]: url })),
+                                  )
+                                }
+                              />
+                            </label>
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                    <td className="no-print" style={{ textAlign: 'right' }}>
+                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+                        <button
+                          className="btn"
+                          type="button"
+                          disabled={busy}
+                          style={{
+                            padding: '0.25rem 0.55rem',
+                            fontSize: '0.74rem',
+                            background: '#10b981',
+                            color: '#fff',
+                            border: 'none',
+                          }}
+                          onClick={() => void confirmCustomerReservationInline(r)}
+                        >
+                          Confirm
+                        </button>
+                        <button
+                          className="btn-ghost"
+                          type="button"
+                          disabled={busy}
+                          style={{ padding: '0.25rem 0.55rem', fontSize: '0.74rem', color: '#dc2626' }}
+                          onClick={() => void cancelCustomerReservationInline(r)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+
               {visible.map((t) => {
                 const prod = t.products
                 const renterId = prod?.renter_id || t.renter_id
@@ -568,14 +873,22 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
 
                 return (
                   <tr key={t.transaction_id}>
-                    <td><strong>{t.buyer_name || '—'}</strong></td>
+                    <td>
+                      <strong>{t.buyer_name || '—'}</strong>
+                    </td>
                     <td>
                       <strong>{prod?.product_name || t.product_name || '—'}</strong>
-                      {prod?.variant && <div className="muted" style={{ fontSize: '0.78rem' }}>Variant: {prod.variant}</div>}
+                      {prod?.variant && (
+                        <div className="muted" style={{ fontSize: '0.78rem' }}>
+                          Variant: {prod.variant}
+                        </div>
+                      )}
                     </td>
                     <td>{peso(prod?.price)}</td>
                     <td>{t.quantity || 1}</td>
-                    <td><strong>{rName}</strong></td>
+                    <td>
+                      <strong>{rName}</strong>
+                    </td>
                     <td>
                       <span className="badge info">{cubeNum}</span>
                     </td>
@@ -600,18 +913,36 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                               <img
                                 src={t.receipt_image_url}
                                 alt="Receipt"
-                                style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid #cbd5e1' }}
+                                style={{
+                                  width: 34,
+                                  height: 34,
+                                  objectFit: 'cover',
+                                  borderRadius: 4,
+                                  cursor: 'pointer',
+                                  border: '1px solid #cbd5e1',
+                                }}
                                 onClick={() => setPreviewReceipt(t.receipt_image_url)}
                                 title="Click to view receipt"
                               />
                             ) : null}
-                            <label style={{ fontSize: '0.72rem', cursor: 'pointer', color: '#2563eb', textDecoration: 'underline' }}>
+                            <label
+                              style={{
+                                fontSize: '0.72rem',
+                                cursor: 'pointer',
+                                color: '#2563eb',
+                                textDecoration: 'underline',
+                              }}
+                            >
                               {t.receipt_image_url ? 'Change image' : 'Attach image'}
                               <input
                                 type="file"
                                 accept="image/*"
                                 style={{ display: 'none' }}
-                                onChange={(e) => void onReceiptFile(e.target.files?.[0] || null, (url) => void updateRow(t, { receipt_image_url: url, payment_method: 'Online' }))}
+                                onChange={(e) =>
+                                  void onReceiptFile(e.target.files?.[0] || null, (url) =>
+                                    void updateRow(t, { receipt_image_url: url, payment_method: 'Online' }),
+                                  )
+                                }
                               />
                             </label>
                           </div>
@@ -621,12 +952,21 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                     <td className="no-print" style={{ textAlign: 'right' }}>
                       <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
                         {isConfirmed ? (
-                          <span className="badge ok" style={{ fontSize: '0.72rem', padding: '0.2rem 0.5rem' }}>Confirmed</span>
+                          <span className="badge ok" style={{ fontSize: '0.72rem', padding: '0.2rem 0.5rem' }}>
+                            Confirmed (Sold)
+                          </span>
                         ) : (
                           <button
                             className="btn"
                             type="button"
-                            style={{ padding: '0.25rem 0.55rem', fontSize: '0.74rem', background: '#10b981', color: '#fff', border: 'none' }}
+                            disabled={busy}
+                            style={{
+                              padding: '0.25rem 0.55rem',
+                              fontSize: '0.74rem',
+                              background: '#10b981',
+                              color: '#fff',
+                              border: 'none',
+                            }}
                             onClick={() => void confirmTransaction(t)}
                           >
                             Confirm
@@ -635,6 +975,7 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                         <button
                           className="btn-ghost"
                           type="button"
+                          disabled={busy}
                           style={{ padding: '0.25rem 0.55rem', fontSize: '0.74rem', color: '#dc2626' }}
                           onClick={() => void cancelTransaction(t)}
                         >
@@ -647,10 +988,14 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
               })}
             </tbody>
           </table>
-          {visible.length === 0 && <div className="empty" style={{ padding: '2rem' }}>No display tracking records found.</div>}
+          {visible.length === 0 && pendingDisplayReservations.length === 0 && (
+            <div className="empty" style={{ padding: '2rem' }}>
+              No display tracking records found.
+            </div>
+          )}
         </div>
       ) : filter === 'Pick-up' ? (
-        /* ══════════ PICK UP TRACKING TABLE (Image 2) ══════════ */
+        /* ══════════ PICK UP TRACKING TABLE ══════════ */
         <div className="table-wrap">
           <table className="table">
             <thead>
@@ -679,15 +1024,21 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
 
                 return (
                   <tr key={t.transaction_id}>
-                    <td><strong>{t.buyer_name || '—'}</strong></td>
-                    <td><strong>{prod?.product_name || t.product_name || '—'}</strong></td>
+                    <td>
+                      <strong>{t.buyer_name || '—'}</strong>
+                    </td>
+                    <td>
+                      <strong>{prod?.product_name || t.product_name || '—'}</strong>
+                    </td>
                     <td style={{ maxWidth: 200 }}>
                       <div style={{ fontSize: '0.82rem', color: '#444' }}>
                         {prod?.description || prod?.variant || t.notes || '—'}
                       </div>
                     </td>
                     <td>{peso(prod?.price)}</td>
-                    <td><strong>{rName}</strong></td>
+                    <td>
+                      <strong>{rName}</strong>
+                    </td>
                     <td>{t.authorized_pickup_name || <span className="muted">—</span>}</td>
                     <td>
                       <span className={`status-pill ${t.payment_status === 'Paid' ? 'confirmed' : 'pending'}`}>
@@ -710,18 +1061,36 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                               <img
                                 src={t.receipt_image_url}
                                 alt="Receipt"
-                                style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid #cbd5e1' }}
+                                style={{
+                                  width: 34,
+                                  height: 34,
+                                  objectFit: 'cover',
+                                  borderRadius: 4,
+                                  cursor: 'pointer',
+                                  border: '1px solid #cbd5e1',
+                                }}
                                 onClick={() => setPreviewReceipt(t.receipt_image_url)}
                                 title="Click to view receipt proof"
                               />
                             ) : null}
-                            <label style={{ fontSize: '0.72rem', cursor: 'pointer', color: '#2563eb', textDecoration: 'underline' }}>
+                            <label
+                              style={{
+                                fontSize: '0.72rem',
+                                cursor: 'pointer',
+                                color: '#2563eb',
+                                textDecoration: 'underline',
+                              }}
+                            >
                               {t.receipt_image_url ? 'Change' : 'Attach'}
                               <input
                                 type="file"
                                 accept="image/*"
                                 style={{ display: 'none' }}
-                                onChange={(e) => void onReceiptFile(e.target.files?.[0] || null, (url) => void updateRow(t, { receipt_image_url: url, payment_method: 'Online' }))}
+                                onChange={(e) =>
+                                  void onReceiptFile(e.target.files?.[0] || null, (url) =>
+                                    void updateRow(t, { receipt_image_url: url, payment_method: 'Online' }),
+                                  )
+                                }
                               />
                             </label>
                           </div>
@@ -737,15 +1106,26 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                     <td className="no-print" style={{ textAlign: 'right' }}>
                       <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
                         {isPickedUp ? (
-                          <span className="badge ok" style={{ fontSize: '0.74rem' }}>Picked Up</span>
+                          <span className="badge ok" style={{ fontSize: '0.74rem' }}>
+                            Picked Up
+                          </span>
                         ) : isPulledOut ? (
-                          <span className="badge warn" style={{ fontSize: '0.74rem' }}>Pulled Out</span>
+                          <span className="badge warn" style={{ fontSize: '0.74rem' }}>
+                            Pulled Out
+                          </span>
                         ) : (
                           <>
                             <button
                               className="btn"
                               type="button"
-                              style={{ padding: '0.25rem 0.55rem', fontSize: '0.74rem', background: '#2563eb', color: '#fff', border: 'none' }}
+                              disabled={busy}
+                              style={{
+                                padding: '0.25rem 0.55rem',
+                                fontSize: '0.74rem',
+                                background: '#2563eb',
+                                color: '#fff',
+                                border: 'none',
+                              }}
                               onClick={() => void updateRow(t, { pickup_status: 'Picked-up', payment_status: 'Paid' })}
                             >
                               Mark Picked-up
@@ -782,7 +1162,11 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
               })}
             </tbody>
           </table>
-          {visible.length === 0 && <div className="empty" style={{ padding: '2rem' }}>No pick-up tracking records found.</div>}
+          {visible.length === 0 && (
+            <div className="empty" style={{ padding: '2rem' }}>
+              No pick-up tracking records found.
+            </div>
+          )}
         </div>
       ) : (
         /* ══════════ GENERAL / MIXED FALLBACK TABLE ══════════ */
@@ -810,14 +1194,23 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                   <tr key={t.transaction_id}>
                     <td>
                       <strong>{prod?.product_name || t.product_name || '—'}</strong>
-                      {prod?.variant && <div className="muted" style={{ fontSize: '0.8rem' }}>Variant: {prod.variant}</div>}
+                      {prod?.variant && (
+                        <div className="muted" style={{ fontSize: '0.8rem' }}>
+                          Variant: {prod.variant}
+                        </div>
+                      )}
                       <div className="muted" style={{ fontSize: '0.8rem' }}>
-                        Cube: {prod?.cubes?.cube_number || t.cubes?.cube_number || '—'} ({prod?.cubes?.type || t.cubes?.type || '—'}) · {peso(prod?.price)}
+                        Cube: {prod?.cubes?.cube_number || t.cubes?.cube_number || '—'} (
+                        {prod?.cubes?.type || t.cubes?.type || '—'}) · {peso(prod?.price)}
                       </div>
                     </td>
-                    <td><strong>{rName}</strong></td>
                     <td>
-                      <div><strong>Buyer:</strong> {t.buyer_name || '—'}</div>
+                      <strong>{rName}</strong>
+                    </td>
+                    <td>
+                      <div>
+                        <strong>Buyer:</strong> {t.buyer_name || '—'}
+                      </div>
                       {t.authorized_pickup_name && (
                         <div className="muted" style={{ fontSize: '0.8rem' }}>
                           Alt: {t.authorized_pickup_name}
@@ -829,7 +1222,9 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                         {t.payment_status}
                       </span>
                     </td>
-                    <td>{t.payment_method || 'Cash'} · {t.quantity || 1}</td>
+                    <td>
+                      {t.payment_method || 'Cash'} · {t.quantity || 1}
+                    </td>
                     <td>
                       <span className={`status-pill ${t.pickup_status === 'Picked-up' ? 'confirmed' : 'pending'}`}>
                         {t.pickup_status || 'Waiting'}
@@ -841,7 +1236,14 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                           <img
                             src={t.receipt_image_url}
                             alt="Receipt"
-                            style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid #ddd' }}
+                            style={{
+                              width: 44,
+                              height: 44,
+                              objectFit: 'cover',
+                              borderRadius: 4,
+                              cursor: 'pointer',
+                              border: '1px solid #ddd',
+                            }}
                             onClick={() => setPreviewReceipt(t.receipt_image_url)}
                             title="Click to view receipt"
                           />
@@ -853,10 +1255,14 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                       {t.users ? (
                         <div>
                           <strong>{t.users.full_name}</strong>
-                          <div className="muted" style={{ fontSize: '0.74rem' }}>{t.users.role}</div>
+                          <div className="muted" style={{ fontSize: '0.74rem' }}>
+                            {t.users.role}
+                          </div>
                         </div>
                       ) : (
-                        <span className="muted" style={{ fontSize: '0.8rem' }}>—</span>
+                        <span className="muted" style={{ fontSize: '0.8rem' }}>
+                          —
+                        </span>
                       )}
                     </td>
                     <td className="no-print" style={{ textAlign: 'right' }}>
@@ -865,7 +1271,13 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                           <button
                             className="btn"
                             type="button"
-                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.74rem', background: '#10b981', color: '#fff', border: 'none' }}
+                            style={{
+                              padding: '0.2rem 0.5rem',
+                              fontSize: '0.74rem',
+                              background: '#10b981',
+                              color: '#fff',
+                              border: 'none',
+                            }}
                             onClick={() => void updateRow(t, { payment_status: 'Paid' })}
                           >
                             Paid
@@ -875,7 +1287,13 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                           <button
                             className="btn"
                             type="button"
-                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.74rem', background: '#2563eb', color: '#fff', border: 'none' }}
+                            style={{
+                              padding: '0.2rem 0.5rem',
+                              fontSize: '0.74rem',
+                              background: '#2563eb',
+                              color: '#fff',
+                              border: 'none',
+                            }}
                             onClick={() => void updateRow(t, { pickup_status: 'Picked-up' })}
                           >
                             Claimed
@@ -896,7 +1314,11 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
               })}
             </tbody>
           </table>
-          {visible.length === 0 && <div className="empty" style={{ padding: '2rem' }}>No records found.</div>}
+          {visible.length === 0 && (
+            <div className="empty" style={{ padding: '2rem' }}>
+              No records found.
+            </div>
+          )}
         </div>
       )}
 
@@ -906,9 +1328,15 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
           <div className="modal-card" style={{ maxWidth: 600, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Payment Receipt Proof</h3>
-              <button className="modal-close" onClick={() => setPreviewReceipt(null)}><X size={18} /></button>
+              <button className="modal-close" onClick={() => setPreviewReceipt(null)}>
+                <X size={18} />
+              </button>
             </div>
-            <img src={previewReceipt} alt="Receipt proof" style={{ maxWidth: '100%', maxHeight: '75vh', objectFit: 'contain', marginTop: 12 }} />
+            <img
+              src={previewReceipt}
+              alt="Receipt proof"
+              style={{ maxWidth: '100%', maxHeight: '75vh', objectFit: 'contain', marginTop: 12 }}
+            />
           </div>
         </div>
       )}
@@ -937,8 +1365,9 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                   </strong>
                 </div>
                 <div className="muted" style={{ fontSize: '0.82rem', marginTop: 2 }}>
-                  Cube: <strong>{pullOutTarget.products?.cubes?.cube_number || pullOutTarget.cubes?.cube_number || '—'}</strong> · Available Qty:{' '}
-                  <strong>{pullOutTarget.quantity || 1}</strong>
+                  Cube:{' '}
+                  <strong>{pullOutTarget.products?.cubes?.cube_number || pullOutTarget.cubes?.cube_number || '—'}</strong> ·
+                  Available Qty: <strong>{pullOutTarget.quantity || 1}</strong>
                 </div>
               </div>
 
@@ -954,7 +1383,8 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                 />
                 {(pullOutTarget.quantity || 1) > 1 && (
                   <div className="muted" style={{ fontSize: '0.75rem', marginTop: 2 }}>
-                    If partial (e.g. 1 out of {pullOutTarget.quantity}), the remaining quantity stays available for buyer pickup.
+                    If partial (e.g. 1 out of {pullOutTarget.quantity}), the remaining quantity stays available for buyer
+                    pickup.
                   </div>
                 )}
               </div>

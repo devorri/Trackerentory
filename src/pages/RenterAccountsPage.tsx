@@ -20,6 +20,8 @@ import { useAuth } from '../context/Auth'
 import {
   peso,
   daysUntil,
+  isContractInGracePeriod,
+  getGracePeriodDaysLeft,
   type Contract,
   type Cube,
 } from '../lib/types'
@@ -365,7 +367,7 @@ export default function RenterAccountsPage() {
           </p>
         </div>
         <div className="row">
-          {user?.role === 'Owner' && (
+          {isOwnerOrStaff && (
             <button className="btn" type="button" onClick={() => nav('/contracts')}>
               <FileText size={16} /> Manage Contracts
             </button>
@@ -672,6 +674,11 @@ export default function RenterAccountsPage() {
                                   <Clock size={11} style={{ display: 'inline', marginRight: 3, verticalAlign: 'middle' }} />
                                   {r.daysLeft} day(s) left
                                 </span>
+                              ) : isContractInGracePeriod(r.contract) ? (
+                                <span style={{ color: '#d97706', fontWeight: 700 }}>
+                                  <Clock size={11} style={{ display: 'inline', marginRight: 3, verticalAlign: 'middle' }} />
+                                  Waiting for Extension ({getGracePeriodDaysLeft(r.contract)}d left)
+                                </span>
                               ) : r.daysLeft === 0 ? (
                                 <span style={{ color: '#dc2626', fontWeight: 700 }}>Expires today!</span>
                               ) : (
@@ -966,7 +973,7 @@ export default function RenterAccountsPage() {
               >
                 <Edit2 size={14} /> Edit Contact Info
               </button>
-              {selectedRenter.contract && user?.role === 'Owner' && (
+              {selectedRenter.contract && isOwnerOrStaff && (
                 <button
                   type="button"
                   className="btn"

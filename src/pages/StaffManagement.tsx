@@ -32,7 +32,7 @@ export default function StaffManagement() {
     full_name: '',
     username: '',
     email: '',
-    salary: '0',
+    salary: '',
     phone_number: '',
     social_link: '',
   })
@@ -41,7 +41,7 @@ export default function StaffManagement() {
     username: '',
     password: '',
     email: '',
-    salary: '0',
+    salary: '',
     phone_number: '',
     social_link: '',
   })
@@ -84,23 +84,32 @@ export default function StaffManagement() {
       full_name: u.full_name,
       username: u.username,
       email: u.email || '',
-      salary: String(u.salary || 0),
+      salary: String(u.salary || ''),
       phone_number: u.phone_number || '',
       social_link: u.social_link || '',
     })
   }
 
   async function saveEdit() {
-    if (!editing || !editForm.full_name.trim() || !editForm.username.trim() || !editForm.email.trim()) {
-      return alert('Name, username, and email are required.')
+    if (
+      !editing ||
+      !editForm.full_name.trim() ||
+      !editForm.username.trim() ||
+      !editForm.email.trim() ||
+      !String(editForm.salary).trim() ||
+      Number(editForm.salary) <= 0 ||
+      !editForm.phone_number.trim() ||
+      !editForm.social_link.trim()
+    ) {
+      return alert('All fields (Full name, Username, Email, Salary, Phone Number, and Social Link) are required. Please do not leave any field blank.')
     }
     const { error } = await supabase.from('users').update({
       full_name: editForm.full_name.trim(),
       username: editForm.username.trim(),
       email: editForm.email.trim(),
-      salary: Number(editForm.salary || 0),
-      phone_number: editForm.phone_number.trim() || null,
-      social_link: editForm.social_link.trim() || null,
+      salary: Number(editForm.salary),
+      phone_number: editForm.phone_number.trim(),
+      social_link: editForm.social_link.trim(),
     }).eq('user_id', editing.user_id)
     if (error) return alert(error.message)
     setEditing(null)
@@ -144,7 +153,18 @@ export default function StaffManagement() {
   }
 
   async function createStaff() {
-    if (!form.full_name || !form.username || !form.password || !form.email) return alert('Full name, username, email, and password required.')
+    if (
+      !form.full_name.trim() ||
+      !form.username.trim() ||
+      !form.password ||
+      !form.email.trim() ||
+      !String(form.salary).trim() ||
+      Number(form.salary) <= 0 ||
+      !form.phone_number.trim() ||
+      !form.social_link.trim()
+    ) {
+      return alert('All fields (Full name, Username, Email, Password, Salary, Phone Number, and Social / Messenger) are required. Please do not leave any field blank.')
+    }
     const { error } = await supabase.from('users').insert([{
       full_name: form.full_name.trim(),
       username: form.username.trim(),
@@ -152,12 +172,12 @@ export default function StaffManagement() {
       email: form.email.trim(),
       role: 'Staff',
       status: 'Active',
-      salary: Number(form.salary || 0),
-      phone_number: form.phone_number.trim() || null,
-      social_link: form.social_link.trim() || null,
+      salary: Number(form.salary),
+      phone_number: form.phone_number.trim(),
+      social_link: form.social_link.trim(),
     }])
     if (error) return alert(error.message)
-    setForm({ full_name: '', username: '', password: '', email: '', salary: '0', phone_number: '', social_link: '' })
+    setForm({ full_name: '', username: '', password: '', email: '', salary: '', phone_number: '', social_link: '' })
     void refresh()
   }
 
@@ -179,33 +199,35 @@ export default function StaffManagement() {
         <h2 style={{ marginTop: 0 }}>Create staff account</h2>
         <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1rem' }}>
           <div className="field">
-            <label>Full name</label>
-            <input value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
+            <label>Full name *</label>
+            <input required value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} placeholder="e.g. Juan Dela Cruz" />
           </div>
           <div className="field">
-            <label>Username</label>
-            <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+            <label>Username *</label>
+            <input required value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="e.g. juandelacruz" />
           </div>
           <div className="field">
-            <label>Email for OTP</label>
-            <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+            <label>Email for OTP *</label>
+            <input required type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="staff@email.com" />
           </div>
-          <PasswordInput label="Password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+          <PasswordInput label="Password *" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
           <div className="field">
-            <label>Salary (₱)</label>
-            <input type="number" value={form.salary} onChange={(e) => setForm({ ...form, salary: e.target.value })} />
+            <label>Salary (₱) *</label>
+            <input required type="number" min="1" placeholder="e.g. 8000" value={form.salary} onChange={(e) => setForm({ ...form, salary: e.target.value })} />
           </div>
           <div className="field">
-            <label>Phone Number</label>
+            <label>Phone Number *</label>
             <input
+              required
               placeholder="e.g. 0917-123-4567"
               value={form.phone_number}
               onChange={(e) => setForm({ ...form, phone_number: e.target.value })}
             />
           </div>
           <div className="field">
-            <label>Social / Messenger</label>
+            <label>Social / Messenger *</label>
             <input
+              required
               placeholder="e.g. fb.com/username"
               value={form.social_link}
               onChange={(e) => setForm({ ...form, social_link: e.target.value })}
@@ -302,12 +324,12 @@ export default function StaffManagement() {
               <button className="modal-close" type="button" onClick={() => setEditing(null)}>×</button>
             </div>
             <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem' }}>
-              <div className="field"><label>Full name</label><input value={editForm.full_name} onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })} /></div>
-              <div className="field"><label>Username</label><input value={editForm.username} onChange={(e) => setEditForm({ ...editForm, username: e.target.value })} /></div>
-              <div className="field"><label>Email for OTP</label><input type="email" value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} /></div>
-              <div className="field"><label>Salary</label><input type="number" value={editForm.salary} onChange={(e) => setEditForm({ ...editForm, salary: e.target.value })} /></div>
-              <div className="field"><label>Phone</label><input value={editForm.phone_number} onChange={(e) => setEditForm({ ...editForm, phone_number: e.target.value })} /></div>
-              <div className="field"><label>Social link</label><input value={editForm.social_link} onChange={(e) => setEditForm({ ...editForm, social_link: e.target.value })} /></div>
+              <div className="field"><label>Full name *</label><input required value={editForm.full_name} onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })} /></div>
+              <div className="field"><label>Username *</label><input required value={editForm.username} onChange={(e) => setEditForm({ ...editForm, username: e.target.value })} /></div>
+              <div className="field"><label>Email for OTP *</label><input required type="email" value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} /></div>
+              <div className="field"><label>Salary *</label><input required type="number" min="1" value={editForm.salary} onChange={(e) => setEditForm({ ...editForm, salary: e.target.value })} /></div>
+              <div className="field"><label>Phone *</label><input required value={editForm.phone_number} onChange={(e) => setEditForm({ ...editForm, phone_number: e.target.value })} /></div>
+              <div className="field"><label>Social link *</label><input required value={editForm.social_link} onChange={(e) => setEditForm({ ...editForm, social_link: e.target.value })} /></div>
             </div>
             <div className="row" style={{ justifyContent: 'flex-end', marginTop: '1rem' }}>
               <button className="btn-ghost" type="button" onClick={() => setEditing(null)}>Cancel</button>

@@ -5,12 +5,13 @@ import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
-import { peso, addMonths, type Contract, type Transaction, type Product } from '../lib/types'
+import { peso, addMonths, todayISO, type Contract, type Transaction, type Product } from '../lib/types'
+import { extractPaymentsFromContracts } from '../lib/contract-meta'
 import { SkeletonStat, SkeletonTable } from '../components/Skeleton'
 import TablePagination, { DEFAULT_PAGE_SIZE } from '../components/TablePagination'
 
-type ReportType = 'display' | 'pickup' | 'rental'
-type DateFilterMode = 'monthly' | 'daily' | 'yearly' | 'custom'
+type ReportType = 'display' | 'pickup' | 'rental' | 'combined'
+type DateFilterMode = 'all' | 'monthly' | 'daily' | 'yearly' | 'custom'
 type DashboardSection = 'sales' | 'rentals'
 const PAGE_SIZE = DEFAULT_PAGE_SIZE
 
@@ -21,7 +22,8 @@ export default function OwnerDashboard() {
   const [renters, setRenters] = useState<{ user_id: number; full_name: string }[]>([])
   const [contractPayments, setContractPayments] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
-  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7))
+  const [month, setMonth] = useState<string>('all')
+  const [selectedRenterFilter, setSelectedRenterFilter] = useState<string>('all')
   const [dashboardSection, setDashboardSection] = useState<DashboardSection>('sales')
   const [salesFilterType, setSalesFilterType] = useState<'All' | 'Display' | 'Pick-up'>('All')
   const [rentalFilterType, setRentalFilterType] = useState<'All' | 'Display' | 'Pick-up'>('All')
@@ -30,13 +32,13 @@ export default function OwnerDashboard() {
 
   // Print Dialog State
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false)
-  const [printReportType, setPrintReportType] = useState<ReportType>('display')
-  const [printDateMode, setPrintDateMode] = useState<DateFilterMode>('monthly')
-  const [printMonth, setPrintMonth] = useState(() => new Date().toISOString().slice(0, 7))
-  const [printDaily, setPrintDaily] = useState(() => new Date().toISOString().slice(0, 10))
-  const [printYearly, setPrintYearly] = useState(() => String(new Date().getFullYear()))
-  const [printStartDate, setPrintStartDate] = useState(() => new Date().toISOString().slice(0, 10))
-  const [printEndDate, setPrintEndDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [printReportType, setPrintReportType] = useState<ReportType>('rental')
+  const [printDateMode, setPrintDateMode] = useState<DateFilterMode>('all')
+  const [printMonth, setPrintMonth] = useState(() => todayISO().slice(0, 7))
+  const [printDaily, setPrintDaily] = useState(() => todayISO())
+  const [printYearly, setPrintYearly] = useState(() => todayISO().slice(0, 4))
+  const [printStartDate, setPrintStartDate] = useState(() => todayISO())
+  const [printEndDate, setPrintEndDate] = useState(() => todayISO())
   const [printRenterId, setPrintRenterId] = useState<string>('all')
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
   const [logoDataUrl, setLogoDataUrl] = useState<string | null>(null)
@@ -95,15 +97,20 @@ export default function OwnerDashboard() {
     setLoading(true)
     void Promise.all([
       supabase.from('contracts').select('*, cubes(*), users!renter_id(user_id, full_name)'),
-      supabase.from('transactions').select('*, products(*, cubes(cube_number, type)), cubes(cube_number, type), users!processed_by(full_name, role)').order('updated_at', { ascending: false }),
+      supabase
+        .from('transactions')
+        .select('*, products(*, cubes(cube_number, type)), cubes(cube_number, type), users!processed_by(full_name, role)')
+        .order('updated_at', { ascending: false }),
       supabase.from('users').select('user_id, full_name').eq('role', 'Renter').order('full_name'),
       supabase.from('contract_payments').select('*'),
     ]).then(([c, t, r, cp]) => {
       setLoading(false)
-      if (!c.error) setContracts((c.data || []) as Contract[])
+      const loadedContracts = (!c.error ? c.data || [] : []) as Contract[]
+      setContracts(loadedContracts)
       if (!t.error) setTransactions((t.data || []) as Transaction[])
       if (!r.error) setRenters((r.data || []) as { user_id: number; full_name: string }[])
-      if (!cp.error) setContractPayments(cp.data || [])
+      const mergedPayments = extractPaymentsFromContracts(loadedContracts, !cp.error ? cp.data || [] : [])
+      setContractPayments(mergedPayments)
     })
   }
 
@@ -122,7 +129,11 @@ export default function OwnerDashboard() {
     return <span style={{ marginLeft: 4, fontSize: '0.75rem' }}>{sortState.dir === 'asc' ? '▲' : '▼'}</span>
   }
 
-  function toggleSort(state: { col: string; dir: 'asc' | 'desc' }, setState: React.Dispatch<React.SetStateAction<{ col: string; dir: 'asc' | 'desc' }>>, col: string) {
+  function toggleSort(
+    state: { col: string; dir: 'asc' | 'desc' },
+    setState: React.Dispatch<React.SetStateAction<{ col: string; dir: 'asc' | 'desc' }>>,
+    col: string,
+  ) {
     if (state.col === col) {
       setState({ col, dir: state.dir === 'asc' ? 'desc' : 'asc' })
     } else {
@@ -154,7 +165,26 @@ export default function OwnerDashboard() {
     return map
   }, [contracts, renterMap])
 
-  const rentalSales = useMemo(() => {
+  // Helper to resolve transaction renter
+  const getTxRenter = (t: Transaction) => {
+    const p = t.products as
+      | (Product & { cubes?: { cube_number?: string; type?: string } | null; renter_id?: number | null; cube_id?: number | null })
+      | null
+    if (t.renter_id && renterMap.has(t.renter_id)) {
+      return { id: t.renter_id, name: renterMap.get(t.renter_id)! }
+    }
+    if (p?.renter_id && renterMap.has(p.renter_id)) {
+      return { id: p.renter_id, name: renterMap.get(p.renter_id)! }
+    }
+    if (p?.cube_id && cubeRenterMap.has(p.cube_id)) {
+      const cr = cubeRenterMap.get(p.cube_id)!
+      return { id: cr.renter_id, name: cr.name }
+    }
+    return { id: null, name: 'Unknown Renter' }
+  }
+
+  // All paid rental installments across all active/expired contracts (including Month 1 Initial Advance)
+  const allRentalSales = useMemo(() => {
     const results: Array<{
       key: string
       contract_id: number
@@ -168,12 +198,14 @@ export default function OwnerDashboard() {
       periodDates?: string
       periodMonthLabel?: string
       startDate: string
+      endDate: string
       dueMonth: string
+      paidMonth: string
       monthNumber: number
       totalMonths: number
+      paymentMethod: string
     }> = []
 
-    // 1. Strictly exclude pending contracts! Only Active or previously Active (Expired) contracts
     const liveOrPastContracts = contracts.filter((c) => c.status === 'Active' || c.status === 'Expired')
 
     for (const c of liveOrPastContracts) {
@@ -188,36 +220,30 @@ export default function OwnerDashboard() {
       for (let m = 1; m <= diffMonths; m++) {
         const isMonth1 = m === 1
         const dueDate = isMonth1 ? c.start_date : addMonths(c.start_date, m - 1)
-        const dueMonth = dueDate.slice(0, 7) // 'YYYY-MM'
+        const dueMonth = dueDate.slice(0, 7)
 
-        // Check if there is an explicit payment record in contract_payments
         const record = contractPayments.find(
-          (p) => p.contract_id === c.contract_id && (p.month_number === m || p.month_index === m)
+          (p) => p.contract_id === c.contract_id && (p.month_number === m || p.month_index === m),
         )
 
-        // Month 1 is paid upon opening (initial advance) for active/contracted cubes.
-        // For succeeding months (m > 1), it is ONLY paid if marked as Paid by owner.
-        const isPaid = (record?.payment_status === 'Paid' || record?.status === 'Paid') || (isMonth1 && (!record || record.payment_status === 'Paid' || record.status === 'Paid'))
+        // Month 1 is paid upon opening (Initial Advance) for Active/Expired contracts.
+        // Succeeding months (m > 1) are paid when marked Paid in Cube Payment.
+        const isPaid =
+          record?.payment_status === 'Paid' ||
+          record?.status === 'Paid' ||
+          (isMonth1 && (!record || record.payment_status === 'Paid' || record.status === 'Paid'))
 
-        // We only include PAID entries in sales & reports!
         if (!isPaid) continue
 
-        // Check month filter (if month !== 'all', must match selected month)
-        if (month !== 'all' && dueMonth !== month) {
-          const paidMonth = (record?.paid_at || record?.payment_date || '')?.slice(0, 7)
-          if (paidMonth !== month) {
-            continue
-          }
-        }
-
+        const paidMonth = (record?.paid_at || record?.payment_date || dueDate).slice(0, 7)
         const periodDates = `${c.start_date} to ${c.end_date}`
-        const periodMonthLabel = diffMonths > 1 ? `(Mo. ${m}/${diffMonths})` : ''
-        const periodLabel = periodMonthLabel ? `${periodDates}\n${periodMonthLabel}` : periodDates
+        const periodMonthLabel = `Month ${m} of ${diffMonths}${isMonth1 ? ' (Initial Advance)' : ''}`
+        const periodLabel = `${periodDates}\n(${periodMonthLabel})`
 
         results.push({
           key: `${c.contract_id}-m${m}`,
           contract_id: c.contract_id,
-          status: 'Active',
+          status: c.status,
           renter_id: c.renter_id,
           renter: renterName,
           cube: c.cubes?.cube_number,
@@ -227,15 +253,33 @@ export default function OwnerDashboard() {
           periodDates,
           periodMonthLabel,
           startDate: dueDate,
+          endDate: c.end_date,
           dueMonth,
+          paidMonth,
           monthNumber: m,
           totalMonths: diffMonths,
+          paymentMethod: record?.payment_method || 'Cash',
         })
       }
     }
 
     return results
-  }, [contracts, contractPayments, renterMap, month])
+  }, [contracts, contractPayments, renterMap])
+
+  const rentalSales = useMemo(() => {
+    return allRentalSales.filter((r) => {
+      if (selectedRenterFilter !== 'all' && r.renter_id !== Number(selectedRenterFilter)) {
+        return false
+      }
+      if (month === 'all') return true
+      if (r.dueMonth === month || r.paidMonth === month) return true
+      // Also include Month 1 if the contract is currently active during the selected month
+      if (r.monthNumber === 1 && r.status === 'Active' && r.startDate.slice(0, 7) <= month && r.endDate.slice(0, 7) >= month) {
+        return true
+      }
+      return false
+    })
+  }, [allRentalSales, month, selectedRenterFilter])
 
   const rentalSalesSorted = useMemo(() => {
     const list = [...rentalSales]
@@ -243,12 +287,25 @@ export default function OwnerDashboard() {
     list.sort((a, b) => {
       let vA: any = ''
       let vB: any = ''
-      if (col === 'renter') { vA = a.renter; vB = b.renter }
-      else if (col === 'cube') { vA = a.cube || ''; vB = b.cube || '' }
-      else if (col === 'type') { vA = a.type || ''; vB = b.type || '' }
-      else if (col === 'monthly') { vA = a.monthly; vB = b.monthly }
-      else if (col === 'period') { vA = a.startDate; vB = b.startDate }
-      else if (col === 'status') { vA = a.status; vB = b.status }
+      if (col === 'renter') {
+        vA = a.renter
+        vB = b.renter
+      } else if (col === 'cube') {
+        vA = a.cube || ''
+        vB = b.cube || ''
+      } else if (col === 'type') {
+        vA = a.type || ''
+        vB = b.type || ''
+      } else if (col === 'monthly') {
+        vA = a.monthly
+        vB = b.monthly
+      } else if (col === 'period') {
+        vA = a.startDate
+        vB = b.startDate
+      } else if (col === 'status') {
+        vA = a.status
+        vB = b.status
+      }
       if (vA < vB) return dir === 'asc' ? -1 : 1
       if (vA > vB) return dir === 'asc' ? 1 : -1
       return 0
@@ -260,10 +317,15 @@ export default function OwnerDashboard() {
 
   const monthTx = useMemo(() => {
     return transactions.filter((t) => {
+      if (selectedRenterFilter !== 'all') {
+        const r = getTxRenter(t)
+        if (r.id !== Number(selectedRenterFilter)) return false
+      }
       if (month === 'all') return true
-      return String(t.transaction_date || '').startsWith(month)
+      const txMonth = String(t.transaction_date || t.updated_at || '').slice(0, 7)
+      return txMonth === month
     })
-  }, [transactions, month])
+  }, [transactions, month, selectedRenterFilter, renterMap, cubeRenterMap])
 
   const monthTxSorted = useMemo(() => {
     const list = [...monthTx]
@@ -271,13 +333,28 @@ export default function OwnerDashboard() {
     list.sort((a, b) => {
       let vA: any = ''
       let vB: any = ''
-      if (col === 'date') { vA = new Date(a.updated_at || a.transaction_date).getTime(); vB = new Date(b.updated_at || b.transaction_date).getTime() }
-      else if (col === 'product') { vA = a.products?.product_name || a.product_name || ''; vB = b.products?.product_name || b.product_name || '' }
-      else if (col === 'cube') { vA = a.products?.cubes?.cube_number || a.cubes?.cube_number || ''; vB = b.products?.cubes?.cube_number || b.cubes?.cube_number || '' }
-      else if (col === 'renter') { vA = getTxRenter(a).name; vB = getTxRenter(b).name }
-      else if (col === 'amount') { vA = Number(a.products?.price || 0) * Number(a.quantity || 1); vB = Number(b.products?.price || 0) * Number(b.quantity || 1) }
-      else if (col === 'payment') { vA = a.payment_status; vB = b.payment_status }
-      else if (col === 'processed') { vA = a.users?.full_name || ''; vB = b.users?.full_name || '' }
+      if (col === 'date') {
+        vA = new Date(a.updated_at || a.transaction_date).getTime()
+        vB = new Date(b.updated_at || b.transaction_date).getTime()
+      } else if (col === 'product') {
+        vA = a.products?.product_name || a.product_name || ''
+        vB = b.products?.product_name || b.product_name || ''
+      } else if (col === 'cube') {
+        vA = a.products?.cubes?.cube_number || a.cubes?.cube_number || ''
+        vB = b.products?.cubes?.cube_number || b.cubes?.cube_number || ''
+      } else if (col === 'renter') {
+        vA = getTxRenter(a).name
+        vB = getTxRenter(b).name
+      } else if (col === 'amount') {
+        vA = Number(a.products?.price || 0) * Number(a.quantity || 1)
+        vB = Number(b.products?.price || 0) * Number(b.quantity || 1)
+      } else if (col === 'payment') {
+        vA = a.payment_status
+        vB = b.payment_status
+      } else if (col === 'processed') {
+        vA = a.users?.full_name || ''
+        vB = b.users?.full_name || ''
+      }
       if (vA < vB) return dir === 'asc' ? -1 : 1
       if (vA > vB) return dir === 'asc' ? 1 : -1
       return 0
@@ -285,10 +362,8 @@ export default function OwnerDashboard() {
     return list
   }, [monthTx, sortMonthTx])
 
-
   const isPaidTx = (t: Transaction) =>
-    (t.payment_status === 'Paid' || t.pickup_status === 'Picked-up') &&
-    !t.notes?.startsWith('[PULLED OUT]')
+    (t.payment_status === 'Paid' || t.pickup_status === 'Picked-up') && !t.notes?.startsWith('[PULLED OUT]')
 
   useEffect(() => setRentalsPage(1), [rentalFilterType, rentalSalesSorted])
   useEffect(() => setSalesPage(1), [salesFilterType, monthTxSorted])
@@ -325,15 +400,11 @@ export default function OwnerDashboard() {
 
   const filteredRentersForReport = useMemo(() => {
     if (printReportType === 'display') {
-      const ids = new Set(
-        contracts.filter((c) => c.cubes?.type === 'Display').map((c) => c.renter_id)
-      )
+      const ids = new Set(contracts.filter((c) => c.cubes?.type === 'Display').map((c) => c.renter_id))
       return renters.filter((r) => ids.has(r.user_id))
     }
     if (printReportType === 'pickup') {
-      const ids = new Set(
-        contracts.filter((c) => c.cubes?.type === 'Pick-up').map((c) => c.renter_id)
-      )
+      const ids = new Set(contracts.filter((c) => c.cubes?.type === 'Pick-up').map((c) => c.renter_id))
       return renters.filter((r) => ids.has(r.user_id))
     }
     return renters
@@ -342,36 +413,10 @@ export default function OwnerDashboard() {
   const rentalsPageRows = filteredRentals.slice((rentalsPage - 1) * PAGE_SIZE, rentalsPage * PAGE_SIZE)
   const salesPageRows = filteredSalesTx.slice((salesPage - 1) * PAGE_SIZE, salesPage * PAGE_SIZE)
 
-  // Helper to resolve transaction renter
-  const getTxRenter = (t: Transaction) => {
-    const p = t.products as (Product & { cubes?: { cube_number?: string; type?: string } | null; renter_id?: number | null; cube_id?: number | null }) | null
-    if (t.renter_id && renterMap.has(t.renter_id)) {
-      return { id: t.renter_id, name: renterMap.get(t.renter_id)! }
-    }
-    if (p?.renter_id && renterMap.has(p.renter_id)) {
-      return { id: p.renter_id, name: renterMap.get(p.renter_id)! }
-    }
-    if (p?.cube_id && cubeRenterMap.has(p.cube_id)) {
-      const cr = cubeRenterMap.get(p.cube_id)!
-      return { id: cr.renter_id, name: cr.name }
-    }
-    return { id: null, name: 'Unknown Renter' }
-  }
-
-  // Filtered transactions for the printable report
+  // Filtered transactions & rentals for the printable report
   const printFilteredData = useMemo(() => {
-    if (printReportType === 'rental') {
-      let filtered = rentalSales
-      if (printRenterId !== 'all') {
-        const rid = Number(printRenterId)
-        filtered = filtered.filter((r) => r.renter_id === rid)
-      }
-      const total = filtered.reduce((acc, curr) => acc + curr.monthly, 0)
-      return { list: filtered, total }
-    }
-
-    // Match transaction date according to selected date mode
     const matchesDate = (dateStr: string) => {
+      if (printDateMode === 'all') return true
       if (!dateStr) return false
       const d = String(dateStr).slice(0, 10)
       if (printDateMode === 'daily') return d === printDaily
@@ -381,67 +426,124 @@ export default function OwnerDashboard() {
       return true
     }
 
-    // Display or Pick-up report
-    const targetType = printReportType === 'display' ? 'Display' : 'Pick-up'
-    let list = transactions.filter((t) => {
-      const dateMatch = matchesDate(t.transaction_date)
-      const typeMatch = (t.products?.cubes?.type || t.cubes?.type) === targetType
-      return dateMatch && typeMatch
-    }).sort((a, b) => new Date(b.updated_at || b.transaction_date).getTime() - new Date(a.updated_at || a.transaction_date).getTime())
+    let matchedRentals = allRentalSales.filter((r) => {
+      if (printRenterId !== 'all' && r.renter_id !== Number(printRenterId)) return false
+      if (printDateMode === 'all') return true
+      return matchesDate(r.startDate) || matchesDate(r.paidMonth + '-01')
+    })
+
+    if (printReportType === 'rental') {
+      const total = matchedRentals.reduce((acc, curr) => acc + curr.monthly, 0)
+      return { list: matchedRentals, rentalList: matchedRentals, txList: [] as Transaction[], total, rentalTotal: total, txTotal: 0 }
+    }
+
+    const targetType = printReportType === 'display' ? 'Display' : printReportType === 'pickup' ? 'Pick-up' : 'All'
+    let txList = transactions
+      .filter((t) => {
+        if (t.notes?.startsWith('[PULLED OUT]')) return false
+        const dateMatch = matchesDate(t.transaction_date || t.updated_at || '')
+        const cType = t.products?.cubes?.type || t.cubes?.type || 'Display'
+        const typeMatch = targetType === 'All' ? true : cType === targetType
+        return dateMatch && typeMatch
+      })
+      .sort((a, b) => new Date(b.updated_at || b.transaction_date).getTime() - new Date(a.updated_at || a.transaction_date).getTime())
 
     if (printRenterId !== 'all') {
       const rid = Number(printRenterId)
-      list = list.filter((t) => {
-        const r = getTxRenter(t)
-        return r.id === rid
-      })
+      txList = txList.filter((t) => getTxRenter(t).id === rid)
     }
 
-    const total = list.reduce((acc, t) => {
-      if (t.payment_status === 'Paid') {
+    const txTotal = txList.reduce((acc, t) => {
+      if (t.payment_status === 'Paid' || t.pickup_status === 'Picked-up') {
         return acc + Number(t.products?.price || 0) * Number(t.quantity || 1)
       }
       return acc
     }, 0)
 
-    return { list, total }
-  }, [transactions, rentalSales, printReportType, printDateMode, printMonth, printDaily, printYearly, printStartDate, printEndDate, printRenterId])
+    const rentalSubTotal = matchedRentals.reduce((acc, curr) => acc + curr.monthly, 0)
+
+    if (printReportType === 'combined') {
+      return {
+        list: [...txList, ...matchedRentals],
+        rentalList: matchedRentals,
+        txList,
+        total: txTotal + rentalSubTotal,
+        rentalTotal: rentalSubTotal,
+        txTotal,
+      }
+    }
+
+    return {
+      list: txList,
+      rentalList: matchedRentals,
+      txList,
+      total: txTotal,
+      rentalTotal: rentalSubTotal,
+      txTotal,
+    }
+  }, [
+    transactions,
+    allRentalSales,
+    printReportType,
+    printDateMode,
+    printMonth,
+    printDaily,
+    printYearly,
+    printStartDate,
+    printEndDate,
+    printRenterId,
+  ])
 
   const printPeriodLabel = useMemo(() => {
-    if (printReportType === 'rental') return 'Active Rental Contracts'
+    if (printDateMode === 'all') return 'All Paid Records'
     if (printDateMode === 'daily') return `Daily: ${new Date(printDaily).toLocaleDateString('en-PH', { dateStyle: 'long' })}`
-    if (printDateMode === 'monthly') return `Monthly: ${new Date(`${printMonth}-01`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`
+    if (printDateMode === 'monthly')
+      return `Monthly: ${new Date(`${printMonth}-01`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`
     if (printDateMode === 'yearly') return `Yearly: ${printYearly}`
     if (printDateMode === 'custom') return `Custom Date Range: ${printStartDate} to ${printEndDate}`
-    return printMonth
-  }, [printReportType, printDateMode, printDaily, printMonth, printYearly, printStartDate, printEndDate])
+    return 'All Paid Records'
+  }, [printDateMode, printDaily, printMonth, printYearly, printStartDate, printEndDate])
+
+  const selectedRenterName =
+    printRenterId === 'all'
+      ? 'All Renters'
+      : renters.find((r) => r.user_id === Number(printRenterId))?.full_name || 'Selected Renter'
 
   function buildPrintableReportHtml() {
-    const reportTitle = printReportType === 'display'
-      ? 'DISPLAY SALES REPORT'
-      : printReportType === 'pickup'
-        ? 'PICK-UP SALES REPORT'
-        : 'MONTHLY RENTAL PAYMENT REPORT'
+    const reportTitle =
+      printReportType === 'display'
+        ? 'DISPLAY SALES REPORT'
+        : printReportType === 'pickup'
+          ? 'PICK-UP SALES REPORT'
+          : printReportType === 'combined'
+            ? 'COMBINED SALES & CUBE RENTAL REPORT'
+            : 'MONTHLY RENTAL PAYMENT REPORT'
 
-    const rowsHtml = printReportType === 'rental'
-      ? (printFilteredData.list.length === 0
-          ? `<tr><td colspan="5" style="text-align:center;padding:1.5rem;color:#6b7280;">No rental contracts found for this selection.</td></tr>`
-          : (printFilteredData.list as typeof rentalSales).map((r) => `
+    const rentalRowsHtml =
+      printFilteredData.rentalList.length === 0
+        ? `<tr><td colspan="5" style="text-align:center;padding:1.5rem;color:#6b7280;">No paid rental installments found for this selection.</td></tr>`
+        : printFilteredData.rentalList
+            .map(
+              (r) => `
               <tr>
                 <td style="text-align:left;">${r.renter}</td>
                 <td style="text-align:center;">${r.cube ?? '—'}</td>
                 <td style="text-align:center;">${r.type ?? '—'}</td>
                 <td style="text-align:center;">
                   <div>${r.periodDates || r.period}</div>
-                  ${r.periodMonthLabel ? `<div style="font-size:0.75rem;color:#555;">${r.periodMonthLabel}</div>` : ''}
+                  ${r.periodMonthLabel ? `<div style="font-size:0.75rem;color:#555;">${r.periodMonthLabel} · ${r.paymentMethod}</div>` : ''}
                 </td>
                 <td style="text-align:right;">${peso(r.monthly)}</td>
               </tr>
-            `).join('')
-        )
-      : (printFilteredData.list.length === 0
-          ? `<tr><td colspan="8" style="text-align:center;padding:1.5rem;color:#6b7280;">No sales transactions found for this period.</td></tr>`
-          : (printFilteredData.list as Transaction[]).map((t) => {
+            `,
+            )
+            .join('')
+
+    const txRowsHtml =
+      printFilteredData.txList.length === 0
+        ? `<tr><td colspan="8" style="text-align:center;padding:1.5rem;color:#6b7280;">No product sales transactions found for this period.</td></tr>`
+        : printFilteredData.txList
+            .map((t) => {
               const renter = getTxRenter(t)
               const amt = Number(t.products?.price || 0) * Number(t.quantity || 1)
               const txDate = new Date(t.transaction_date).toLocaleDateString('en-PH')
@@ -462,53 +564,66 @@ export default function OwnerDashboard() {
                   <td style="text-align:right;">${peso(amt)}</td>
                 </tr>
               `
-            }).join('')
-        )
+            })
+            .join('')
 
-    const tableMarkup = printReportType === 'rental'
-      ? `
-        <table>
-          <thead>
-            <tr>
-              <th style="text-align:left;">renter</th>
-              <th>cube no.</th>
-              <th>type</th>
-              <th>contract period</th>
-              <th style="text-align:right;">monthly rent</th>
-            </tr>
-          </thead>
-          <tbody>${rowsHtml}</tbody>
-          <tfoot>
-            <tr>
-              <td colspan="4">total rental income</td>
-              <td style="text-align:right;">${peso(printFilteredData.total)}</td>
-            </tr>
-          </tfoot>
-        </table>
-      `
-      : `
-        <table>
-          <thead>
-            <tr>
-              <th style="text-align:left;">product</th>
-              <th>cube</th>
-              <th>renter</th>
-              <th>date</th>
-              <th>payment</th>
-              <th>process</th>
-              <th>qty</th>
-              <th style="text-align:right;">total</th>
-            </tr>
-          </thead>
-          <tbody>${rowsHtml}</tbody>
-          <tfoot>
-            <tr>
-              <td colspan="7">overall total</td>
-              <td style="text-align:right;">${peso(printFilteredData.total)}</td>
-            </tr>
-          </tfoot>
-        </table>
-      `
+    const rentalTableMarkup = `
+      <table>
+        <thead>
+          <tr>
+            <th style="text-align:left;">renter</th>
+            <th>cube no.</th>
+            <th>type</th>
+            <th>contract period / installment</th>
+            <th style="text-align:right;">paid rent</th>
+          </tr>
+        </thead>
+        <tbody>${rentalRowsHtml}</tbody>
+        <tfoot>
+          <tr>
+            <td colspan="4">total paid cube rental income</td>
+            <td style="text-align:right;">${peso(printFilteredData.rentalTotal)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    `
+
+    const txTableMarkup = `
+      <table>
+        <thead>
+          <tr>
+            <th style="text-align:left;">product</th>
+            <th>cube</th>
+            <th>renter</th>
+            <th>date</th>
+            <th>payment</th>
+            <th>process</th>
+            <th>qty</th>
+            <th style="text-align:right;">total</th>
+          </tr>
+        </thead>
+        <tbody>${txRowsHtml}</tbody>
+        <tfoot>
+          <tr>
+            <td colspan="7">total product sales</td>
+            <td style="text-align:right;">${peso(printFilteredData.txTotal)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    `
+
+    const tableMarkup =
+      printReportType === 'rental'
+        ? rentalTableMarkup
+        : printReportType === 'combined'
+          ? `<h3 style="margin:1rem 0 0.5rem;font-size:1rem;text-transform:uppercase;">1. Paid Cube Rental Payments</h3>
+             ${rentalTableMarkup}
+             <h3 style="margin:1.5rem 0 0.5rem;font-size:1rem;text-transform:uppercase;">2. Product Sales Transactions</h3>
+             ${txTableMarkup}
+             <div style="text-align:right;font-size:1.05rem;font-weight:700;margin-top:0.75rem;">
+               COMBINED TOTAL: ${peso(printFilteredData.total)}
+             </div>`
+          : txTableMarkup
 
     return `<!doctype html>
       <html lang="en">
@@ -711,13 +826,15 @@ export default function OwnerDashboard() {
     const doc = new jsPDF()
     const logo = await getOrLoadLogoDataUrl()
 
-    const reportTitle = printReportType === 'display'
-      ? 'DISPLAY SALES REPORT'
-      : printReportType === 'pickup'
-        ? 'PICK-UP SALES REPORT'
-        : 'MONTHLY RENTAL PAYMENT REPORT'
+    const reportTitle =
+      printReportType === 'display'
+        ? 'DISPLAY SALES REPORT'
+        : printReportType === 'pickup'
+          ? 'PICK-UP SALES REPORT'
+          : printReportType === 'combined'
+            ? 'COMBINED SALES & CUBE RENTAL REPORT'
+            : 'MONTHLY RENTAL PAYMENT REPORT'
 
-    // Header Branding
     if (logo) {
       try {
         doc.addImage(logo, 'PNG', 14, 10, 16, 16)
@@ -745,13 +862,11 @@ export default function OwnerDashboard() {
       doc.text('Arce Concept Store', 14, 23)
     }
 
-    // Centered Title
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(13)
     doc.setTextColor(0, 0, 0)
     doc.text(reportTitle, 105, 34, { align: 'center' })
 
-    // Meta details row
     doc.setFont('helvetica', 'normal')
     doc.setFontSize(9)
     doc.setTextColor(0, 0, 0)
@@ -759,38 +874,49 @@ export default function OwnerDashboard() {
     doc.text(`renter: ${selectedRenterName}`, 105, 42, { align: 'center' })
     doc.text(`date generated: ${new Date().toLocaleDateString('en-PH')}`, 196, 42, { align: 'right' })
 
-    // Solid dividing line
     doc.setDrawColor(0, 0, 0)
     doc.setLineWidth(0.6)
     doc.line(14, 45, 196, 45)
 
-    // Safe currency formatter for jsPDF standard Helvetica font (prevents 16-bit encoding bugs and text overflow)
     const formatPdfCurrency = (n: number | string | null | undefined) => {
       const num = typeof n === 'number' ? n : Number(n || 0)
       return 'P ' + num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     }
 
-    if (printReportType === 'rental') {
-      const rows = (printFilteredData.list as typeof rentalSales).map((r) => [
+    let currentY = 48
+
+    if (printReportType === 'rental' || printReportType === 'combined') {
+      const rows = printFilteredData.rentalList.map((r) => [
         r.renter || '—',
         r.cube || '—',
         r.type || '—',
-        r.periodMonthLabel ? `${r.periodDates}\n${r.periodMonthLabel}` : (r.periodDates || r.period),
+        r.periodMonthLabel ? `${r.periodDates}\n(${r.periodMonthLabel})` : r.periodDates || r.period,
         formatPdfCurrency(r.monthly),
       ])
 
       autoTable(doc, {
-        startY: 48,
+        startY: currentY,
         margin: { left: 14, right: 14 },
         tableWidth: 182,
-        head: [['renter', 'cube no.', 'type', 'contract period', 'monthly rent']],
-        body: rows.length === 0
-          ? [[{ content: 'No rental contracts found for this selection.', colSpan: 5, styles: { halign: 'center', textColor: [120, 120, 120] } }]]
-          : rows,
-        foot: [[
-          { content: 'total rental income', colSpan: 4, styles: { halign: 'left', fontStyle: 'normal' } },
-          { content: formatPdfCurrency(printFilteredData.total), styles: { halign: 'right', fontStyle: 'normal' } },
-        ]],
+        head: [['renter', 'cube no.', 'type', 'contract period / installment', 'paid rent']],
+        body:
+          rows.length === 0
+            ? [
+                [
+                  {
+                    content: 'No paid rental installments found for this selection.',
+                    colSpan: 5,
+                    styles: { halign: 'center', textColor: [120, 120, 120] },
+                  },
+                ],
+              ]
+            : rows,
+        foot: [
+          [
+            { content: 'total paid rental income', colSpan: 4, styles: { halign: 'left', fontStyle: 'normal' } },
+            { content: formatPdfCurrency(printFilteredData.rentalTotal), styles: { halign: 'right', fontStyle: 'normal' } },
+          ],
+        ],
         theme: 'grid',
         headStyles: {
           fillColor: [255, 255, 255],
@@ -821,8 +947,11 @@ export default function OwnerDashboard() {
           4: { cellWidth: 32, halign: 'right' },
         },
       })
-    } else {
-      const rows = (printFilteredData.list as Transaction[]).map((t) => {
+      currentY = ((doc as any).lastAutoTable?.finalY || currentY) + 10
+    }
+
+    if (printReportType !== 'rental') {
+      const rows = printFilteredData.txList.map((t) => {
         const r = getTxRenter(t)
         const amt = Number(t.products?.price || 0) * Number(t.quantity || 1)
         const txDate = new Date(t.transaction_date).toLocaleDateString('en-PH')
@@ -843,17 +972,28 @@ export default function OwnerDashboard() {
       })
 
       autoTable(doc, {
-        startY: 48,
+        startY: currentY,
         margin: { left: 14, right: 14 },
         tableWidth: 182,
         head: [['product', 'cube', 'renter', 'date', 'payment', 'process', 'qty', 'total']],
-        body: rows.length === 0
-          ? [[{ content: 'No sales transactions found for this period.', colSpan: 8, styles: { halign: 'center', textColor: [120, 120, 120] } }]]
-          : rows,
-        foot: [[
-          { content: 'overall total', colSpan: 7, styles: { halign: 'left', fontStyle: 'normal' } },
-          { content: formatPdfCurrency(printFilteredData.total), styles: { halign: 'right', fontStyle: 'normal' } },
-        ]],
+        body:
+          rows.length === 0
+            ? [
+                [
+                  {
+                    content: 'No product sales transactions found for this period.',
+                    colSpan: 8,
+                    styles: { halign: 'center', textColor: [120, 120, 120] },
+                  },
+                ],
+              ]
+            : rows,
+        foot: [
+          [
+            { content: 'total product sales', colSpan: 7, styles: { halign: 'left', fontStyle: 'normal' } },
+            { content: formatPdfCurrency(printFilteredData.txTotal), styles: { halign: 'right', fontStyle: 'normal' } },
+          ],
+        ],
         theme: 'grid',
         headStyles: {
           fillColor: [255, 255, 255],
@@ -889,7 +1029,6 @@ export default function OwnerDashboard() {
       })
     }
 
-    // Signatures block
     let finalY = (doc as any).lastAutoTable ? (doc as any).lastAutoTable.finalY + 35 : 200
     if (finalY > 265) {
       doc.addPage()
@@ -915,7 +1054,6 @@ export default function OwnerDashboard() {
     const reportHtml = buildPrintableReportHtml()
     const reportWindow = window.open('', '_blank', 'width=1100,height=850')
     if (!reportWindow) {
-      // Fallback: If pop-ups are blocked, use standard window.print()
       setTimeout(() => {
         window.print()
       }, 150)
@@ -937,16 +1075,14 @@ export default function OwnerDashboard() {
         <div className="page-header">
           <div>
             <h1>Owner sales</h1>
-            <p className="lede">Owner only. <Link to="/login">Sign in</Link></p>
+            <p className="lede">
+              Owner only. <Link to="/login">Sign in</Link>
+            </p>
           </div>
         </div>
       </section>
     )
   }
-
-  const selectedRenterName = printRenterId === 'all'
-    ? 'All Renters'
-    : (renters.find((r) => r.user_id === Number(printRenterId))?.full_name || 'Selected Renter')
 
   return (
     <section>
@@ -955,15 +1091,26 @@ export default function OwnerDashboard() {
         <div className="page-header">
           <div>
             <h1>Owner sales & reports</h1>
-            <p className="lede">Monthly rental income and Display / Pick-up product sales before releasing payouts to renters.</p>
+            <p className="lede">
+              Monthly cube rental payments (including Month 1 Initial Advance) and Display / Pick-up product sales.
+            </p>
           </div>
           <div className="row">
-            <button className="btn" type="button" onClick={() => setIsPrintModalOpen(true)}>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => {
+                setPrintReportType(dashboardSection === 'rentals' ? 'rental' : 'combined')
+                if (selectedRenterFilter !== 'all') setPrintRenterId(selectedRenterFilter)
+                setIsPrintModalOpen(true)
+              }}
+            >
               <Printer size={16} /> Print Report
             </button>
           </div>
         </div>
 
+        {/* Filter Bar: Month + Renter Filter */}
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
           <div className="field" style={{ maxWidth: 220, margin: 0 }}>
             <label>Sales & reports month</label>
@@ -972,22 +1119,46 @@ export default function OwnerDashboard() {
           <button
             type="button"
             className={month === 'all' ? 'btn' : 'btn-ghost'}
-            onClick={() => setMonth(month === 'all' ? new Date().toISOString().slice(0, 7) : 'all')}
+            onClick={() => setMonth(month === 'all' ? todayISO().slice(0, 7) : 'all')}
             style={{ fontSize: '0.85rem', padding: '0.65rem 1rem' }}
           >
-            {month === 'all' ? 'Filter by Selected Month' : 'Show All Time Sales'}
+            {month === 'all' ? 'Showing All Paid Records (Click to Filter Month)' : 'Show All Time Records'}
           </button>
+
+          <div className="field" style={{ minWidth: 240, margin: 0 }}>
+            <label>Filter by Renter</label>
+            <select
+              value={selectedRenterFilter}
+              onChange={(e) => setSelectedRenterFilter(e.target.value)}
+              style={{ margin: 0 }}
+            >
+              <option value="all">All Renters ({renters.length})</option>
+              {renters.map((r) => (
+                <option key={r.user_id} value={r.user_id}>
+                  {r.full_name}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         {/* TOP LEVEL SECTIONS: Product Sales & Rental Income */}
-        <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.25rem', borderBottom: '2px solid #e2e8f0', paddingBottom: '0.5rem' }}>
+        <div
+          style={{
+            display: 'flex',
+            gap: '0.75rem',
+            marginBottom: '1.25rem',
+            borderBottom: '2px solid #e2e8f0',
+            paddingBottom: '0.5rem',
+          }}
+        >
           <button
             type="button"
             className={dashboardSection === 'sales' ? 'btn' : 'btn-ghost'}
             style={{ fontSize: '0.95rem', padding: '0.5rem 1.25rem', fontWeight: 700 }}
             onClick={() => setDashboardSection('sales')}
           >
-            Product Sales
+            Product Sales & Summary
           </button>
           <button
             type="button"
@@ -995,13 +1166,15 @@ export default function OwnerDashboard() {
             style={{ fontSize: '0.95rem', padding: '0.5rem 1.25rem', fontWeight: 700 }}
             onClick={() => setDashboardSection('rentals')}
           >
-            Rental Income
+            Paid Cube Rental Income ({rentalSales.length})
           </button>
         </div>
 
         {/* SUB-PILLS: All | Display | Pick-up */}
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', alignItems: 'center' }}>
-          <span className="muted" style={{ fontSize: '0.82rem', fontWeight: 600 }}>Filter by Cube Type:</span>
+          <span className="muted" style={{ fontSize: '0.82rem', fontWeight: 600 }}>
+            Filter by Cube Type:
+          </span>
           {(['All', 'Display', 'Pick-up'] as const).map((t) => {
             const isActive = dashboardSection === 'sales' ? salesFilterType === t : rentalFilterType === t
             return (
@@ -1032,84 +1205,76 @@ export default function OwnerDashboard() {
           </>
         ) : (
           <>
-            {/* ════════════ PRODUCT SALES VIEW ════════════ */}
+            {/* ════════════ PRODUCT SALES & COMBINED KPI VIEW ════════════ */}
             {dashboardSection === 'sales' && (
               <>
                 <div className="stat-grid" style={{ marginBottom: '1.75rem' }}>
-                  {salesFilterType === 'All' ? (
-                    <>
-                      <div className="stat">
-                        <div className="label">Total Product Sales</div>
-                        <div className="value">{peso(byType.total)}</div>
-                      </div>
-                      <div className="stat">
-                        <div className="label">Display Cube Sales</div>
-                        <div className="value">{peso(byType.display)}</div>
-                      </div>
-                      <div className="stat">
-                        <div className="label">Pick-up Cube Sales</div>
-                        <div className="value">{peso(byType.pickup)}</div>
-                      </div>
-                      <div className="stat">
-                        <div className="label">Completed Orders</div>
-                        <div className="value">{monthTx.filter(isPaidTx).length}</div>
-                      </div>
-                    </>
-                  ) : salesFilterType === 'Display' ? (
-                    <>
-                      <div className="stat">
-                        <div className="label">Display Cube Sales</div>
-                        <div className="value">{peso(byType.display)}</div>
-                      </div>
-                      <div className="stat">
-                        <div className="label">Items Sold</div>
-                        <div className="value">
-                          {monthTx
-                            .filter((t) => isPaidTx(t) && (t.products?.cubes?.type || t.cubes?.type) !== 'Pick-up')
-                            .reduce((s, t) => s + (t.quantity || 1), 0)}
-                        </div>
-                      </div>
-                      <div className="stat">
-                        <div className="label">Display Consignors</div>
-                        <div className="value">
-                          {new Set(
-                            monthTx
-                              .filter((t) => (t.products?.cubes?.type || t.cubes?.type) !== 'Pick-up')
-                              .map((t) => getTxRenter(t).id)
-                              .filter(Boolean)
-                          ).size}
-                        </div>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="stat">
-                        <div className="label">Pick-up Sales</div>
-                        <div className="value">{peso(byType.pickup)}</div>
-                      </div>
-                      <div className="stat">
-                        <div className="label">Parcels Picked Up</div>
-                        <div className="value">
-                          {monthTx.filter((t) => isPaidTx(t) && (t.products?.cubes?.type || t.cubes?.type) === 'Pick-up').length}
-                        </div>
-                      </div>
-                      <div className="stat">
-                        <div className="label">Pick-up Consignors</div>
-                        <div className="value">
-                          {new Set(
-                            monthTx
-                              .filter((t) => (t.products?.cubes?.type || t.cubes?.type) === 'Pick-up')
-                              .map((t) => getTxRenter(t).id)
-                              .filter(Boolean)
-                          ).size}
-                        </div>
-                      </div>
-                    </>
-                  )}
+                  <div className="stat" style={{ borderLeft: '4px solid #16a34a' }}>
+                    <div className="label">Total Revenue (Sales + Cube Rent)</div>
+                    <div className="value">{peso(byType.total + rentalTotal)}</div>
+                  </div>
+                  <div
+                    className="stat"
+                    style={{ borderLeft: '4px solid #2563eb', cursor: 'pointer' }}
+                    onClick={() => setDashboardSection('rentals')}
+                    title="Click to view Paid Cube Rental details"
+                  >
+                    <div className="label">Paid Cube Rental Income</div>
+                    <div className="value">{peso(rentalTotal)}</div>
+                    <div className="muted" style={{ fontSize: '0.75rem', marginTop: 2 }}>
+                      {rentalSales.length} paid month(s) (Month 1 + renewals)
+                    </div>
+                  </div>
+                  <div className="stat">
+                    <div className="label">Total Product Sales</div>
+                    <div className="value">{peso(byType.total)}</div>
+                    <div className="muted" style={{ fontSize: '0.75rem', marginTop: 2 }}>
+                      Display: {peso(byType.display)} · Pick-up: {peso(byType.pickup)}
+                    </div>
+                  </div>
+                  <div className="stat">
+                    <div className="label">Completed Product Orders</div>
+                    <div className="value">{monthTx.filter(isPaidTx).length}</div>
+                  </div>
                 </div>
 
-                <h2>Product Sales ({salesFilterType} Cubes · {month === 'all' ? 'All Time' : month})</h2>
-                <p className="muted">Sales records for customer purchases before releasing payout.</p>
+                {/* If a specific Renter is selected or has paid cube rent, show their Paid Cube Rental summary right here too */}
+                {selectedRenterFilter !== 'all' && rentalSales.length > 0 && (
+                  <div
+                    className="panel"
+                    style={{
+                      marginBottom: '1.75rem',
+                      background: '#f0fdf4',
+                      border: '1px solid #86efac',
+                      padding: '1rem 1.25rem',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                      <div>
+                        <strong style={{ color: '#166534', fontSize: '0.98rem' }}>
+                          Paid Cube Rental for {renters.find((r) => r.user_id === Number(selectedRenterFilter))?.full_name}:{' '}
+                          {peso(rentalTotal)}
+                        </strong>
+                        <div className="muted" style={{ fontSize: '0.82rem', color: '#15803d', marginTop: 2 }}>
+                          Includes {rentalSales.length} paid cube rental installment(s) (Month 1 Initial Advance & marked paid months).
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{ background: '#16a34a', color: '#fff', border: 'none', fontSize: '0.8rem', padding: '0.4rem 0.85rem' }}
+                        onClick={() => setDashboardSection('rentals')}
+                      >
+                        View Cube Rental Breakdown →
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <h2>
+                  Product Sales ({salesFilterType} Cubes · {month === 'all' ? 'All Time' : month})
+                </h2>
+                <p className="muted">Sales records for customer product purchases before releasing payout.</p>
 
                 <div className="table-wrap" style={{ marginBottom: '2.5rem' }}>
                   <table className="table">
@@ -1145,10 +1310,15 @@ export default function OwnerDashboard() {
                           <tr key={t.transaction_id}>
                             <td>
                               {new Date(t.updated_at || t.transaction_date).toLocaleString('en-PH')}
-                              <div className="muted" style={{ fontSize: '0.72rem' }}>Last action</div>
+                              <div className="muted" style={{ fontSize: '0.72rem' }}>
+                                Last action
+                              </div>
                             </td>
                             <td>{t.products?.product_name || t.product_name}</td>
-                            <td>{t.products?.cubes?.cube_number || t.cubes?.cube_number || '—'} · {t.products?.cubes?.type || t.cubes?.type || '—'}</td>
+                            <td>
+                              {t.products?.cubes?.cube_number || t.cubes?.cube_number || '—'} ·{' '}
+                              {t.products?.cubes?.type || t.cubes?.type || '—'}
+                            </td>
                             <td>{r.name}</td>
                             <td>{peso(Number(t.products?.price || 0) * Number(t.quantity || 1))}</td>
                             <td>
@@ -1163,13 +1333,15 @@ export default function OwnerDashboard() {
                     </tbody>
                     <tfoot>
                       <tr>
-                        <td colSpan={4}><strong>Total ({salesFilterType} Sales)</strong></td>
+                        <td colSpan={4}>
+                          <strong>Total ({salesFilterType} Product Sales)</strong>
+                        </td>
                         <td colSpan={3}>
                           <strong>
                             {peso(
                               filteredSalesTx
                                 .filter(isPaidTx)
-                                .reduce((s, t) => s + Number(t.products?.price || 0) * Number(t.quantity || 1), 0)
+                                .reduce((s, t) => s + Number(t.products?.price || 0) * Number(t.quantity || 1), 0),
                             )}
                           </strong>
                         </td>
@@ -1178,7 +1350,18 @@ export default function OwnerDashboard() {
                   </table>
                 </div>
                 <TablePagination page={salesPage} totalItems={filteredSalesTx.length} onPageChange={setSalesPage} />
-                {filteredSalesTx.length === 0 && <div className="empty" style={{ marginBottom: '2.5rem' }}>No product sales transactions found for this selection.</div>}
+                {filteredSalesTx.length === 0 && (
+                  <div className="empty" style={{ marginBottom: '2.5rem' }}>
+                    No product sales transactions found for this selection.
+                    {rentalTotal > 0 && (
+                      <div style={{ marginTop: 8 }}>
+                        <button type="button" className="btn-ghost" onClick={() => setDashboardSection('rentals')}>
+                          View Paid Cube Rental Income ({peso(rentalTotal)}) →
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </>
             )}
 
@@ -1195,21 +1378,13 @@ export default function OwnerDashboard() {
                       <div className="stat">
                         <div className="label">Display Cubes Rent</div>
                         <div className="value">
-                          {peso(
-                            rentalSales
-                              .filter((r) => r.type === 'Display')
-                              .reduce((s, r) => s + r.monthly, 0)
-                          )}
+                          {peso(rentalSales.filter((r) => r.type === 'Display').reduce((s, r) => s + r.monthly, 0))}
                         </div>
                       </div>
                       <div className="stat">
                         <div className="label">Pick-up Cubes Rent</div>
                         <div className="value">
-                          {peso(
-                            rentalSales
-                              .filter((r) => r.type === 'Pick-up')
-                              .reduce((s, r) => s + r.monthly, 0)
-                          )}
+                          {peso(rentalSales.filter((r) => r.type === 'Pick-up').reduce((s, r) => s + r.monthly, 0))}
                         </div>
                       </div>
                       <div className="stat">
@@ -1222,11 +1397,7 @@ export default function OwnerDashboard() {
                       <div className="stat">
                         <div className="label">Display Cubes Rent</div>
                         <div className="value">
-                          {peso(
-                            rentalSales
-                              .filter((r) => r.type === 'Display')
-                              .reduce((s, r) => s + r.monthly, 0)
-                          )}
+                          {peso(rentalSales.filter((r) => r.type === 'Display').reduce((s, r) => s + r.monthly, 0))}
                         </div>
                       </div>
                       <div className="stat">
@@ -1241,11 +1412,7 @@ export default function OwnerDashboard() {
                       <div className="stat">
                         <div className="label">Pick-up Cubes Rent</div>
                         <div className="value">
-                          {peso(
-                            rentalSales
-                              .filter((r) => r.type === 'Pick-up')
-                              .reduce((s, r) => s + r.monthly, 0)
-                          )}
+                          {peso(rentalSales.filter((r) => r.type === 'Pick-up').reduce((s, r) => s + r.monthly, 0))}
                         </div>
                       </div>
                       <div className="stat">
@@ -1258,7 +1425,9 @@ export default function OwnerDashboard() {
                   )}
                 </div>
 
-                <h2>Monthly Rental Agreements ({rentalFilterType} Cubes · {month === 'all' ? 'All Time' : month})</h2>
+                <h2>
+                  Paid Cube Rental Agreements ({rentalFilterType} Cubes · {month === 'all' ? 'All Time' : month})
+                </h2>
                 <div className="table-wrap">
                   <table className="table">
                     <thead>
@@ -1273,34 +1442,37 @@ export default function OwnerDashboard() {
                           Type {renderSortIndicator('type', sortRentals)}
                         </th>
                         <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortRentals, setSortRentals, 'monthly')}>
-                          Monthly Rent {renderSortIndicator('monthly', sortRentals)}
+                          Paid Rent {renderSortIndicator('monthly', sortRentals)}
                         </th>
                         <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortRentals, setSortRentals, 'period')}>
-                          Contract Period {renderSortIndicator('period', sortRentals)}
+                          Contract Period / Month {renderSortIndicator('period', sortRentals)}
                         </th>
                         <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(sortRentals, setSortRentals, 'status')}>
-                          Status {renderSortIndicator('status', sortRentals)}
+                          Payment Status {renderSortIndicator('status', sortRentals)}
                         </th>
                       </tr>
                     </thead>
                     <tbody>
                       {rentalsPageRows.map((r, i) => (
                         <tr key={`${r.key || r.cube}-${i}`}>
-                          <td>{r.renter}</td>
+                          <td>
+                            <strong>{r.renter}</strong>
+                          </td>
                           <td>{r.cube}</td>
                           <td>{r.type}</td>
-                          <td>{peso(r.monthly)}</td>
+                          <td>
+                            <strong>{peso(r.monthly)}</strong>
+                          </td>
                           <td>
                             <div>{r.periodDates || r.period}</div>
                             {r.periodMonthLabel && (
-                              <div className="muted" style={{ fontSize: '0.75rem' }}>{r.periodMonthLabel}</div>
+                              <div className="muted" style={{ fontSize: '0.75rem' }}>
+                                {r.periodMonthLabel} · {r.paymentMethod}
+                              </div>
                             )}
                           </td>
                           <td>
-                            <span
-                              className="badge ok"
-                              style={{ fontSize: '0.72rem' }}
-                            >
+                            <span className="badge ok" style={{ fontSize: '0.72rem' }}>
                               Paid
                             </span>
                           </td>
@@ -1309,21 +1481,22 @@ export default function OwnerDashboard() {
                     </tbody>
                     <tfoot>
                       <tr>
-                        <td colSpan={3}><strong>Total Paid Rental ({rentalFilterType})</strong></td>
                         <td colSpan={3}>
-                          <strong>
-                            {peso(
-                              filteredRentals
-                                .reduce((s, r) => s + r.monthly, 0)
-                            )}
-                          </strong>
+                          <strong>Total Paid Rental ({rentalFilterType})</strong>
+                        </td>
+                        <td colSpan={3}>
+                          <strong>{peso(filteredRentals.reduce((s, r) => s + r.monthly, 0))}</strong>
                         </td>
                       </tr>
                     </tfoot>
                   </table>
                 </div>
                 <TablePagination page={rentalsPage} totalItems={filteredRentals.length} onPageChange={setRentalsPage} />
-                {filteredRentals.length === 0 && <div className="empty" style={{ marginBottom: '2.5rem' }}>No rental contracts found for this selection.</div>}
+                {filteredRentals.length === 0 && (
+                  <div className="empty" style={{ marginBottom: '2.5rem' }}>
+                    No rental contracts found for this selection.
+                  </div>
+                )}
               </>
             )}
           </>
@@ -1336,7 +1509,9 @@ export default function OwnerDashboard() {
           <div className="modal-card" style={{ maxWidth: 540 }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Generate & Print Report</h3>
-              <button className="modal-close" onClick={() => setIsPrintModalOpen(false)}><X size={18} /></button>
+              <button className="modal-close" onClick={() => setIsPrintModalOpen(false)}>
+                <X size={18} />
+              </button>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
@@ -1346,94 +1521,69 @@ export default function OwnerDashboard() {
                   value={printReportType}
                   onChange={(e) => {
                     setPrintReportType(e.target.value as ReportType)
-                    setPrintRenterId('all')
                   }}
                 >
-                  <option value="display">Display Sales Report</option>
-                  <option value="pickup">Pick-up Sales Report</option>
-                  <option value="rental">Monthly Rental Payment Report</option>
+                  <option value="combined">Combined Sales & Cube Rental Report</option>
+                  <option value="rental">Monthly Rental Payment Report (Cube Rent)</option>
+                  <option value="display">Display Sales Report (Product Sales)</option>
+                  <option value="pickup">Pick-up Sales Report (Product Sales)</option>
                 </select>
               </div>
 
-              {printReportType !== 'rental' && (
-                <>
+              <div className="field">
+                <label>Date Filter Period</label>
+                <select value={printDateMode} onChange={(e) => setPrintDateMode(e.target.value as DateFilterMode)}>
+                  <option value="all">All Paid Records (Recommended)</option>
+                  <option value="monthly">Monthly (Specific month)</option>
+                  <option value="daily">Daily (Specific single date)</option>
+                  <option value="yearly">Yearly (Full calendar year)</option>
+                  <option value="custom">Custom Date Range (Start to End date)</option>
+                </select>
+              </div>
+
+              {printDateMode === 'monthly' && (
+                <div className="field">
+                  <label>Select Month</label>
+                  <input type="month" value={printMonth} onChange={(e) => setPrintMonth(e.target.value)} />
+                </div>
+              )}
+
+              {printDateMode === 'daily' && (
+                <div className="field">
+                  <label>Select Date</label>
+                  <input type="date" value={printDaily} onChange={(e) => setPrintDaily(e.target.value)} />
+                </div>
+              )}
+
+              {printDateMode === 'yearly' && (
+                <div className="field">
+                  <label>Select Year</label>
+                  <input
+                    type="number"
+                    min="2020"
+                    max="2035"
+                    value={printYearly}
+                    onChange={(e) => setPrintYearly(e.target.value)}
+                  />
+                </div>
+              )}
+
+              {printDateMode === 'custom' && (
+                <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                   <div className="field">
-                    <label>Date Filter Period</label>
-                    <select
-                      value={printDateMode}
-                      onChange={(e) => setPrintDateMode(e.target.value as DateFilterMode)}
-                    >
-                      <option value="monthly">Monthly (e.g. 2026-10)</option>
-                      <option value="daily">Daily (Specific single date)</option>
-                      <option value="yearly">Yearly (Full calendar year)</option>
-                      <option value="custom">Custom Date Range (Start to End date)</option>
-                    </select>
+                    <label>Start Date</label>
+                    <input type="date" value={printStartDate} onChange={(e) => setPrintStartDate(e.target.value)} />
                   </div>
-
-                  {printDateMode === 'monthly' && (
-                    <div className="field">
-                      <label>Select Month</label>
-                      <input
-                        type="month"
-                        value={printMonth}
-                        onChange={(e) => setPrintMonth(e.target.value)}
-                      />
-                    </div>
-                  )}
-
-                  {printDateMode === 'daily' && (
-                    <div className="field">
-                      <label>Select Date</label>
-                      <input
-                        type="date"
-                        value={printDaily}
-                        onChange={(e) => setPrintDaily(e.target.value)}
-                      />
-                    </div>
-                  )}
-
-                  {printDateMode === 'yearly' && (
-                    <div className="field">
-                      <label>Select Year</label>
-                      <input
-                        type="number"
-                        min="2020"
-                        max="2035"
-                        value={printYearly}
-                        onChange={(e) => setPrintYearly(e.target.value)}
-                      />
-                    </div>
-                  )}
-
-                  {printDateMode === 'custom' && (
-                    <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                      <div className="field">
-                        <label>Start Date</label>
-                        <input
-                          type="date"
-                          value={printStartDate}
-                          onChange={(e) => setPrintStartDate(e.target.value)}
-                        />
-                      </div>
-                      <div className="field">
-                        <label>End Date</label>
-                        <input
-                          type="date"
-                          value={printEndDate}
-                          onChange={(e) => setPrintEndDate(e.target.value)}
-                        />
-                      </div>
-                    </div>
-                  )}
-                </>
+                  <div className="field">
+                    <label>End Date</label>
+                    <input type="date" value={printEndDate} onChange={(e) => setPrintEndDate(e.target.value)} />
+                  </div>
+                </div>
               )}
 
               <div className="field">
                 <label>Renter Filter</label>
-                <select
-                  value={printRenterId}
-                  onChange={(e) => setPrintRenterId(e.target.value)}
-                >
+                <select value={printRenterId} onChange={(e) => setPrintRenterId(e.target.value)}>
                   <option value="all">All Renters ({filteredRentersForReport.length})</option>
                   {filteredRentersForReport.map((r) => (
                     <option key={r.user_id} value={r.user_id}>
@@ -1444,8 +1594,26 @@ export default function OwnerDashboard() {
               </div>
 
               <div className="alert info" style={{ fontSize: '0.85rem' }}>
-                Preview summary: <strong>{printFilteredData.list.length} records</strong> found.
-                Total: <strong>{peso(printFilteredData.total)}</strong>
+                <div>
+                  Preview summary: <strong>{printFilteredData.list.length} records</strong> found. Total:{' '}
+                  <strong>{peso(printFilteredData.total)}</strong>
+                </div>
+                {(printReportType === 'display' || printReportType === 'pickup') &&
+                  printFilteredData.txTotal === 0 &&
+                  printFilteredData.rentalTotal > 0 && (
+                    <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #bae6fd' }}>
+                      Note: Selected renter(s) have <strong>{peso(printFilteredData.rentalTotal)}</strong> in Paid Cube Rental
+                      (Month 1 / Installments).{' '}
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        style={{ padding: '2px 8px', fontSize: '0.78rem', textDecoration: 'underline', color: '#0369a1' }}
+                        onClick={() => setPrintReportType('rental')}
+                      >
+                        Switch to Monthly Rental Payment Report
+                      </button>
+                    </div>
+                  )}
               </div>
 
               <div className="row" style={{ justifyContent: 'flex-end', marginTop: '1rem', gap: '0.6rem', flexWrap: 'wrap' }}>
@@ -1461,12 +1629,7 @@ export default function OwnerDashboard() {
                 >
                   <Printer size={16} /> Print Report
                 </button>
-                <button
-                  className="btn"
-                  type="button"
-                  onClick={handleDownloadPdf}
-                  title="Download standalone PDF document"
-                >
+                <button className="btn" type="button" onClick={handleDownloadPdf} title="Download standalone PDF document">
                   <Download size={16} /> Preview PDF
                 </button>
               </div>
@@ -1477,15 +1640,38 @@ export default function OwnerDashboard() {
 
       {pdfPreviewUrl && (
         <div className="modal-overlay no-print" onClick={() => setPdfPreviewUrl(null)}>
-          <div className="modal-card" style={{ maxWidth: 980, width: '96vw', height: '90vh', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
+          <div
+            className="modal-card"
+            style={{ maxWidth: 980, width: '96vw', height: '90vh', display: 'flex', flexDirection: 'column' }}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="modal-header">
-              <div><h3 style={{ margin: 0 }}>PDF Preview</h3><p className="muted" style={{ margin: '0.2rem 0 0', fontSize: '.85rem' }}>Review the report before downloading it.</p></div>
-              <button className="modal-close" onClick={() => setPdfPreviewUrl(null)}><X size={18} /></button>
+              <div>
+                <h3 style={{ margin: 0 }}>PDF Preview</h3>
+                <p className="muted" style={{ margin: '0.2rem 0 0', fontSize: '.85rem' }}>
+                  Review the report before downloading it.
+                </p>
+              </div>
+              <button className="modal-close" onClick={() => setPdfPreviewUrl(null)}>
+                <X size={18} />
+              </button>
             </div>
-            <iframe title="Report PDF preview" src={pdfPreviewUrl} style={{ flex: 1, width: '100%', border: '1px solid #e2e8f0', borderRadius: 8, marginTop: 12 }} />
+            <iframe
+              title="Report PDF preview"
+              src={pdfPreviewUrl}
+              style={{ flex: 1, width: '100%', border: '1px solid #e2e8f0', borderRadius: 8, marginTop: 12 }}
+            />
             <div className="row" style={{ justifyContent: 'flex-end', marginTop: 12 }}>
-              <button className="btn-ghost" type="button" onClick={() => setPdfPreviewUrl(null)}>Back</button>
-              <a className="btn" href={pdfPreviewUrl} download={`TrackErentory_${printReportType}_${new Date().toISOString().slice(0, 10)}.pdf`}><Download size={16} /> Download PDF</a>
+              <button className="btn-ghost" type="button" onClick={() => setPdfPreviewUrl(null)}>
+                Back
+              </button>
+              <a
+                className="btn"
+                href={pdfPreviewUrl}
+                download={`TrackErentory_${printReportType}_${todayISO()}.pdf`}
+              >
+                <Download size={16} /> Download PDF
+              </a>
             </div>
           </div>
         </div>
@@ -1494,24 +1680,57 @@ export default function OwnerDashboard() {
       {/* ════════════ DEDICATED PRINT DOCUMENT ════════════ */}
       <div id="owner-print-report" className="print-report-container">
         <div className="report-header-brand" style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
-          <img src="/TrackErentory.svg" alt="TrackErentory" className="brand-logo" style={{ height: 56, width: 56, objectFit: 'contain' }} />
+          <img
+            src="/TrackErentory.svg"
+            alt="TrackErentory"
+            className="brand-logo"
+            style={{ height: 56, width: 56, objectFit: 'contain' }}
+          />
           <div>
-            <div style={{ fontSize: '1.5rem', fontWeight: 700, letterSpacing: '0.05em', lineHeight: 1.15, textTransform: 'uppercase', color: '#000' }}>
+            <div
+              style={{
+                fontSize: '1.5rem',
+                fontWeight: 700,
+                letterSpacing: '0.05em',
+                lineHeight: 1.15,
+                textTransform: 'uppercase',
+                color: '#000',
+              }}
+            >
               TRACKERENTORY
             </div>
-            <div style={{ fontSize: '1rem', color: '#333', marginTop: 2 }}>
-              Arce Concept Store
-            </div>
+            <div style={{ fontSize: '1rem', color: '#333', marginTop: 2 }}>Arce Concept Store</div>
           </div>
         </div>
 
-        <div style={{ textAlign: 'center', fontSize: '1.35rem', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', margin: '1.75rem 0 1.25rem', color: '#000' }}>
+        <div
+          style={{
+            textAlign: 'center',
+            fontSize: '1.35rem',
+            fontWeight: 700,
+            letterSpacing: '0.05em',
+            textTransform: 'uppercase',
+            margin: '1.75rem 0 1.25rem',
+            color: '#000',
+          }}
+        >
           {printReportType === 'display' && 'DISPLAY SALES REPORT'}
           {printReportType === 'pickup' && 'PICK-UP SALES REPORT'}
           {printReportType === 'rental' && 'MONTHLY RENTAL PAYMENT REPORT'}
+          {printReportType === 'combined' && 'COMBINED SALES & CUBE RENTAL REPORT'}
         </div>
 
-        <div className="print-report-meta" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.95rem', color: '#000', marginBottom: '0.65rem' }}>
+        <div
+          className="print-report-meta"
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            fontSize: '0.95rem',
+            color: '#000',
+            marginBottom: '0.65rem',
+          }}
+        >
           <span>period: {printPeriodLabel}</span>
           <span>renter: {selectedRenterName}</span>
           <span>date generated: {new Date().toLocaleDateString('en-PH')}</span>
@@ -1519,26 +1738,29 @@ export default function OwnerDashboard() {
 
         <hr style={{ border: 'none', borderTop: '2px solid #000', margin: '0 0 1.25rem' }} />
 
-        {printReportType === 'rental' ? (
-          <table className="print-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem', marginBottom: '1.5rem' }}>
+        {(printReportType === 'rental' || printReportType === 'combined') && (
+          <table
+            className="print-table"
+            style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem', marginBottom: '1.5rem' }}
+          >
             <thead>
               <tr>
                 <th style={{ textAlign: 'left' }}>renter</th>
                 <th>cube no.</th>
                 <th>type</th>
-                <th>contract period</th>
-                <th style={{ textAlign: 'right' }}>monthly rent</th>
+                <th>contract period / installment</th>
+                <th style={{ textAlign: 'right' }}>paid rent</th>
               </tr>
             </thead>
             <tbody>
-              {printFilteredData.list.length === 0 ? (
+              {printFilteredData.rentalList.length === 0 ? (
                 <tr>
                   <td colSpan={5} style={{ textAlign: 'center', padding: '1.5rem', color: '#6b7280' }}>
-                    No rental contracts found for this selection.
+                    No paid rental contracts found for this selection.
                   </td>
                 </tr>
               ) : (
-                (printFilteredData.list as typeof rentalSales).map((r, i) => (
+                printFilteredData.rentalList.map((r, i) => (
                   <tr key={i}>
                     <td style={{ textAlign: 'left' }}>{r.renter}</td>
                     <td style={{ textAlign: 'center' }}>{r.cube}</td>
@@ -1546,7 +1768,9 @@ export default function OwnerDashboard() {
                     <td style={{ textAlign: 'center' }}>
                       <div>{r.periodDates || r.period}</div>
                       {r.periodMonthLabel && (
-                        <div style={{ fontSize: '0.75rem', color: '#555' }}>{r.periodMonthLabel}</div>
+                        <div style={{ fontSize: '0.75rem', color: '#555' }}>
+                          {r.periodMonthLabel} · {r.paymentMethod}
+                        </div>
                       )}
                     </td>
                     <td style={{ textAlign: 'right' }}>{peso(r.monthly)}</td>
@@ -1556,13 +1780,18 @@ export default function OwnerDashboard() {
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={4}>total rental income</td>
-                <td style={{ textAlign: 'right' }}>{peso(printFilteredData.total)}</td>
+                <td colSpan={4}>total paid rental income</td>
+                <td style={{ textAlign: 'right' }}>{peso(printFilteredData.rentalTotal)}</td>
               </tr>
             </tfoot>
           </table>
-        ) : (
-          <table className="print-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem', marginBottom: '1.5rem' }}>
+        )}
+
+        {printReportType !== 'rental' && (
+          <table
+            className="print-table"
+            style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem', marginBottom: '1.5rem' }}
+          >
             <thead>
               <tr>
                 <th style={{ textAlign: 'left' }}>product</th>
@@ -1576,14 +1805,14 @@ export default function OwnerDashboard() {
               </tr>
             </thead>
             <tbody>
-              {printFilteredData.list.length === 0 ? (
+              {printFilteredData.txList.length === 0 ? (
                 <tr>
                   <td colSpan={8} style={{ textAlign: 'center', padding: '1.5rem', color: '#6b7280' }}>
                     No sales transactions found for this period.
                   </td>
                 </tr>
               ) : (
-                (printFilteredData.list as Transaction[]).map((t) => {
+                printFilteredData.txList.map((t) => {
                   const r = getTxRenter(t)
                   const amt = Number(t.products?.price || 0) * Number(t.quantity || 1)
                   const txDate = new Date(t.transaction_date).toLocaleDateString('en-PH')
@@ -1593,9 +1822,13 @@ export default function OwnerDashboard() {
                     <tr key={t.transaction_id}>
                       <td style={{ textAlign: 'left' }}>
                         <div>{t.products?.product_name || t.product_name || '—'}</div>
-                        {t.products?.variant && <div style={{ fontSize: '0.75rem', color: '#555' }}>Variant: {t.products.variant}</div>}
+                        {t.products?.variant && (
+                          <div style={{ fontSize: '0.75rem', color: '#555' }}>Variant: {t.products.variant}</div>
+                        )}
                       </td>
-                      <td style={{ textAlign: 'center' }}>{t.products?.cubes?.cube_number || t.cubes?.cube_number || '—'}</td>
+                      <td style={{ textAlign: 'center' }}>
+                        {t.products?.cubes?.cube_number || t.cubes?.cube_number || '—'}
+                      </td>
                       <td style={{ textAlign: 'center' }}>{r.name}</td>
                       <td style={{ textAlign: 'center' }}>{txDate}</td>
                       <td style={{ textAlign: 'center' }}>{paymentStr}</td>
@@ -1609,14 +1842,17 @@ export default function OwnerDashboard() {
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={7}>overall total</td>
-                <td style={{ textAlign: 'right' }}>{peso(printFilteredData.total)}</td>
+                <td colSpan={7}>total product sales</td>
+                <td style={{ textAlign: 'right' }}>{peso(printFilteredData.txTotal)}</td>
               </tr>
             </tfoot>
           </table>
         )}
 
-        <div className="print-report-signatures" style={{ display: 'flex', justifyContent: 'space-between', marginTop: '5rem', padding: '0 1.5rem' }}>
+        <div
+          className="print-report-signatures"
+          style={{ display: 'flex', justifyContent: 'space-between', marginTop: '5rem', padding: '0 1.5rem' }}
+        >
           <div>
             <div className="sig-line" style={{ width: 190, borderBottom: '1px solid #000', marginBottom: '0.5rem' }}></div>
             <div style={{ fontSize: '0.92rem', color: '#000' }}>prepared by</div>

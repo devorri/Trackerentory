@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Check, X } from 'lucide-react'
 import { useAuth, type AppUser } from '../context/Auth'
@@ -29,8 +29,8 @@ function PasswordStrengthIndicator({ checks }: { checks: PasswordCheck[] }) {
 }
 
 export default function LoginPage() {
-  const [mode, setMode] = useState<AuthMode>('signin')
   const [searchParams] = useSearchParams()
+  const [mode, setMode] = useState<AuthMode>(() => (searchParams.get('mode') === 'signup' ? 'signup' : 'signin'))
 
   // Sign in state
   const [username, setUsername] = useState('')
@@ -53,7 +53,7 @@ export default function LoginPage() {
   const [signupUsername, setSignupUsername] = useState('')
   const [signupPassword, setSignupPassword] = useState('')
   const [signupConfirmPw, setSignupConfirmPw] = useState('')
-  const [role, setRole] = useState<AppUser['role']>('Customer')
+  const [role, setRole] = useState<AppUser['role']>(() => (searchParams.get('role') === 'Renter' ? 'Renter' : 'Customer'))
   const [otpCode, setOtpCode] = useState('')
 
   // Forgot password state
@@ -70,6 +70,13 @@ export default function LoginPage() {
 
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
+
+  useEffect(() => {
+    const qMode = searchParams.get('mode')
+    const qRole = searchParams.get('role')
+    if (qMode === 'signup') setMode('signup')
+    if (qRole === 'Renter' || qRole === 'Customer') setRole(qRole)
+  }, [searchParams])
 
   function switchMode(m: AuthMode) {
     setMode(m)
@@ -102,6 +109,9 @@ export default function LoginPage() {
 
   // ── SIGN IN (Step 1: credentials → Step 2: OTP) ──
   async function handleSignInCredentials() {
+    if (!username.trim() || !password) {
+      return setError('Please enter both your username and password.')
+    }
     setLoading(true)
     setError('')
 
@@ -109,7 +119,7 @@ export default function LoginPage() {
     const { data, error: dbError } = await supabase
       .from('users')
       .select('user_id, full_name, role, status, salary, username, email, deleted_at')
-      .eq('username', username)
+      .eq('username', username.trim())
       .eq('password', password)
       .maybeSingle()
 
@@ -135,7 +145,7 @@ export default function LoginPage() {
     // Check if user has email for 2FA
     if (!appUser.email) {
       setLoading(false)
-        return setError('This account needs a registered email address before it can sign in. Ask the owner to update the account email.')
+      return setError('This account needs a registered email address before it can sign in. Ask the owner to update the account email.')
     }
 
     // Send OTP for 2FA
@@ -169,7 +179,7 @@ export default function LoginPage() {
     }
 
     // OTP verified — complete sign in
-    const result = await signIn(username, password)
+    const result = await signIn(username.trim(), password)
     setLoading(false)
     if (result.error) return setError(result.error)
 
@@ -180,19 +190,31 @@ export default function LoginPage() {
 
   // ── SIGN UP ──
   async function handleSignupSubmitForm() {
-    if (!fullName || !signupUsername || !signupPassword || !signupEmail) {
-      return setError('Please fill in all required fields.')
+    const cleanName = fullName.trim()
+    const cleanEmail = signupEmail.trim()
+    const cleanUsername = signupUsername.trim()
+    const cleanPhone = signupPhone.trim()
+    const cleanSocial = signupSocial.trim()
+
+    if (!cleanName || !cleanEmail || !cleanUsername || !signupPassword || !signupConfirmPw) {
+      return setError('All fields are required. Please do not leave any field blank.')
     }
 
-    if (/\d/.test(fullName)) {
+    if (role === 'Renter' && (!cleanPhone || !cleanSocial)) {
+      return setError('All fields (including Contact Number and Social Media Link) are required. Please do not leave any field blank.')
+    }
+
+    if (/\d/.test(cleanName)) {
       return setError('Full name cannot contain numbers.')
     }
 
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return setError('Please enter a valid email address.')
+    }
+
     if (role === 'Renter') {
-      if (!signupPhone) {
-        return setError('Contact number is required for Renter accounts.')
-      }
-      if (signupPhone.length < 10) {
+      const digitsOnly = cleanPhone.replace(/\D/g, '')
+      if (digitsOnly.length < 10 || digitsOnly.length > 11) {
         return setError('Please enter a valid 10-11 digit contact number.')
       }
     }
@@ -215,7 +237,7 @@ export default function LoginPage() {
     const { data: existing } = await supabase
       .from('users')
       .select('user_id')
-      .eq('username', signupUsername)
+      .eq('username', cleanUsername)
       .maybeSingle()
     if (existing) {
       setLoading(false)
@@ -223,7 +245,7 @@ export default function LoginPage() {
     }
 
     // Send OTP to email
-    const otpResult = await requestOtp(signupEmail, 'create_account')
+    const otpResult = await requestOtp(cleanEmail, 'create_account')
     setLoading(false)
     if (otpResult.error) return setError('Failed to send OTP: ' + otpResult.error)
 
@@ -243,7 +265,7 @@ export default function LoginPage() {
     setLoading(true)
     setError('')
 
-    const verify = await verifyOtp(signupEmail, otpCode, 'create_account')
+    const verify = await verifyOtp(signupEmail.trim(), otpCode, 'create_account')
     if (!verify.valid) {
       setLoading(false)
       return setError(verify.error || 'Invalid code.')
@@ -251,12 +273,12 @@ export default function LoginPage() {
 
     // Create the account
     const result = await signUp({
-      full_name: fullName,
-      username: signupUsername,
+      full_name: fullName.trim(),
+      username: signupUsername.trim(),
       password: signupPassword,
-      email: signupEmail,
-      phone_number: role === 'Renter' ? signupPhone : undefined,
-      social_link: role === 'Renter' && signupSocial ? signupSocial.trim() : undefined,
+      email: signupEmail.trim(),
+      phone_number: role === 'Renter' ? signupPhone.trim() : undefined,
+      social_link: role === 'Renter' ? signupSocial.trim() : undefined,
       role,
     })
     setLoading(false)
@@ -269,7 +291,7 @@ export default function LoginPage() {
 
   // ── FORGOT PASSWORD ──
   async function handleForgotSendOtp() {
-    if (!forgotUsername) return setError('Enter your username.')
+    if (!forgotUsername.trim()) return setError('Enter your username.')
     setLoading(true)
     setError('')
 
@@ -277,7 +299,7 @@ export default function LoginPage() {
     const { data: user } = await supabase
       .from('users')
       .select('user_id, email, username')
-      .eq('username', forgotUsername)
+      .eq('username', forgotUsername.trim())
       .maybeSingle()
 
     if (!user || !user.email) {
@@ -315,6 +337,9 @@ export default function LoginPage() {
   }
 
   async function handleForgotResetPassword() {
+    if (!newPassword || !newPasswordConfirm) {
+      return setError('Please fill in both password fields.')
+    }
     // Password strength
     const strength = validatePasswordStrength(newPassword)
     if (!strength.valid) {
@@ -327,7 +352,7 @@ export default function LoginPage() {
     setLoading(true)
     setError('')
 
-    const result = await resetPassword(forgotUsername, newPassword)
+    const result = await resetPassword(forgotUsername.trim(), newPassword)
     setLoading(false)
     if (result.error) return setError(result.error)
 
@@ -376,7 +401,7 @@ export default function LoginPage() {
           <p className="lede">Enter the verification code sent to your email.</p>
         )}
         {mode === 'signup' && (
-          <p className="lede">Create a Customer or Renter account. Staff are added by the Owner.</p>
+          <p className="lede">Create a Customer (for product reservations) or Renter (for cube rentals) account. All fields are required.</p>
         )}
         {mode === 'forgot' && (
           <p className="lede">Reset your password using your registered email.</p>
@@ -469,30 +494,34 @@ export default function LoginPage() {
             {signupStep === 'form' && (
               <>
                 <div className="field">
-                  <label>Full name</label>
+                  <label>Full name *</label>
                   <input
+                    required
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
                     placeholder="e.g. Maria Santos"
                   />
                 </div>
                 <div className="field">
-                  <label>Role</label>
+                  <label>Role *</label>
                   <select value={role} onChange={(e) => setRole(e.target.value as AppUser['role'])}>
                     {PUBLIC_ROLES.map((r) => (
-                      <option key={r} value={r}>{r}</option>
+                      <option key={r} value={r}>
+                        {r === 'Customer' ? 'Customer (Reserve Display Products)' : 'Renter (Rent Display / Pick-up Cubes)'}
+                      </option>
                     ))}
                   </select>
                 </div>
                 <div className="field">
-                  <label>Email</label>
-                  <input type="email" value={signupEmail} onChange={(e) => setSignupEmail(e.target.value)} placeholder="your@email.com" />
+                  <label>Email *</label>
+                  <input required type="email" value={signupEmail} onChange={(e) => setSignupEmail(e.target.value)} placeholder="your@email.com" />
                 </div>
                 {role === 'Renter' && (
                   <>
                     <div className="field">
-                      <label>Contact Number</label>
+                      <label>Contact Number *</label>
                       <input
+                        required
                         type="tel"
                         value={signupPhone}
                         onChange={(e) => setSignupPhone(e.target.value)}
@@ -500,8 +529,9 @@ export default function LoginPage() {
                       />
                     </div>
                     <div className="field">
-                      <label>Social Media Link</label>
+                      <label>Social Media Link *</label>
                       <input
+                        required
                         type="text"
                         value={signupSocial}
                         onChange={(e) => setSignupSocial(e.target.value)}
@@ -511,18 +541,18 @@ export default function LoginPage() {
                   </>
                 )}
                 <div className="field">
-                  <label>Username</label>
-                  <input value={signupUsername} onChange={(e) => setSignupUsername(e.target.value)} autoComplete="username" />
+                  <label>Username *</label>
+                  <input required value={signupUsername} onChange={(e) => setSignupUsername(e.target.value)} autoComplete="username" />
                 </div>
                 <PasswordInput
-                  label="Password"
+                  label="Password *"
                   value={signupPassword}
                   onChange={(e) => setSignupPassword(e.target.value)}
                   autoComplete="new-password"
                 />
                 {signupPassword && <PasswordStrengthIndicator checks={signupPwChecks} />}
                 <PasswordInput
-                  label="Confirm password"
+                  label="Confirm password *"
                   value={signupConfirmPw}
                   onChange={(e) => setSignupConfirmPw(e.target.value)}
                   autoComplete="new-password"

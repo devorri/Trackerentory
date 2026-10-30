@@ -534,14 +534,15 @@ export default function OwnerProductsPage() {
                   </td>
                   <td>{peso(p.price)}</td>
                   <td>
-                    <span
-                      style={{
-                        fontWeight: 700,
-                        color: p.stock_quantity <= 0 ? 'var(--danger, #e53935)' : 'inherit',
-                      }}
-                    >
-                      {p.stock_quantity}
-                    </span>
+                    {p.stock_quantity > 0 ? (
+                      <span style={{ fontWeight: 700, color: '#16a34a' }}>
+                        {p.stock_quantity} Available
+                      </span>
+                    ) : (
+                      <span className="badge bad" style={{ fontSize: '0.72rem' }}>
+                        Sold Out (0)
+                      </span>
+                    )}
                   </td>
                   <td>
                     {p.category ? (

@@ -17,6 +17,7 @@ import {
   type Reservation,
   type Cube,
   type Product,
+  type Contract,
   isReservationExpired,
   getReservationHoursLeft,
   parseReservationExpiry,
@@ -25,6 +26,7 @@ import {
   addMonths,
 } from '../lib/types'
 import { cancelExpiredReservations, expireContracts } from '../lib/maintenance'
+import { saveContractPaymentInDb } from '../lib/contract-meta'
 import { SkeletonTable } from '../components/Skeleton'
 import TablePagination, { DEFAULT_PAGE_SIZE } from '../components/TablePagination'
 
@@ -106,7 +108,7 @@ export default function ReservationsPage() {
       })
     }
 
-    const rawContracts = (conQuery.data || []) as any[]
+    const rawContracts = (conQuery.data || []) as Contract[]
     const reservations: Reservation[] = ((resQuery.data || []) as any[]).map((r) => {
       const prod = r.product_id ? prodMap.get(r.product_id) || null : null
       const cube = r.cube_id ? cubeMap.get(r.cube_id) || null : prod?.cubes || null
@@ -119,7 +121,7 @@ export default function ReservationsPage() {
       } as Reservation
     })
 
-    // Sync cube reservation rows with contracts and synthesize missing cube reservation entries from contracts
+    // Sync cube reservation rows with contracts and synthesize missing Pending cube reservation entries from contracts
     for (const r of reservations) {
       if (r.cube_id && !r.product_id) {
         const matchingContract = rawContracts.find(
@@ -137,30 +139,27 @@ export default function ReservationsPage() {
     }
 
     for (const c of rawContracts) {
-      if (!c.cube_id) continue
-      const mappedStatus: Reservation['status'] =
-        c.status === 'Active' ? 'Confirmed' : c.status === 'Expired' ? 'Cancelled' : 'Pending'
+      if (!c.cube_id || c.status !== 'Pending') continue
       const alreadyExists = reservations.some(
         (r) =>
           !r.product_id &&
           r.cube_id === c.cube_id &&
           r.customer_id === c.renter_id &&
-          r.status === mappedStatus,
+          r.status === 'Pending',
       )
       if (!alreadyExists) {
-        const startD = c.start_date ? new Date(c.start_date) : new Date()
-        const endD = c.end_date ? new Date(`${c.end_date}T23:59:59`) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
-        const hoursValid = Math.max(24, Math.round((endD.getTime() - startD.getTime()) / (1000 * 60 * 60)))
+        const createdMs = c.created_at ? new Date(c.created_at).getTime() : Date.now()
+        const endD = new Date(createdMs + 4 * 60 * 60 * 1000)
         reservations.push({
           reservation_id: -Number(c.contract_id),
           product_id: null,
           cube_id: c.cube_id,
-          customer_id: c.renter_id,
+          customer_id: c.renter_id || undefined,
           expiry_time: endD.toISOString(),
-          hours_valid: hoursValid,
-          status: mappedStatus,
+          hours_valid: 4,
+          status: 'Pending',
           cubes: cubeMap.get(c.cube_id) || null,
-          customer: userMap.get(c.renter_id),
+          customer: c.renter_id ? userMap.get(c.renter_id) : undefined,
           ...({ contract_id: c.contract_id, start_date: c.start_date, end_date: c.end_date } as any),
         })
       }
@@ -171,7 +170,7 @@ export default function ReservationsPage() {
         ? reservations.filter((r) => r.customer_id === user.user_id)
         : user.role === 'Renter'
           ? reservations.filter((r) => r.products?.renter_id === user.user_id || r.customer_id === user.user_id)
-          : reservations.filter((r) => r.cube_id && !r.product_id)
+          : reservations
 
     setRows(visible)
   }
@@ -217,46 +216,121 @@ export default function ReservationsPage() {
     void load()
   }
 
+  async function confirmProductReservation(r: Reservation) {
+    if (!r.product_id) return
+    setBusyId(r.reservation_id)
+    try {
+      const prod = r.products
+      const currentStock = Number(prod?.stock_quantity ?? 0)
+      if (prod && currentStock <= 0) {
+        setBusyId(null)
+        return alert(`"${prod.product_name}" is already out of stock (Sold Out).`)
+      }
+
+      // 1. Mark reservation as Confirmed
+      const { error: resErr } = await supabase
+        .from('reservations')
+        .update({ status: 'Confirmed' })
+        .eq('reservation_id', r.reservation_id)
+      if (resErr) throw resErr
+
+      // 2. Record Paid & Picked-up sale transaction in public.transactions
+      const prodName = prod
+        ? `${prod.product_name}${prod.variant ? ` (${prod.variant})` : ''}`
+        : `Product #${r.product_id}`
+      const { error: txErr } = await supabase.from('transactions').insert([
+        {
+          product_id: r.product_id,
+          product_name: prodName,
+          cube_id: prod?.cube_id || r.cube_id || null,
+          renter_id: prod?.renter_id || null,
+          buyer_name: r.customer?.full_name || 'Reserved Customer',
+          payment_status: 'Paid',
+          payment_method: 'Cash',
+          pickup_status: 'Picked-up',
+          quantity: 1,
+          listed_quantity: prod?.stock_quantity ?? 1,
+          notes: `Confirmed from Customer Reservation #${r.reservation_id}`,
+          processed_by: user?.user_id || null,
+          updated_at: new Date().toISOString(),
+        },
+      ])
+      if (txErr) throw txErr
+
+      // 3. Deduct stock_quantity on public.products so Catalogue & Product Management show Sold
+      if (prod && currentStock > 0) {
+        await supabase
+          .from('products')
+          .update({ stock_quantity: Math.max(0, currentStock - 1) })
+          .eq('product_id', r.product_id)
+      }
+
+      setBusyId(null)
+      alert(`Customer reservation for "${prodName}" confirmed as Sold & Paid!`)
+      void load()
+    } catch (err) {
+      setBusyId(null)
+      console.error(err)
+      alert(err instanceof Error ? err.message : 'Failed to confirm product reservation.')
+    }
+  }
+
   async function approveCubeReservation(r: Reservation) {
     if (!r.cube_id || !r.customer_id) return
     setBusyId(r.reservation_id)
     try {
+      let activeContract: Contract | null = null
       const contractId = (r as any).contract_id || (r.reservation_id < 0 ? Math.abs(r.reservation_id) : null)
       if (contractId) {
-        const { error: conErr } = await supabase
+        const { data: updatedCon, error: conErr } = await supabase
           .from('contracts')
           .update({ status: 'Active' })
           .eq('contract_id', contractId)
+          .select('*')
+          .single()
         if (conErr) throw conErr
+        activeContract = updatedCon as Contract
       } else {
         const { data: existingPending } = await supabase
           .from('contracts')
-          .select('contract_id')
+          .select('*')
           .eq('cube_id', r.cube_id)
           .eq('renter_id', r.customer_id)
           .eq('status', 'Pending')
           .limit(1)
         if (existingPending && existingPending.length > 0) {
-          const { error: conErr } = await supabase
+          const { data: updatedCon, error: conErr } = await supabase
             .from('contracts')
             .update({ status: 'Active' })
             .eq('contract_id', existingPending[0].contract_id)
+            .select('*')
+            .single()
           if (conErr) throw conErr
+          activeContract = updatedCon as Contract
         } else {
           const start = todayISO()
-          const months = Math.max(1, Math.round((r.hours_valid || 720) / 720))
-          const end = addMonths(start, months)
-          const { error: insErr } = await supabase.from('contracts').insert([
-            {
-              renter_id: r.customer_id,
-              cube_id: r.cube_id,
-              start_date: start,
-              end_date: end,
-              status: 'Active',
-            },
-          ])
+          const end = addMonths(start, 1)
+          const { data: insCon, error: insErr } = await supabase
+            .from('contracts')
+            .insert([
+              {
+                renter_id: r.customer_id,
+                cube_id: r.cube_id,
+                start_date: start,
+                end_date: end,
+                status: 'Active',
+              },
+            ])
+            .select('*')
+            .single()
           if (insErr) throw insErr
+          activeContract = insCon as Contract
         }
+      }
+
+      if (activeContract) {
+        const monthlyRate = Number(r.cubes?.price_per_month || 0)
+        await saveContractPaymentInDb(activeContract, 1, 'Paid', monthlyRate, 'Cash')
       }
 
       if (r.reservation_id > 0) {
@@ -273,7 +347,7 @@ export default function ReservationsPage() {
       await supabase.from('cubes').update({ status: 'Occupied' }).eq('cube_id', r.cube_id)
 
       setBusyId(null)
-      alert(`Cube #${r.cubes?.cube_number || r.cube_id} reservation approved and rental contract activated!`)
+      alert(`Cube #${r.cubes?.cube_number || r.cube_id} reservation approved, Month 1 marked Paid, and rental contract activated!`)
       void load()
     } catch (err) {
       setBusyId(null)
@@ -361,7 +435,7 @@ export default function ReservationsPage() {
         if (search.trim()) {
           const q = search.toLowerCase()
           const pName = r.products?.product_name?.toLowerCase() || ''
-          const cNum = r.cubes?.cube_number?.toLowerCase() || ''
+          const cNum = (r.cubes?.cube_number || r.products?.cubes?.cube_number || '').toLowerCase()
           const custName = r.customer?.full_name?.toLowerCase() || ''
           const custEmail = r.customer?.email?.toLowerCase() || ''
           const matches =
@@ -431,13 +505,13 @@ export default function ReservationsPage() {
     <section>
       <div className="page-header">
         <div>
-          <h1>{isStaffOrOwner ? 'Cube Reservations' : user.role === 'Customer' ? 'My Reservations' : 'Reservations Hub'}</h1>
+          <h1>{isStaffOrOwner ? 'Reservations Management' : user.role === 'Customer' ? 'My Product Reservations' : 'Reservations Hub'}</h1>
           <p className="lede">
             {isStaffOrOwner
-              ? 'Review and approve cube rental reservations to generate and activate lease agreements.'
+              ? 'Review and confirm customer product reservations and renter cube reservations.'
               : user.role === 'Customer'
-              ? 'Manage your reserved shop products and cube rental reservations before they expire.'
-              : 'Review and track customer and cube reservations.'}
+              ? 'Manage your reserved shop products before their hold timer expires.'
+              : 'Review and track customer product reservations and your cube rental reservations.'}
           </p>
         </div>
         {counts.pending > 0 && isStaffOrOwner && (
@@ -456,7 +530,7 @@ export default function ReservationsPage() {
           >
             <AlertTriangle size={18} color="#b45309" />
             <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#92400e' }}>
-              {counts.pending} reservation(s) awaiting approval
+              {counts.pending} reservation(s) awaiting confirmation
             </span>
             <Link
               to="/contracts"
@@ -471,31 +545,31 @@ export default function ReservationsPage() {
                 textDecoration: 'none',
               }}
             >
-              Review in Contracts →
+              Review Contracts →
             </Link>
           </div>
         )}
       </div>
 
-      {/* ── Type Filter Tabs ── */}
-      {!isStaffOrOwner ? (
-        <div style={{ display: 'flex', gap: '0.6rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            className={typeFilter === 'all' ? 'btn' : 'btn-ghost'}
-            onClick={() => { setTypeFilter('all'); setPage(1) }}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.88rem' }}
-          >
-            <CalendarCheck size={16} /> All Reservations ({counts.all})
-          </button>
-          <button
-            type="button"
-            className={typeFilter === 'products' ? 'btn' : 'btn-ghost'}
-            onClick={() => { setTypeFilter('products'); setPage(1) }}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.88rem' }}
-          >
-            <Package size={16} /> Product Reservations ({counts.products})
-          </button>
+      {/* ── Type Filter Tabs (Visible to all roles) ── */}
+      <div style={{ display: 'flex', gap: '0.6rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          className={typeFilter === 'all' ? 'btn' : 'btn-ghost'}
+          onClick={() => { setTypeFilter('all'); setPage(1) }}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.88rem' }}
+        >
+          <CalendarCheck size={16} /> All Reservations ({counts.all})
+        </button>
+        <button
+          type="button"
+          className={typeFilter === 'products' ? 'btn' : 'btn-ghost'}
+          onClick={() => { setTypeFilter('products'); setPage(1) }}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.88rem' }}
+        >
+          <Package size={16} /> Product Reservations ({counts.products})
+        </button>
+        {user.role !== 'Customer' && (
           <button
             type="button"
             className={typeFilter === 'cubes' ? 'btn' : 'btn-ghost'}
@@ -504,35 +578,8 @@ export default function ReservationsPage() {
           >
             <Box size={16} /> Cube Reservations ({counts.cubes})
           </button>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', gap: '0.6rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            className={cubeTypeFilter === 'all' ? 'btn' : 'btn-ghost'}
-            onClick={() => { setCubeTypeFilter('all'); setPage(1) }}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.88rem' }}
-          >
-            <Box size={16} /> All Cubes ({counts.all})
-          </button>
-          <button
-            type="button"
-            className={cubeTypeFilter === 'Display' ? 'btn' : 'btn-ghost'}
-            onClick={() => { setCubeTypeFilter('Display'); setPage(1) }}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.88rem' }}
-          >
-            <Box size={16} /> Display ({counts.display})
-          </button>
-          <button
-            type="button"
-            className={cubeTypeFilter === 'Pick-up' ? 'btn' : 'btn-ghost'}
-            onClick={() => { setCubeTypeFilter('Pick-up'); setPage(1) }}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.88rem' }}
-          >
-            <Package size={16} /> Pick-up ({counts.pickup})
-          </button>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* ── Filter & Search Toolbar ── */}
       <div
@@ -655,7 +702,7 @@ export default function ReservationsPage() {
                 <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSortCol('status_asc', 'status_desc')}>
                   Status {renderSortIndicator('status_asc', 'status_desc')}
                 </th>
-                <th style={{ textAlign: 'right', minWidth: 160 }}>Actions</th>
+                <th style={{ textAlign: 'right', minWidth: 180 }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -795,7 +842,7 @@ export default function ReservationsPage() {
                           <span style={{ color: '#dc2626', fontWeight: 600 }}>(Expired)</span>
                         ) : (
                           <span>
-                            {hoursLeft > 24 ? `${Math.ceil(hoursLeft / 24)}d left` : `${hoursLeft}h left`} ({r.hours_valid ? `${r.hours_valid}h` : '1h'})
+                            {hoursLeft > 24 ? `${Math.ceil(hoursLeft / 24)}d left` : `${hoursLeft}h left`} ({r.hours_valid ? `${r.hours_valid}h limit` : '1h limit'})
                           </span>
                         )}
                       </div>
@@ -813,7 +860,15 @@ export default function ReservationsPage() {
                         }`}
                         style={{ fontSize: '0.75rem' }}
                       >
-                        {expired ? 'Expired' : r.status === 'Pending' ? 'Pending Approval' : r.status}
+                        {expired
+                          ? 'Expired'
+                          : r.status === 'Pending'
+                            ? isCube
+                              ? 'Pending Approval'
+                              : 'Reserved (Pending Claim)'
+                            : r.status === 'Confirmed' && !isCube
+                              ? 'Sold / Claimed'
+                              : r.status}
                       </span>
                     </td>
 
@@ -860,9 +915,48 @@ export default function ReservationsPage() {
                                 <X size={14} /> Decline
                               </button>
                             </>
+                          ) : !isCube && isPending ? (
+                            <>
+                              <button
+                                className="btn"
+                                type="button"
+                                disabled={isBusy}
+                                onClick={() => void confirmProductReservation(r)}
+                                style={{
+                                  padding: '0.35rem 0.65rem',
+                                  fontSize: '0.78rem',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.3rem',
+                                  background: '#16a34a',
+                                  color: '#fff',
+                                  border: 'none',
+                                }}
+                                title="Confirm customer paid and claimed product"
+                              >
+                                <CheckCircle2 size={14} /> Confirm Sold
+                              </button>
+                              <button
+                                className="btn-ghost"
+                                type="button"
+                                disabled={isBusy}
+                                onClick={() => void cancelProductReservation(r.reservation_id)}
+                                style={{
+                                  padding: '0.35rem 0.65rem',
+                                  fontSize: '0.78rem',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.3rem',
+                                  color: '#dc2626',
+                                }}
+                                title="Cancel product reservation & return to Available"
+                              >
+                                <X size={14} /> Cancel
+                              </button>
+                            </>
                           ) : (
                             <span className="muted" style={{ fontSize: '0.78rem' }}>
-                              {r.status === 'Confirmed' ? 'Approved' : '—'}
+                              {r.status === 'Confirmed' ? (isCube ? 'Approved' : 'Sold / Claimed') : '—'}
                             </span>
                           )
                         ) : isCube ? (

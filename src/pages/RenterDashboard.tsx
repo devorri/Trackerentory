@@ -20,6 +20,8 @@ import { useAuth } from '../context/Auth'
 import {
   addMonths,
   daysUntil,
+  isContractInGracePeriod,
+  getGracePeriodDaysLeft,
   peso,
   todayISO,
   isReservationExpired,
@@ -33,6 +35,11 @@ import {
   DEFAULT_PRODUCT_CATEGORIES,
   DEFAULT_CONTRACT_TERMS,
 } from '../lib/types'
+import {
+  stripContractMeta,
+  extractExtensionsFromContracts,
+  saveContractExtensionInDb,
+} from '../lib/contract-meta'
 import { expireContracts, cancelExpiredReservations } from '../lib/maintenance'
 import { uploadPublicImage } from '../lib/storage'
 import { BUCKET_DOCUMENTS, BUCKET_PRODUCT_IMAGES } from '../lib/supabase'
@@ -196,7 +203,8 @@ export default function RenterDashboard() {
     }
 
     if (!pRes.error) setProducts((pRes.data || []) as Product[])
-    if (!extRes.error && extRes.data) setExtensionRequests(extRes.data as ContractExtension[])
+    const mergedExts = extractExtensionsFromContracts(loadedContracts, !extRes.error && extRes.data ? extRes.data : [])
+    setExtensionRequests(mergedExts as ContractExtension[])
 
     if (!tRes.error) {
       const myProds = (pRes.data || []) as Product[]
@@ -232,7 +240,7 @@ export default function RenterDashboard() {
       )
       if (!hasContract && r.cube_id) {
         const start = todayISO()
-        const months = Math.max(1, Math.round((r.hours_valid || 720) / 720))
+        const months = r.hours_valid && r.hours_valid >= 720 ? Math.max(1, Math.round(r.hours_valid / 720)) : 1
         const end = addMonths(start, months)
         loadedContracts.push({
           contract_id: -r.reservation_id,
@@ -303,7 +311,7 @@ export default function RenterDashboard() {
         pendingList.push(c)
       } else if (c.status === 'Active' && daysLeft >= 0) {
         activeList.push(c)
-      } else if ((daysLeft < 0 && daysLeft >= -3) || (hasPendingExtension && c.status !== 'Active')) {
+      } else if (isContractInGracePeriod(c) || (hasPendingExtension && c.status !== 'Active')) {
         extensionList.push(c)
       } else {
         expiredList.push(c)
@@ -313,16 +321,29 @@ export default function RenterDashboard() {
     return { activeList, pendingList, extensionList, expiredList }
   }, [contracts, extensionRequests])
 
-  // Automatically switch to the 'pending' tab if the renter has pending cube requests and no active cubes yet
+  const [didAutoFocusExtension, setDidAutoFocusExtension] = useState(false)
+
+  // Automatically switch to 'pending' or 'extension' tab if the renter has no active cubes yet
   useEffect(() => {
-    if (
-      contractTab === 'active' &&
-      categorizedContracts.activeList.length === 0 &&
-      categorizedContracts.pendingList.length > 0
-    ) {
-      setContractTab('pending')
+    if (contractTab === 'active' && categorizedContracts.activeList.length === 0) {
+      if (categorizedContracts.pendingList.length > 0) {
+        setContractTab('pending')
+      } else if (categorizedContracts.extensionList.length > 0) {
+        setContractTab('extension')
+        if (!didAutoFocusExtension && !searchParams.get('section')) {
+          setDidAutoFocusExtension(true)
+          setActiveSection('my-cube-contract')
+        }
+      }
     }
-  }, [categorizedContracts.activeList.length, categorizedContracts.pendingList.length])
+  }, [
+    contractTab,
+    didAutoFocusExtension,
+    searchParams,
+    categorizedContracts.activeList.length,
+    categorizedContracts.pendingList.length,
+    categorizedContracts.extensionList.length,
+  ])
 
   async function cancelPendingCubeRequest(c: Contract) {
     if (!window.confirm(`Cancel your reservation request for Cube #${c.cubes?.cube_number || c.cube_id}?`)) return
@@ -551,39 +572,19 @@ export default function RenterDashboard() {
     void load()
   }
 
-  // ════════════ EXTENSION REQUEST (Only when expired) ════════════
+  // ════════════ EXTENSION REQUEST (Only when expired / in grace period) ════════════
   async function submitExtensionRequest() {
     if (!extendingContract) return
     setBusy(true)
     try {
-      const { error } = await supabase.from('contract_extensions').insert([
-        {
-          contract_id: extendingContract.contract_id,
-          renter_id: user!.user_id,
-          cube_id: extendingContract.cube_id,
-          requested_months: extensionMonths,
-          notes: extensionNotes.trim() || null,
-          status: 'Pending',
-        },
-      ])
-
-      if (error) {
-        // Fallback: create pending contract row
-        console.warn('Fallback to pending contract row:', error.message)
-        const start = extendingContract.end_date > todayISO() ? extendingContract.end_date : todayISO()
-        await supabase.from('contracts').insert([
-          {
-            renter_id: user!.user_id,
-            cube_id: extendingContract.cube_id,
-            start_date: start,
-            end_date: addMonths(start, extensionMonths),
-            status: 'Pending',
-            contract_text: `Extension request: +${extensionMonths} month(s). Notes: ${extensionNotes}`,
-          },
-        ])
-      }
+      await saveContractExtensionInDb(
+        extendingContract,
+        user!.user_id,
+        extensionMonths,
+        extensionNotes.trim() || null,
+      )
       setBusy(false)
-      alert('Extension request submitted! The store owner will review and create your new contract.')
+      alert('Extension request submitted! The store owner or staff will review and activate your renewed contract.')
       setExtendingContract(null)
       setExtensionNotes('')
       void load()
@@ -759,9 +760,9 @@ export default function RenterDashboard() {
           >
             <KeyRound size={18} />
             <span style={{ flex: 1 }}>My Cube and Contract</span>
-            {categorizedContracts.pendingList.length > 0 && (
+            {(categorizedContracts.pendingList.length + categorizedContracts.extensionList.length) > 0 && (
               <span className="badge warn" style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem' }}>
-                {categorizedContracts.pendingList.length}
+                {categorizedContracts.pendingList.length + categorizedContracts.extensionList.length}
               </span>
             )}
           </button>
@@ -799,6 +800,37 @@ export default function RenterDashboard() {
 
       {/* ════════════ MAIN CONTENT AREA ════════════ */}
       <main className="renter-main">
+        {categorizedContracts.extensionList.length > 0 && (
+          <div
+            className="alert warn no-print"
+            style={{
+              marginBottom: '1.25rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '0.75rem',
+            }}
+          >
+            <div>
+              <strong>3-Day Grace Period — Waiting for Extension ({categorizedContracts.extensionList.length} Cube{categorizedContracts.extensionList.length > 1 ? 's' : ''})</strong>
+              <div style={{ fontSize: '0.86rem', marginTop: 2 }}>
+                You have {categorizedContracts.extensionList.length} expired cube contract(s) with <strong>{getGracePeriodDaysLeft(categorizedContracts.extensionList[0])} day(s) remaining</strong> to request an extension before the cube spaces reopen.
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn"
+              style={{ padding: '0.45rem 0.9rem', fontSize: '0.82rem' }}
+              onClick={() => {
+                handleSectionChange('my-cube-contract')
+                setContractTab('extension')
+              }}
+            >
+              View &amp; Apply for Extension
+            </button>
+          </div>
+        )}
         {/* ────────────────────────────────────────────────────────
             SECTION 1: ADD PRODUCT (Image 2)
            ──────────────────────────────────────────────────────── */}
@@ -1533,6 +1565,7 @@ export default function RenterDashboard() {
                       {list.map((c) => {
                         const daysLeft = daysUntil(c.end_date)
                         const isExpired = c.status === 'Expired' || daysLeft < 0
+                        const graceDaysLeft = getGracePeriodDaysLeft(c)
                         const hasPendingExtension = extensionRequests.some(
                           (ext) => ext.contract_id === c.contract_id && ext.status === 'Pending',
                         )
@@ -1551,8 +1584,14 @@ export default function RenterDashboard() {
                           >
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <strong style={{ fontSize: '1.2rem' }}>Cube #{c.cubes?.cube_number || c.cube_id}</strong>
-                              <span className={`status-pill ${c.status === 'Active' ? 'confirmed' : c.status === 'Pending' ? 'pending' : isExpired ? 'cancelled' : 'pending'}`}>
-                                {c.status === 'Pending' ? 'Pending Approval' : isExpired ? (contractTab === 'expired' ? 'Released' : 'Grace Period') : c.status}
+                              <span className={`status-pill ${c.status === 'Active' ? 'confirmed' : c.status === 'Pending' ? 'pending' : isExpired ? (contractTab === 'extension' ? 'pending' : 'cancelled') : 'pending'}`}>
+                                {c.status === 'Pending'
+                                  ? 'Pending Approval'
+                                  : isExpired
+                                    ? contractTab === 'expired'
+                                      ? 'Released'
+                                      : `Waiting for Extension (${graceDaysLeft}d left)`
+                                    : c.status}
                               </span>
                             </div>
 
@@ -1569,7 +1608,15 @@ export default function RenterDashboard() {
                             <div style={{ fontSize: '0.85rem', background: '#f8fafc', padding: '0.65rem 0.85rem', borderRadius: 8, border: '1px solid #e2e8f0' }}>
                               <div><strong>Agreement #{c.contract_id}</strong></div>
                               <div className="muted" style={{ marginTop: 2 }}>
-                                {c.start_date} → {c.end_date} ({c.status === 'Pending' ? `${daysLeft} day(s) validity upon approval` : daysLeft >= 0 ? `${daysLeft} day(s) left` : `${Math.abs(daysLeft)} day(s) expired`})
+                                {c.start_date} → {c.end_date} (
+                                {c.status === 'Pending'
+                                  ? `${daysLeft} day(s) validity upon approval`
+                                  : contractTab === 'extension'
+                                    ? `Grace Period: ${graceDaysLeft} day(s) remaining to extend`
+                                    : daysLeft >= 0
+                                      ? `${daysLeft} day(s) left`
+                                      : `${Math.abs(daysLeft)} day(s) expired`}
+                                )
                               </div>
                             </div>
 
@@ -1749,9 +1796,15 @@ export default function RenterDashboard() {
                           </td>
                           <td>{peso(p.price)}</td>
                           <td>
-                            <span style={{ fontWeight: 700, color: p.stock_quantity > 0 ? '#16a34a' : '#dc2626' }}>
-                              {p.stock_quantity}
-                            </span>
+                            {p.stock_quantity > 0 ? (
+                              <span style={{ fontWeight: 700, color: '#16a34a' }}>
+                                {p.stock_quantity} Available
+                              </span>
+                            ) : (
+                              <span className="badge bad" style={{ fontSize: '0.72rem' }}>
+                                Sold Out (0)
+                              </span>
+                            )}
                           </td>
                           <td>{p.category || '—'}</td>
                           <td>{p.variant || '—'}</td>
@@ -1965,7 +2018,7 @@ export default function RenterDashboard() {
             </div>
             <h4>Terms & Conditions</h4>
             <div style={{ maxHeight: 220, overflowY: 'auto', background: '#fff', border: '1px solid #e2e8f0', padding: '0.85rem', borderRadius: 8, fontSize: '0.82rem', whiteSpace: 'pre-wrap', color: '#444' }}>
-              {viewingContract.contract_text || DEFAULT_CONTRACT_TERMS}
+              {stripContractMeta(viewingContract.contract_text) || DEFAULT_CONTRACT_TERMS}
             </div>
             <div style={{ marginTop: '1.25rem', textAlign: 'right' }}>
               <button className="btn" type="button" onClick={() => setViewingContract(null)}>

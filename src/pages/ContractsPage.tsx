@@ -11,11 +11,32 @@ import {
   CheckCircle2,
   ArrowUpDown,
   Upload,
+  Clock,
 } from 'lucide-react'
 import { supabase, BUCKET_DOCUMENTS } from '../lib/supabase'
 import { uploadPublicImage } from '../lib/storage'
 import { useAuth } from '../context/Auth'
-import { addMonths, daysUntil, peso, todayISO, type Contract, type Cube, type ContractExtension } from '../lib/types'
+import {
+  addMonths,
+  daysUntil,
+  isContractInGracePeriod,
+  getGracePeriodDaysLeft,
+  isReservationExpired,
+  peso,
+  todayISO,
+  type Contract,
+  type Cube,
+  type ContractExtension,
+} from '../lib/types'
+import {
+  stripContractMeta,
+  parseContractMeta,
+  buildContractTextWithMeta,
+  extractPaymentsFromContracts,
+  extractExtensionsFromContracts,
+  saveContractPaymentInDb,
+  updateContractExtensionStatusInDb,
+} from '../lib/contract-meta'
 import { expireContracts, cancelExpiredReservations } from '../lib/maintenance'
 import { SkeletonTable } from '../components/Skeleton'
 import TablePagination, { DEFAULT_PAGE_SIZE } from '../components/TablePagination'
@@ -35,7 +56,7 @@ export default function ContractsPage() {
   const [cubes, setCubes] = useState<Cube[]>([])
   const [renters, setRenters] = useState<{ user_id: number; full_name: string; email?: string; phone_number?: string }[]>([])
   const [extensionRequests, setExtensionRequests] = useState<ContractExtension[]>([])
-  const [approvingExtensionId, setApprovingExtensionId] = useState<number | null>(null)
+  const [approvingExtension, setApprovingExtension] = useState<ContractExtension | null>(null)
   const [ownerName, setOwnerName] = useState('Arce Concept Boutique')
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
@@ -108,7 +129,6 @@ export default function ContractsPage() {
     if (!cRes.error) {
       loadedContracts = (cRes.data || []) as Contract[]
     } else {
-      // Fallback if relational select fails
       let fallbackQ = supabase.from('contracts').select('*').order('contract_id', { ascending: false })
       if (user?.role === 'Renter') fallbackQ = fallbackQ.eq('renter_id', user.user_id)
       const [fbCon, fbUsers] = await Promise.all([
@@ -124,7 +144,7 @@ export default function ContractsPage() {
       }))
     }
 
-    // Sync any pending cube reservation in `reservations` that does not yet have a live contract row
+    // Sync any non-expired pending cube reservation in `reservations` that does not yet have a live contract row
     if (!resRes.error && resRes.data && resRes.data.length > 0) {
       const liveCubeIds = new Set(
         loadedContracts
@@ -132,10 +152,11 @@ export default function ContractsPage() {
           .map((c) => c.cube_id),
       )
       for (const r of resRes.data as any[]) {
+        if (isReservationExpired(r)) continue
         if (r.cube_id && r.customer_id && !liveCubeIds.has(r.cube_id)) {
           if (user?.role === 'Renter' && r.customer_id !== user.user_id) continue
           const start = todayISO()
-          const months = Math.max(1, Math.round((r.hours_valid || 720) / 720))
+          const months = r.hours_valid && r.hours_valid >= 720 ? Math.max(1, Math.round(r.hours_valid / 720)) : 1
           const end = addMonths(start, months)
           const { data: inserted } = await supabase
             .from('contracts')
@@ -169,6 +190,7 @@ export default function ContractsPage() {
     }
     if (!ownerRes.error && ownerRes.data?.full_name) setOwnerName(ownerRes.data.full_name)
 
+    let dbExtData: any[] = []
     try {
       let extQuery = supabase
         .from('contract_extensions')
@@ -179,49 +201,54 @@ export default function ContractsPage() {
       }
       const { data: extData, error: extErr } = await extQuery
       if (!extErr && extData) {
-        setExtensionRequests(extData as ContractExtension[])
-      }
-    } catch {
-      // table might not exist yet
-    }
-
-    try {
-      const { data: payData, error: payErr } = await supabase.from('contract_payments').select('*')
-      if (!payErr && payData) {
-        setContractPayments(payData)
-        const initialReceipts: Record<string, string> = {}
-        const initialMops: Record<string, 'Cash' | 'Online'> = {}
-        for (const p of payData) {
-          const mNum = p.month_number ?? p.month_index
-          if (mNum) {
-            const k = `${p.contract_id}-${mNum}`
-            if (p.receipt_image_url) initialReceipts[k] = p.receipt_image_url
-            if (p.payment_method) initialMops[k] = p.payment_method as 'Cash' | 'Online'
-          }
-        }
-        setPaymentReceiptMap((prev) => ({ ...initialReceipts, ...prev }))
-        setPaymentMopMap((prev) => ({ ...initialMops, ...prev }))
+        dbExtData = extData
       }
     } catch {
       // fallback
     }
+    const mergedExtensions = extractExtensionsFromContracts(loadedContracts, dbExtData)
+    setExtensionRequests(mergedExtensions as ContractExtension[])
+
+    let dbPayData: any[] = []
+    try {
+      const { data: payData, error: payErr } = await supabase.from('contract_payments').select('*')
+      if (!payErr && payData) {
+        dbPayData = payData
+      }
+    } catch {
+      // fallback
+    }
+    const mergedPayments = extractPaymentsFromContracts(loadedContracts, dbPayData)
+    setContractPayments(mergedPayments)
+    const initialReceipts: Record<string, string> = {}
+    const initialMops: Record<string, 'Cash' | 'Online'> = {}
+    for (const p of mergedPayments) {
+      const mNum = p.month_number ?? p.month_index
+      if (mNum) {
+        const k = `${p.contract_id}-${mNum}`
+        if (p.receipt_image_url) initialReceipts[k] = p.receipt_image_url
+        if (p.payment_method) initialMops[k] = p.payment_method as 'Cash' | 'Online'
+      }
+    }
+    setPaymentReceiptMap((prev) => ({ ...prev, ...initialReceipts }))
+    setPaymentMopMap((prev) => ({ ...prev, ...initialMops }))
   }
 
   useEffect(() => {
     void load()
   }, [user])
 
-  const isOwner = user?.role === 'Owner'
+  const isAdmin = user?.role === 'Owner' || user?.role === 'Staff'
   const isRenter = user?.role === 'Renter'
 
-  if (!user || (!isOwner && !isRenter)) {
+  if (!user || (!isAdmin && !isRenter)) {
     return (
       <section>
         <div className="page-header">
           <div>
             <h1>Contracts</h1>
             <p className="lede">
-              Owner or Renter access only. <Link to="/login">Sign in here</Link>
+              Owner, Staff, or Renter access only. <Link to="/login">Sign in here</Link>
             </p>
           </div>
         </div>
@@ -253,7 +280,7 @@ export default function ContractsPage() {
       (c) => c.cube_id === cubeIdNum && (c.status === 'Active' || c.status === 'Pending')
     )
 
-    if (existingLive && !approvingExtensionId && !expireExistingContract) {
+    if (existingLive && !approvingExtension && !expireExistingContract) {
       const renterName = (existingLive.users as any)?.full_name || 'the current renter'
       const ok = window.confirm(
         `Cube already has a live agreement (#${existingLive.contract_id}) for ${renterName}.\n\nDo you want to expire the previous agreement and activate this new contract?`
@@ -277,13 +304,30 @@ export default function ContractsPage() {
       }
     }
 
+    const selectedCubeObj = cubes.find((c) => c.cube_id === cubeIdNum)
+    const initialText =
+      createForm.status === 'Active'
+        ? buildContractTextWithMeta(createForm.contract_text || DEFAULT_TERMS, {
+            payments: [
+              {
+                month_number: 1,
+                payment_status: 'Paid',
+                payment_method: 'Cash',
+                amount: Number(selectedCubeObj?.price_per_month || 0),
+                paid_at: new Date().toISOString(),
+                processed_by: user?.user_id,
+              },
+            ],
+          })
+        : createForm.contract_text || DEFAULT_TERMS
+
     let { error } = await supabase.from('contracts').insert([{
       renter_id: renterId,
       cube_id: cubeIdNum,
       start_date: createForm.start_date,
       end_date: createForm.end_date,
       status: createForm.status,
-      contract_text: createForm.contract_text || DEFAULT_TERMS,
+      contract_text: initialText,
     }])
 
     if (error && error.message.includes('contract_text')) {
@@ -320,16 +364,23 @@ export default function ContractsPage() {
       await supabase.from('cubes').update({ status: 'Available' }).eq('cube_id', cubeIdNum)
     }
 
-    if (approvingExtensionId) {
-      try {
-        await supabase
-          .from('contract_extensions')
-          .update({ status: 'Approved' })
-          .eq('extension_id', approvingExtensionId)
-      } catch (e) {
-        console.warn(e)
+    if (approvingExtension) {
+      const prevContract =
+        contracts.find((c) => c.contract_id === approvingExtension.contract_id) ||
+        (approvingExtension.contracts as Contract | undefined)
+      if (prevContract) {
+        await updateContractExtensionStatusInDb(prevContract, approvingExtension.extension_id, 'Approved')
+      } else {
+        try {
+          await supabase
+            .from('contract_extensions')
+            .update({ status: 'Approved' })
+            .eq('extension_id', approvingExtension.extension_id)
+        } catch (e) {
+          console.warn(e)
+        }
       }
-      setApprovingExtensionId(null)
+      setApprovingExtension(null)
     }
 
     setSaving(false)
@@ -339,7 +390,7 @@ export default function ContractsPage() {
   }
 
   function handleApproveExtension(ext: ContractExtension) {
-    setApprovingExtensionId(ext.extension_id)
+    setApprovingExtension(ext)
     setExpireExistingContract(true)
     const prevEnd = ext.contracts?.end_date || todayISO()
     const start = prevEnd > todayISO() ? prevEnd : todayISO()
@@ -359,7 +410,14 @@ export default function ContractsPage() {
     if (!window.confirm('Are you sure you want to decline this cube extension request?')) return
     setSaving(true)
     try {
-      await supabase.from('contract_extensions').update({ status: 'Declined' }).eq('extension_id', ext.extension_id)
+      const prevContract =
+        contracts.find((c) => c.contract_id === ext.contract_id) ||
+        (ext.contracts as Contract | undefined)
+      if (prevContract) {
+        await updateContractExtensionStatusInDb(prevContract, ext.extension_id, 'Declined')
+      } else {
+        await supabase.from('contract_extensions').update({ status: 'Declined' }).eq('extension_id', ext.extension_id)
+      }
     } catch (err) {
       console.error(err)
     }
@@ -375,7 +433,7 @@ export default function ContractsPage() {
       start_date: c.start_date,
       end_date: c.end_date,
       status: c.status,
-      contract_text: c.contract_text || DEFAULT_TERMS,
+      contract_text: stripContractMeta(c.contract_text) || DEFAULT_TERMS,
     })
   }
 
@@ -385,6 +443,8 @@ export default function ContractsPage() {
 
     const targetCubeId = Number(editForm.cube_id) || editingContract.cube_id
     const targetRenterId = Number(editForm.renter_id) || editingContract.renter_id
+    const existingMeta = parseContractMeta(editingContract.contract_text)
+    const newTextWithMeta = buildContractTextWithMeta(editForm.contract_text || DEFAULT_TERMS, existingMeta)
 
     let { error } = await supabase
       .from('contracts')
@@ -394,7 +454,7 @@ export default function ContractsPage() {
         start_date: editForm.start_date,
         end_date: editForm.end_date,
         status: editForm.status,
-        contract_text: editForm.contract_text || null,
+        contract_text: newTextWithMeta,
       })
       .eq('contract_id', editingContract.contract_id)
 
@@ -465,29 +525,18 @@ export default function ContractsPage() {
     const existing = contractPayments.find(
       (p) => p.contract_id === c.contract_id && (p.month_number === monthIndex || p.month_index === monthIndex)
     )
+    const isAlreadyPaid = (existing?.payment_status === 'Paid' || existing?.status === 'Paid') || (monthIndex === 1 && !existing)
 
-    if (existing?.payment_id) {
-      const { error } = await supabase
-        .from('contract_payments')
-        .update({
-          receipt_image_url: receiptUrl,
-          payment_method: 'Online',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('payment_id', existing.payment_id)
-
-      if (error) {
-        console.warn('Error saving receipt to existing payment:', error)
-      } else {
-        setContractPayments((prev) =>
-          prev.map((p) =>
-            p.payment_id === existing.payment_id
-              ? { ...p, receipt_image_url: receiptUrl, payment_method: 'Online' }
-              : p
-          )
-        )
-      }
-    }
+    await saveContractPaymentInDb(
+      c,
+      monthIndex,
+      isAlreadyPaid ? 'Paid' : 'Pending',
+      Number(c.cubes?.price_per_month || 0),
+      'Online',
+      receiptUrl,
+      user?.user_id,
+    )
+    void load()
   }
 
   async function markMonthPaid(c: Contract, monthIndex: number) {
@@ -503,103 +552,19 @@ export default function ContractsPage() {
     }
 
     setSaving(true)
-    const dueDate = addMonths(c.start_date, monthIndex - 1)
-    const existing = contractPayments.find(
-      (p) => p.contract_id === c.contract_id && (p.month_number === monthIndex || p.month_index === monthIndex)
-    )
-
     try {
-      if (existing?.payment_id) {
-        const { error } = await supabase
-          .from('contract_payments')
-          .update({
-            payment_status: 'Paid',
-            status: 'Paid',
-            payment_method: mop,
-            receipt_image_url: receiptUrl || existing.receipt_image_url || null,
-            paid_at: new Date().toISOString(),
-            payment_date: new Date().toISOString(),
-            processed_by: user?.user_id,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('payment_id', existing.payment_id)
-
-        if (!error) {
-          setContractPayments((prev) =>
-            prev.map((p) =>
-              p.payment_id === existing.payment_id
-                ? {
-                    ...p,
-                    payment_status: 'Paid',
-                    status: 'Paid',
-                    payment_method: mop,
-                    receipt_image_url: receiptUrl || existing.receipt_image_url || null,
-                    paid_at: new Date().toISOString(),
-                  }
-                : p
-            )
-          )
-        }
-      } else {
-        const insertPayload: any = {
-          contract_id: c.contract_id,
-          renter_id: c.renter_id,
-          cube_id: c.cube_id,
-          month_number: monthIndex,
-          due_date: dueDate,
-          amount: c.cubes?.price_per_month || 0,
-          payment_status: 'Paid',
-          payment_method: mop,
-          receipt_image_url: receiptUrl || null,
-          paid_at: new Date().toISOString(),
-          processed_by: user?.user_id,
-        }
-
-        let { data, error } = await supabase
-          .from('contract_payments')
-          .insert([insertPayload])
-          .select()
-
-        if (error && (error.message.includes('month_number') || error.message.includes('payment_status'))) {
-          delete insertPayload.month_number
-          delete insertPayload.payment_status
-          insertPayload.month_index = monthIndex
-          insertPayload.status = 'Paid'
-          insertPayload.payment_date = new Date().toISOString()
-          const retry = await supabase.from('contract_payments').insert([insertPayload]).select()
-          data = retry.data
-          error = retry.error
-        }
-
-        if (error) {
-          console.warn('contract_payments insert error, updating local state:', error)
-          setContractPayments((prev) => [
-            ...prev.filter((p) => !(p.contract_id === c.contract_id && (p.month_number === monthIndex || p.month_index === monthIndex))),
-            {
-              contract_id: c.contract_id,
-              renter_id: c.renter_id,
-              cube_id: c.cube_id,
-              month_number: monthIndex,
-              due_date: dueDate,
-              amount: c.cubes?.price_per_month || 0,
-              payment_status: 'Paid',
-              status: 'Paid',
-              payment_method: mop,
-              receipt_image_url: receiptUrl || null,
-              paid_at: new Date().toISOString(),
-            },
-          ])
-        } else if (data && data[0]) {
-          setContractPayments((prev) => [
-            ...prev.filter((p) => !(p.contract_id === c.contract_id && (p.month_number === monthIndex || p.month_index === monthIndex))),
-            data[0],
-          ])
-        }
-      }
+      await saveContractPaymentInDb(
+        c,
+        monthIndex,
+        'Paid',
+        Number(c.cubes?.price_per_month || 0),
+        mop,
+        receiptUrl,
+        user?.user_id,
+      )
     } catch (err) {
       console.error(err)
     }
-
     setSaving(false)
     void load()
   }
@@ -626,11 +591,29 @@ export default function ContractsPage() {
 
   async function handleApprovePending(c: Contract) {
     setSaving(true)
-    const { error } = await supabase.from('contracts').update({ status: 'Active' }).eq('contract_id', c.contract_id)
+    const { data: updatedCon, error } = await supabase
+      .from('contracts')
+      .update({ status: 'Active' })
+      .eq('contract_id', c.contract_id)
+      .select('*, cubes(*), users!renter_id(*)')
+      .maybeSingle()
+
     if (error) {
       setSaving(false)
       return alert('Error approving contract: ' + error.message)
     }
+
+    const activeCon = (updatedCon as Contract) || { ...c, status: 'Active' }
+    await saveContractPaymentInDb(
+      activeCon,
+      1,
+      'Paid',
+      Number(c.cubes?.price_per_month || 0),
+      'Cash',
+      null,
+      user?.user_id,
+    )
+
     if (c.cube_id) {
       await supabase.from('cubes').update({ status: 'Occupied' }).eq('cube_id', c.cube_id)
       if (c.renter_id) {
@@ -643,7 +626,7 @@ export default function ContractsPage() {
       }
     }
     setSaving(false)
-    alert(`Contract #${c.contract_id} approved and activated!`)
+    alert(`Contract #${c.contract_id} approved, Month 1 marked Paid, and agreement activated!`)
     void load()
   }
 
@@ -674,8 +657,6 @@ export default function ContractsPage() {
 
   // Print agreement in formal document format
   function printAgreement(c: Contract) {
-    // A hidden frame keeps printing inside the application and avoids relying
-    // on a browser pop-up window, which is commonly blocked on mobile.
     const printFrame = document.createElement('iframe')
     printFrame.title = 'Rental agreement print preview'
     printFrame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden'
@@ -692,7 +673,7 @@ export default function ContractsPage() {
     const cubeType = c.cubes?.type || 'Standard Cube'
     const cubePrice = c.cubes?.price_per_month ? peso(c.cubes.price_per_month) : '₱0.00'
     const daysLeft = daysUntil(c.end_date)
-    const terms = c.contract_text || DEFAULT_TERMS
+    const terms = stripContractMeta(c.contract_text) || DEFAULT_TERMS
 
     const html = `<!doctype html>
       <html lang="en">
@@ -870,7 +851,6 @@ export default function ContractsPage() {
   }
 
   // Sorting State
-  // Newly requested/reserved cubes belong at the top by default.
   const [sortConfig, setSortConfig] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'created', dir: 'desc' })
 
   function renderSortIndicator(col: string) {
@@ -952,7 +932,7 @@ export default function ContractsPage() {
   // Summary Metrics
   const metrics = useMemo(() => {
     const total = contracts.length
-    const active = contracts.filter((c) => c.status === 'Active' && daysUntil(c.end_date) > 7).length
+    const active = contracts.filter((c) => c.status === 'Active' && daysUntil(c.end_date) >= 0).length
     const pending = contracts.filter((c) => c.status === 'Pending').length
     const expiring = contracts.filter((c) => c.status === 'Active' && daysUntil(c.end_date) >= 0 && daysUntil(c.end_date) <= 7).length
     const expired = contracts.filter((c) => c.status === 'Expired' || daysUntil(c.end_date) < 0).length
@@ -970,10 +950,10 @@ export default function ContractsPage() {
         <div>
           <h1>Contracts Management</h1>
           <p className="lede">
-            Oversee cube rental agreements, track active durations, edit lease conditions, and generate printable hard copies.
+            Oversee cube rental agreements, track active durations, confirm cube payments, and generate printable hard copies.
           </p>
         </div>
-        {isOwner && (
+        {isAdmin && (
           <div className="row no-print">
             <button
               className="btn"
@@ -987,7 +967,7 @@ export default function ContractsPage() {
         )}
       </div>
 
-      {/* ── Summary Stats (Item 20: 3 cards removed) ── */}
+      {/* ── Summary Stats ── */}
       <div className="grid no-print" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.75rem' }}>
         <div className="panel" style={{ padding: '1.15rem' }}>
           <div className="muted" style={{ fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase' }}>Total Agreements</div>
@@ -998,7 +978,7 @@ export default function ContractsPage() {
           <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#16a34a', marginTop: '0.3rem' }}>{metrics.active}</div>
         </div>
         <div className="panel" style={{ padding: '1.15rem', borderLeft: '4px solid #dc2626' }}>
-          <div className="muted" style={{ fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase' }}>Expired</div>
+          <div className="muted" style={{ fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase' }}>Expired / Grace Period</div>
           <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#dc2626', marginTop: '0.3rem' }}>{metrics.expired}</div>
         </div>
       </div>
@@ -1017,7 +997,7 @@ export default function ContractsPage() {
               {st === 'Pending' && metrics.pending > 0 ? `Pending (${metrics.pending})` : st}
             </button>
           ))}
-          {isOwner && (
+          {isAdmin && (
             <>
               <button
                 type="button"
@@ -1151,7 +1131,13 @@ export default function ContractsPage() {
               </tr>
             </thead>
             <tbody>
-              {contracts
+              {[...contracts]
+                .sort((a, b) => {
+                  const aActive = a.status === 'Active' ? 0 : 1
+                  const bActive = b.status === 'Active' ? 0 : 1
+                  if (aActive !== bActive) return aActive - bActive
+                  return b.contract_id - a.contract_id
+                })
                 .filter((c) => {
                   if (!search.trim()) return true
                   const q = search.toLowerCase()
@@ -1174,7 +1160,7 @@ export default function ContractsPage() {
                     const record = contractPayments.find(
                       (p) => p.contract_id === c.contract_id && (p.month_number === monthIndex || p.month_index === monthIndex)
                     )
-                    const isPaid = (record?.payment_status === 'Paid' || record?.status === 'Paid') || (isMonth1 && !record)
+                    const isPaid = (record?.payment_status === 'Paid' || record?.status === 'Paid') || (isMonth1 && !record && c.status !== 'Pending')
                     const key = `${c.contract_id}-${monthIndex}`
                     const mop = record?.payment_method || paymentMopMap[key] || 'Cash'
                     const receiptUrl = record?.receipt_image_url || paymentReceiptMap[key] || null
@@ -1221,7 +1207,7 @@ export default function ContractsPage() {
                                 </select>
                               )}
 
-                              {isPaid && isOwner && (
+                              {isPaid && isAdmin && (
                                 <button
                                   type="button"
                                   className="btn-ghost"
@@ -1229,13 +1215,15 @@ export default function ContractsPage() {
                                   onClick={() => {
                                     const nextMop = mop === 'Cash' ? 'Online' : 'Cash'
                                     setPaymentMopMap((prev) => ({ ...prev, [key]: nextMop }))
-                                    if (record?.payment_id) {
-                                      void supabase
-                                        .from('contract_payments')
-                                        .update({ payment_method: nextMop, updated_at: new Date().toISOString() })
-                                        .eq('payment_id', record.payment_id)
-                                        .then(() => void load())
-                                    }
+                                    void saveContractPaymentInDb(
+                                      c,
+                                      monthIndex,
+                                      'Paid',
+                                      Number(rate),
+                                      nextMop,
+                                      receiptUrl,
+                                      user?.user_id,
+                                    ).then(() => void load())
                                   }}
                                   title="Change mode of payment"
                                 >
@@ -1340,6 +1328,7 @@ export default function ContractsPage() {
                             <button
                               className="btn"
                               type="button"
+                              disabled={saving}
                               style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem', background: '#16a34a', color: '#fff', border: 'none' }}
                               onClick={() => void markMonthPaid(c, monthIndex)}
                             >
@@ -1385,6 +1374,8 @@ export default function ContractsPage() {
               {pagedContracts.map((c) => {
                 const daysLeft = daysUntil(c.end_date)
                 const isExpiringSoon = c.status === 'Active' && daysLeft >= 0 && daysLeft <= 7
+                const inGrace = isContractInGracePeriod(c)
+                const graceDaysLeft = getGracePeriodDaysLeft(c)
                 const isPast = c.status === 'Expired' || daysLeft < 0
 
                 return (
@@ -1420,6 +1411,16 @@ export default function ContractsPage() {
                         <span className="badge warn" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
                           <AlertTriangle size={12} /> {daysLeft}d left (Expiring)
                         </span>
+                      ) : inGrace ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+                          <span className="badge bad">Expired</span>
+                          <span
+                            className="badge warn"
+                            style={{ fontSize: '0.7rem', display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                          >
+                            <Clock size={11} /> Waiting for Extension ({graceDaysLeft}d left)
+                          </span>
+                        </div>
                       ) : isPast ? (
                         <span className="badge bad">Expired</span>
                       ) : c.status === 'Active' ? (
@@ -1432,11 +1433,12 @@ export default function ContractsPage() {
                     </td>
                     <td style={{ textAlign: 'right' }}>
                       <div className="row" style={{ justifyContent: 'flex-end', gap: '0.4rem' }}>
-                        {isOwner && c.status === 'Pending' && (
+                        {isAdmin && c.status === 'Pending' && (
                           <>
                             <button
                               className="btn"
                               type="button"
+                              disabled={saving}
                               style={{ padding: '0.35rem 0.65rem', fontSize: '0.82rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
                               onClick={() => void handleApprovePending(c)}
                               title="Approve and activate contract"
@@ -1446,6 +1448,7 @@ export default function ContractsPage() {
                             <button
                               className="btn-ghost"
                               type="button"
+                              disabled={saving}
                               style={{ padding: '0.35rem 0.65rem', fontSize: '0.82rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#dc2626' }}
                               onClick={() => setDeclineTarget(c)}
                               title="Decline reservation & release cube"
@@ -1462,7 +1465,7 @@ export default function ContractsPage() {
                         >
                           <FileText size={14} /> View Agreement
                         </button>
-                        {isOwner && (
+                        {isAdmin && (
                           <button
                             className="btn-ghost"
                             type="button"
@@ -1586,7 +1589,7 @@ export default function ContractsPage() {
                     color: '#334155',
                   }}
                 >
-                  {viewingContract.contract_text || DEFAULT_TERMS}
+                  {stripContractMeta(viewingContract.contract_text) || DEFAULT_TERMS}
                 </div>
               </div>
 
@@ -1611,7 +1614,7 @@ export default function ContractsPage() {
               <button className="btn-ghost" type="button" onClick={() => setViewingContract(null)}>
                 Close
               </button>
-              {isOwner && (
+              {isAdmin && (
                 <button
                   className="btn-ghost"
                   type="button"
@@ -1649,7 +1652,7 @@ export default function ContractsPage() {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
-              {isOwner && (
+              {isAdmin && (
                 <div className="field">
                   <label>Assign to Renter *</label>
                   <select
@@ -1850,7 +1853,7 @@ export default function ContractsPage() {
                 </div>
               </div>
 
-              {isOwner && (
+              {isAdmin && (
                 <div className="field">
                   <label>Assigned Renter</label>
                   <select

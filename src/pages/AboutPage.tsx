@@ -374,7 +374,7 @@ export default function AboutPage() {
             </div>
             <h3 style={{ fontSize: '1.5rem', margin: '0 0 0.75rem' }}>TrackErentory</h3>
             <p style={{ color: '#444', lineHeight: 1.7, fontSize: '1rem', marginBottom: '1.25rem' }}>
-              Osmeña Drive, Poblacion, Kidapawan City, North Cotabato
+              Osmeña Drive, Poblacion, Kidapawan City, North Cotabato. Besides J&T and near Convenience Store.
             </p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', fontSize: '0.92rem', color: '#555' }}>

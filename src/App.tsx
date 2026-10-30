@@ -21,6 +21,7 @@ import { useEffect, useState } from 'react'
 import { BarChart3, Package, Store, CalendarCheck, Tag, Box, FileText, Users, UserCheck, Menu, X, LogOut, PackageMinus } from 'lucide-react'
 import { supabase } from './lib/supabase'
 import { daysUntil, type Contract } from './lib/types'
+import { extractExtensionsFromContracts } from './lib/contract-meta'
 import ConfirmModal from './components/ConfirmModal'
 import SystemNotice from './components/SystemNotice'
 import { cancelExpiredReservations, expireContracts } from './lib/maintenance'
@@ -55,22 +56,36 @@ function InnerApp() {
   useEffect(() => {
     if (!isAdmin) return
     async function loadPendingCounts() {
-      const [conRes, resRes] = await Promise.all([
-        supabase.from('contracts').select('contract_id, cube_id, renter_id').eq('status', 'Pending'),
-        supabase.from('reservations').select('reservation_id, cube_id, customer_id').is('product_id', null).eq('status', 'Pending'),
+      const [allConRes, resRes, extRes] = await Promise.all([
+        supabase.from('contracts').select('contract_id, cube_id, renter_id, status, contract_text'),
+        supabase.from('reservations').select('reservation_id, cube_id, product_id, customer_id, expiry_time').eq('status', 'Pending'),
+        supabase.from('contract_extensions').select('extension_id, contract_id, status').eq('status', 'Pending'),
       ])
-      const pendingConList = conRes.data || []
-      const pendingResList = (resRes.data || []).filter((r: any) => Boolean(r.cube_id))
+      const allContracts = (allConRes.data || []) as Contract[]
+      const pendingConList = allContracts.filter((c) => c.status === 'Pending')
+      const nowMs = Date.now()
+      const activePendingRes = (resRes.data || []).filter((r: any) => !r.expiry_time || new Date(r.expiry_time).getTime() > nowMs)
+
+      // Count unique pending cube reservations + pending product reservations for Reservations page
       const uniqueCubeKeys = new Set<string>()
-      for (const c of pendingConList as any[]) {
+      for (const c of pendingConList) {
         uniqueCubeKeys.add(`cube-${c.cube_id ?? c.contract_id}`)
       }
-      for (const r of pendingResList as any[]) {
-        uniqueCubeKeys.add(`cube-${r.cube_id ?? r.reservation_id}`)
+      let pendingProdCount = 0
+      for (const r of activePendingRes as any[]) {
+        if (r.product_id) {
+          pendingProdCount += 1
+        } else if (r.cube_id) {
+          uniqueCubeKeys.add(`cube-${r.cube_id ?? r.reservation_id}`)
+        }
       }
-      const totalPending = uniqueCubeKeys.size
-      setPendingContractsCount(totalPending)
-      setPendingReservationsCount(totalPending)
+
+      // Count pending extensions (from table + metadata)
+      const mergedExts = extractExtensionsFromContracts(allContracts, (extRes.data || []) as any[])
+      const pendingExtCount = mergedExts.filter((e) => e.status === 'Pending').length
+
+      setPendingReservationsCount(uniqueCubeKeys.size + pendingProdCount)
+      setPendingContractsCount(uniqueCubeKeys.size + pendingExtCount)
     }
     void loadPendingCounts()
     const timer = window.setInterval(() => void loadPendingCounts(), 10000)
@@ -180,7 +195,7 @@ function InnerApp() {
               onClick={() => setAdminSidebarOpen(false)}
             >
               <CalendarCheck size={18} />
-              <span style={{ flex: 1 }}>Cube Reservations</span>
+              <span style={{ flex: 1 }}>Reservations</span>
               {pendingReservationsCount > 0 && (
                 <span className="badge warn" style={{ fontSize: '0.7rem', padding: '0.1rem 0.45rem' }}>
                   {pendingReservationsCount}
@@ -211,7 +226,7 @@ function InnerApp() {
               <Box size={18} />
               <span>Cube Management</span>
             </NavLink>
-            {role === 'Owner' && (
+            {(role === 'Owner' || role === 'Staff') && (
               <NavLink
                 to="/contracts"
                 className={({ isActive }) => `admin-nav-item ${isActive ? 'active' : ''}`}
