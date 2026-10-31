@@ -119,7 +119,7 @@ export type Transaction = {
   payment_method: 'Cash' | 'Online'
   quantity: number
   listed_quantity: number | null
-  pickup_status: 'Waiting' | 'Picked-up'
+  pickup_status: 'Waiting' | 'Picked-up' | 'Pulled Out'
   receipt_image_url: string | null
   notes: string | null
   transaction_date: string

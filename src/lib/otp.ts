@@ -100,7 +100,6 @@ export async function sendOtpEmail(email: string, code: string, purpose: string)
 
 export type RequestOtpResult = {
   error: string | null
-  code?: string
   emailSent?: boolean
 }
 
@@ -135,11 +134,11 @@ export async function requestOtp(
   // Send email (attempt edge function or resend, but don't block user if delivery service is unavailable)
   const sendResult = await sendOtpEmail(email, code, purpose)
   if (sendResult.error) {
-    console.warn('[OTP Notice] Email dispatch not completed (' + sendResult.error + '). Providing on-screen test code.')
-    return { error: null, code, emailSent: false }
+    console.error("[OTP Error] Email dispatch failed:", sendResult.error);
+    return { error: sendResult.error, emailSent: false };
   }
 
-  return { error: null, code, emailSent: true }
+  return { error: null, emailSent: true }
 }
 
 /** Verify an OTP code */

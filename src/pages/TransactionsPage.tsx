@@ -290,13 +290,26 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
         })
         .eq('transaction_id', t.transaction_id)
     } else {
-      await supabase
+      // Try updating pickup_status to 'Pulled Out' as well as notes
+      const { error: updateErr } = await supabase
         .from('transactions')
         .update({
+          pickup_status: 'Pulled Out',
           notes: `[PULLED OUT] ${t.notes || ''} (${pullOutReason})`.trim(),
           updated_at: new Date().toISOString(),
         })
         .eq('transaction_id', t.transaction_id)
+
+      // Fallback in case of strict database check constraint on pickup_status
+      if (updateErr) {
+        await supabase
+          .from('transactions')
+          .update({
+            notes: `[PULLED OUT] ${t.notes || ''} (${pullOutReason})`.trim(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('transaction_id', t.transaction_id)
+      }
     }
 
     setBusy(false)

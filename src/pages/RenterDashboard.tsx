@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   Store,
+  PackageMinus,
   Package,
   KeyRound,
   X,
@@ -32,6 +33,7 @@ import {
   type Transaction,
   type Reservation,
   type ContractExtension,
+  type PullOutItem,
   DEFAULT_PRODUCT_CATEGORIES,
   DEFAULT_CONTRACT_TERMS,
 } from '../lib/types'
@@ -41,6 +43,7 @@ import {
   saveContractExtensionInDb,
 } from '../lib/contract-meta'
 import { expireContracts, cancelExpiredReservations } from '../lib/maintenance'
+import { fetchPullOutItems } from '../lib/pull-out'
 import { uploadPublicImage } from '../lib/storage'
 import { BUCKET_DOCUMENTS, BUCKET_PRODUCT_IMAGES } from '../lib/supabase'
 import { SkeletonTable } from '../components/Skeleton'
@@ -49,6 +52,7 @@ type RenterSection =
   | 'add-product'
   | 'product-reservations'
   | 'pickup-tracking'
+  | 'pull-out-items'
   | 'my-cube-contract'
   | 'product-management'
   | 'income'
@@ -63,6 +67,9 @@ export default function RenterDashboard() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [reservations, setReservations] = useState<Reservation[]>([])
   const [extensionRequests, setExtensionRequests] = useState<ContractExtension[]>([])
+  const [pullOutItems, setPullOutItems] = useState<PullOutItem[]>([])
+  const [pullOutTab, setPullOutTab] = useState<'All' | 'Display' | 'Pick-up'>('All')
+  const [pullOutSearch, setPullOutSearch] = useState('')
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false)
@@ -74,6 +81,7 @@ export default function RenterDashboard() {
       'add-product',
       'product-reservations',
       'pickup-tracking',
+      'pull-out-items',
       'my-cube-contract',
       'product-management',
       'income',
@@ -152,7 +160,7 @@ export default function RenterDashboard() {
   const [reservationStatusFilter, setReservationStatusFilter] = useState<'All' | 'Pending' | 'Confirmed' | 'Cancelled' | 'Expired'>('All')
   const [reservationSearch, setReservationSearch] = useState('')
   const [pickupSearch, setPickupSearch] = useState('')
-  const [pickupStatusFilter, setPickupStatusFilter] = useState<'All' | 'Waiting' | 'Picked-up'>('All')
+  const [pickupStatusFilter, setPickupStatusFilter] = useState<'All' | 'Waiting' | 'Picked-up' | 'Pulled-out'>('All')
 
   const [pmTab, setPmTab] = useState<'active' | 'trash'>('active')
   const [pmSearch, setPmSearch] = useState('')
@@ -167,7 +175,7 @@ export default function RenterDashboard() {
       await cancelExpiredReservations()
     }
 
-    const [cRes, conRes, pRes, tRes, rRes, extRes] = await Promise.all([
+    const [cRes, conRes, pRes, tRes, rRes, extRes, poRes] = await Promise.all([
       supabase.from('cubes').select('*').order('cube_number'),
       supabase.from('contracts').select('*, cubes(*)').eq('renter_id', user.user_id).order('end_date'),
       supabase.from('products').select('*, cubes(cube_number, type)').eq('renter_id', user.user_id),
@@ -184,6 +192,7 @@ export default function RenterDashboard() {
         .select('*, contracts(*, cubes(*)), cubes(*)')
         .eq('renter_id', user.user_id)
         .order('extension_id', { ascending: false }),
+      fetchPullOutItems(),
     ])
 
     if (!silent) setLoading(false)
@@ -206,6 +215,11 @@ export default function RenterDashboard() {
     const mergedExts = extractExtensionsFromContracts(loadedContracts, !extRes.error && extRes.data ? extRes.data : [])
     setExtensionRequests(mergedExts as ContractExtension[])
 
+    let myPullOuts: PullOutItem[] = []
+    if (poRes.data) {
+      myPullOuts = poRes.data.filter((item) => item.renter_id === user.user_id)
+    }
+
     if (!tRes.error) {
       const myProds = (pRes.data || []) as Product[]
       const myProdIds = new Set(myProds.map((p) => p.product_id))
@@ -213,7 +227,38 @@ export default function RenterDashboard() {
         (t) => (t.product_id && myProdIds.has(t.product_id)) || t.renter_id === user.user_id,
       )
       setTransactions(renterTx)
+
+      // Merge any transactions that have [PULLED OUT] in notes or Pulled Out status into pull-out list
+      const pulledOutTx = renterTx.filter(
+        (t) => t.pickup_status === 'Pulled Out' || Boolean(t.notes?.startsWith('[PULLED OUT]')),
+      )
+      for (const t of pulledOutTx) {
+        if (!myPullOuts.some((p) => p.transaction_id === t.transaction_id)) {
+          const prod = t.products
+          const cubeNum = prod?.cubes?.cube_number || t.cubes?.cube_number || ''
+          const cubeType = prod?.cubes?.type || t.cubes?.type || 'Pick-up'
+          myPullOuts.push({
+            pull_out_id: -t.transaction_id,
+            type: (cubeType === 'Display' ? 'Display' : 'Pick-up') as 'Display' | 'Pick-up',
+            product_id: t.product_id,
+            cube_id: t.cube_id || prod?.cube_id,
+            renter_id: user.user_id,
+            transaction_id: t.transaction_id,
+            buyer_name: t.buyer_name,
+            product_name: prod?.product_name || t.product_name || 'Pickup Parcel',
+            price: Number(prod?.price || 0),
+            quantity: t.quantity || 1,
+            reason: t.notes?.match(/\[PULLED OUT\](?:\s*\(?(.*?)\)?)?/i)?.[1]?.replace(/[()]/g, '') || 'Unclaimed by buyer',
+            status: 'Pull Out',
+            notes: t.notes,
+            pulled_out_at: t.updated_at || t.transaction_date,
+            created_at: t.transaction_date || new Date().toISOString(),
+            cubes: { cube_number: cubeNum, type: cubeType },
+          } as PullOutItem)
+        }
+      }
     }
+    setPullOutItems(myPullOuts)
 
     let rawResList: Reservation[] = []
     if (!rRes.error) {
@@ -680,9 +725,16 @@ export default function RenterDashboard() {
     return reservations.filter((r) => r.status === 'Pending' && !isReservationExpired(r)).length
   }, [reservations])
 
+  function isItemPulledOut(t: Transaction) {
+    return t.pickup_status === 'Pulled Out' || Boolean(t.notes?.startsWith('[PULLED OUT]'))
+  }
+
   const waitingPickupsCount = useMemo(() => {
     return transactions.filter(
-      (t) => (t.products?.cubes?.type === 'Pick-up' || t.cubes?.type === 'Pick-up') && t.pickup_status === 'Waiting',
+      (t) =>
+        (t.products?.cubes?.type === 'Pick-up' || t.cubes?.type === 'Pick-up') &&
+        t.pickup_status === 'Waiting' &&
+        !isItemPulledOut(t),
     ).length
   }, [transactions])
 
@@ -749,6 +801,20 @@ export default function RenterDashboard() {
             {waitingPickupsCount > 0 && (
               <span className="badge info" style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem' }}>
                 {waitingPickupsCount}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            className={`renter-nav-btn ${activeSection === 'pull-out-items' ? 'active' : ''}`}
+            onClick={() => handleSectionChange('pull-out-items')}
+          >
+            <PackageMinus size={18} />
+            <span style={{ flex: 1 }}>Pull Out Items</span>
+            {pullOutItems.length > 0 && (
+              <span className="badge warn" style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem' }}>
+                {pullOutItems.length}
               </span>
             )}
           </button>
@@ -1333,7 +1399,7 @@ export default function RenterDashboard() {
             {/* Filter Toolbar */}
             <div style={{ display: 'flex', gap: '0.65rem', marginBottom: '1.25rem', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                {(['All', 'Waiting', 'Picked-up'] as const).map((st) => (
+                {(['All', 'Waiting', 'Picked-up', 'Pulled-out'] as const).map((st) => (
                   <button
                     key={st}
                     type="button"
@@ -1341,7 +1407,13 @@ export default function RenterDashboard() {
                     style={{ fontSize: '0.82rem', padding: '0.4rem 0.8rem' }}
                     onClick={() => setPickupStatusFilter(st)}
                   >
-                    {st === 'All' ? 'All Hand-overs' : st === 'Waiting' ? 'Waiting for Buyer' : 'Claimed / Picked Up'}
+                    {st === 'All'
+                      ? 'All Hand-overs'
+                      : st === 'Waiting'
+                      ? 'Waiting for Buyer'
+                      : st === 'Picked-up'
+                      ? 'Claimed / Picked Up'
+                      : 'Pulled Out'}
                   </button>
                 ))}
               </div>
@@ -1382,7 +1454,14 @@ export default function RenterDashboard() {
                       .filter((t) => {
                         const isPickup = (t.products?.cubes?.type || t.cubes?.type) === 'Pick-up'
                         if (!isPickup) return false
-                        if (pickupStatusFilter !== 'All' && t.pickup_status !== pickupStatusFilter) return false
+                        const isPulledOut = isItemPulledOut(t)
+                        if (pickupStatusFilter === 'Waiting') {
+                          if (t.pickup_status !== 'Waiting' || isPulledOut) return false
+                        } else if (pickupStatusFilter === 'Picked-up') {
+                          if (t.pickup_status !== 'Picked-up') return false
+                        } else if (pickupStatusFilter === 'Pulled-out') {
+                          if (!isPulledOut) return false
+                        }
                         if (pickupSearch.trim()) {
                           const q = pickupSearch.toLowerCase()
                           const bName = t.buyer_name?.toLowerCase() || ''
@@ -1424,7 +1503,20 @@ export default function RenterDashboard() {
                             <td><span className="badge info">{cubeNum}</span></td>
                             <td><span style={{ fontSize: '0.82rem', color: '#555' }}>{t.notes || '—'}</span></td>
                             <td>
-                              {t.pickup_status === 'Picked-up' ? (
+                              {isItemPulledOut(t) ? (
+                                <span
+                                  className="badge"
+                                  style={{
+                                    background: '#fef3c7',
+                                    color: '#b45309',
+                                    border: '1px solid #f59e0b',
+                                    fontWeight: 700,
+                                    fontSize: '0.74rem',
+                                  }}
+                                >
+                                  Pulled Out
+                                </span>
+                              ) : t.pickup_status === 'Picked-up' ? (
                                 <span className="badge ok">Claimed</span>
                               ) : (
                                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -1949,6 +2041,137 @@ export default function RenterDashboard() {
                 <div className="empty" style={{ padding: '2rem' }}>No completed orders recorded yet.</div>
               )}
             </div>
+          </div>
+        )}
+        {/* ────────────────────────────────────────────────────────
+            SECTION 7: PULL OUT ITEMS
+           ──────────────────────────────────────────────────────── */}
+        {activeSection === 'pull-out-items' && (
+          <div>
+            <div className="page-header">
+              <div>
+                <h1>Pull Out Items</h1>
+                <p className="lede">
+                  Inventory items pulled out from store display cubes or pick-up shelves (due to expired contracts, buyer non-claims, or returns).
+                </p>
+              </div>
+            </div>
+
+            {/* Filter Toolbar */}
+            <div style={{ display: 'flex', gap: '0.65rem', marginBottom: '1.25rem', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                {(['All', 'Display', 'Pick-up'] as const).map((tab) => {
+                  const count = tab === 'All'
+                    ? pullOutItems.length
+                    : pullOutItems.filter((i) => i.type === tab).length
+                  return (
+                    <button
+                      key={tab}
+                      type="button"
+                      className={pullOutTab === tab ? 'btn' : 'btn-ghost'}
+                      style={{ fontSize: '0.82rem', padding: '0.4rem 0.8rem' }}
+                      onClick={() => setPullOutTab(tab)}
+                    >
+                      {tab === 'All' ? `All Items (${count})` : tab === 'Display' ? `Display Items (${count})` : `Pick-up Items (${count})`}
+                    </button>
+                  )
+                })}
+              </div>
+
+              <div style={{ position: 'relative', minWidth: 220 }}>
+                <Search size={15} color="#94a3b8" style={{ position: 'absolute', left: 10, top: 11 }} />
+                <input
+                  type="text"
+                  placeholder="Search item, cube, reason…"
+                  value={pullOutSearch}
+                  onChange={(e) => setPullOutSearch(e.target.value)}
+                  style={{ paddingLeft: '2.1rem', margin: 0, height: 38, fontSize: '0.82rem' }}
+                />
+              </div>
+            </div>
+
+            {/* Table */}
+            {loading ? (
+              <SkeletonTable rows={4} cols={8} />
+            ) : (
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Product / Item</th>
+                      <th>Type</th>
+                      <th>Cube #</th>
+                      <th>Price</th>
+                      <th>Qty Pulled Out</th>
+                      <th>Reason</th>
+                      <th>Date Pulled Out</th>
+                      <th>Status</th>
+                      <th>Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pullOutItems
+                      .filter((i) => {
+                        if (pullOutTab !== 'All' && i.type !== pullOutTab) return false
+                        if (pullOutSearch.trim()) {
+                          const q = pullOutSearch.toLowerCase()
+                          const name = (i.product_name || '').toLowerCase()
+                          const cube = (i.cubes?.cube_number || '').toLowerCase()
+                          const reason = (i.reason || '').toLowerCase()
+                          const notes = (i.notes || '').toLowerCase()
+                          if (!name.includes(q) && !cube.includes(q) && !reason.includes(q) && !notes.includes(q)) {
+                            return false
+                          }
+                        }
+                        return true
+                      })
+                      .map((i) => (
+                        <tr key={i.pull_out_id}>
+                          <td><strong>{i.product_name}</strong></td>
+                          <td>
+                            <span className={`badge ${i.type === 'Pick-up' ? 'pickup' : 'info'}`}>
+                              {i.type}
+                            </span>
+                          </td>
+                          <td><span className="badge info">{i.cubes?.cube_number || '—'}</span></td>
+                          <td>{peso(i.price)}</td>
+                          <td><strong>{i.quantity}</strong></td>
+                          <td>
+                            <span
+                              className="badge"
+                              style={{
+                                background: '#fef3c7',
+                                color: '#b45309',
+                                border: '1px solid #fcd34d',
+                                fontSize: '0.74rem',
+                              }}
+                            >
+                              {i.reason || 'Pull Out'}
+                            </span>
+                          </td>
+                          <td style={{ fontSize: '0.82rem', color: '#64748b' }}>
+                            {i.pulled_out_at ? new Date(i.pulled_out_at).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' }) : '—'}
+                          </td>
+                          <td>
+                            <span className="badge warn" style={{ fontSize: '0.74rem' }}>
+                              {i.status || 'Pulled Out'}
+                            </span>
+                          </td>
+                          <td><span style={{ fontSize: '0.82rem', color: '#555' }}>{i.notes || '—'}</span></td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+                {pullOutItems.length === 0 && (
+                  <div className="empty" style={{ padding: '2.5rem 1rem' }}>
+                    <p style={{ margin: 0, fontWeight: 600 }}>No pulled out items on record.</p>
+                    <p className="muted" style={{ fontSize: '0.82rem', marginTop: 4 }}>
+                      All your products are actively placed in your display cubes or awaiting buyer pick-up.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </main>

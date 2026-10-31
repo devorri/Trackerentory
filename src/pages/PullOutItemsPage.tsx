@@ -23,8 +23,12 @@ export default function PullOutItemsPage() {
   const { user } = useAuth()
   const role = user?.role
 
-  // Only Owner and Staff have access
+  // Only Owner and Staff have full administrative access.
+  // If a Renter visits /pull-out, route them seamlessly to their dedicated Renter Workspace section.
   if (role !== 'Owner' && role !== 'Staff') {
+    if (role === 'Renter') {
+      return <Navigate to="/renter?section=pull-out-items" replace />
+    }
     return <Navigate to="/" replace />
   }
 

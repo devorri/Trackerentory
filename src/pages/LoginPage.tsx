@@ -64,10 +64,6 @@ export default function LoginPage() {
   const [newPassword, setNewPassword] = useState('')
   const [newPasswordConfirm, setNewPasswordConfirm] = useState('')
 
-  // Test / demo fallback OTP code display
-  const [signupTestOtp, setSignupTestOtp] = useState<string | null>(null)
-  const [forgotTestOtp, setForgotTestOtp] = useState<string | null>(null)
-
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
 
@@ -88,8 +84,6 @@ export default function LoginPage() {
     setOtpCode('')
     setSigninOtp('')
     setForgotOtp('')
-    setSignupTestOtp(null)
-    setForgotTestOtp(null)
     setSignupConfirmPw('')
     setSignupSocial('')
     setNewPasswordConfirm('')
@@ -153,17 +147,11 @@ export default function LoginPage() {
     const otpResult = await requestOtp(appUser.email, 'login', appUser.user_id)
     setLoading(false)
 
-    if (otpResult.error) return setError('Failed to send OTP: ' + otpResult.error)
-
-    if (otpResult.emailSent) {
-      setInfo(`A verification code has been sent to ${maskEmail(appUser.email)}. (Test code: ${otpResult.code})`)
-      if (otpResult.code) setSigninOtp(otpResult.code)
-    } else if (otpResult.code) {
-      setSigninOtp(otpResult.code)
-      setInfo(`Demo/Test Mode: Your verification code is ${otpResult.code} (auto-filled below).`)
-    } else {
-      return setError('The OTP email could not be sent. Sign-in is blocked until email delivery is configured.')
+    if (otpResult.error || !otpResult.emailSent) {
+      return setError(otpResult.error || "Failed to send OTP verification email. Please try again.");
     }
+    setSigninOtp("");
+    setInfo(`A 6-digit verification code has been sent to ${maskEmail(appUser.email)}. Please check your email.`);
     setSigninStep('otp')
   }
 
@@ -247,16 +235,11 @@ export default function LoginPage() {
     // Send OTP to email
     const otpResult = await requestOtp(cleanEmail, 'create_account')
     setLoading(false)
-    if (otpResult.error) return setError('Failed to send OTP: ' + otpResult.error)
-
-    if (otpResult.emailSent) {
-      setInfo('A 6-digit code has been sent to your email.')
-      setSignupTestOtp(null)
-    } else if (otpResult.code) {
-      setSignupTestOtp(otpResult.code)
-      setOtpCode(otpResult.code)
-      setInfo(`Demo/Test Mode: Your verification code is ${otpResult.code} (auto-filled below).`)
+    if (otpResult.error || !otpResult.emailSent) {
+      return setError(otpResult.error || 'Failed to send verification email. Please try again.')
     }
+    setOtpCode('')
+    setInfo(`A 6-digit code has been sent to ${maskEmail(cleanEmail)}. Please check your email.`)
     setSignupStep('otp')
   }
 
@@ -310,16 +293,11 @@ export default function LoginPage() {
     setForgotEmail(user.email)
     const otpResult = await requestOtp(user.email, 'forgot_password', user.user_id)
     setLoading(false)
-    if (otpResult.error) return setError('Failed to send OTP: ' + otpResult.error)
-
-    if (otpResult.emailSent) {
-      setInfo(`OTP sent to ${maskEmail(user.email)}.`)
-      setForgotTestOtp(null)
-    } else if (otpResult.code) {
-      setForgotTestOtp(otpResult.code)
-      setForgotOtp(otpResult.code)
-      setInfo(`Demo/Test Mode: Your verification code is ${otpResult.code} (auto-filled below).`)
+    if (otpResult.error || !otpResult.emailSent) {
+      return setError(otpResult.error || 'Failed to send verification email. Please try again.')
     }
+    setForgotOtp('')
+    setInfo(`A 6-digit verification code has been sent to ${maskEmail(user.email)}. Please check your email.`)
     setForgotStep('otp')
   }
 
@@ -587,19 +565,7 @@ export default function LoginPage() {
                     onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                     placeholder="000000"
                   />
-                  {signupTestOtp && (
-                    <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.4rem 0.75rem', background: 'rgba(99, 102, 241, 0.1)', border: '1px solid rgba(99, 102, 241, 0.25)', borderRadius: '6px', fontSize: '0.85rem' }}>
-                      <span>Test Code: <strong style={{ letterSpacing: '1px' }}>{signupTestOtp}</strong></span>
-                      <button
-                        type="button"
-                        className="btn-ghost"
-                        style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem', height: 'auto' }}
-                        onClick={() => setOtpCode(signupTestOtp)}
-                      >
-                        Auto-Fill
-                      </button>
-                    </div>
-                  )}
+                  
                 </div>
                 <div className="row" style={{ marginTop: '0.35rem' }}>
                   <button className="btn" type="button" onClick={handleSignupVerifyOtp} disabled={loading}>
@@ -652,19 +618,7 @@ export default function LoginPage() {
                     onChange={(e) => setForgotOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
                     placeholder="000000"
                   />
-                  {forgotTestOtp && (
-                    <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.4rem 0.75rem', background: 'rgba(99, 102, 241, 0.1)', border: '1px solid rgba(99, 102, 241, 0.25)', borderRadius: '6px', fontSize: '0.85rem' }}>
-                      <span>Test Code: <strong style={{ letterSpacing: '1px' }}>{forgotTestOtp}</strong></span>
-                      <button
-                        type="button"
-                        className="btn-ghost"
-                        style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem', height: 'auto' }}
-                        onClick={() => setForgotOtp(forgotTestOtp)}
-                      >
-                        Auto-Fill
-                      </button>
-                    </div>
-                  )}
+                  
                 </div>
                 <div className="row" style={{ marginTop: '0.35rem' }}>
                   <button className="btn" type="button" onClick={handleForgotVerifyOtp} disabled={loading}>
