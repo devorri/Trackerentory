@@ -505,10 +505,12 @@ export default function ReservationsPage() {
     <section>
       <div className="page-header">
         <div>
-          <h1>{isStaffOrOwner ? 'Reservations Management' : user.role === 'Customer' ? 'My Product Reservations' : 'Reservations Hub'}</h1>
+          <h1>{isStaffOrOwner ? 'Cube Reservations Management' : user.role === 'Customer' ? 'My Product Reservations' : 'Reservations Hub'}</h1>
           <p className="lede">
-            {isStaffOrOwner
-              ? 'Review and confirm customer product reservations and renter cube reservations.'
+            {user.role === 'Owner'
+              ? 'Review and approve renter cube reservations and confirm customer product reservations.'
+              : user.role === 'Staff'
+              ? 'View and monitor incoming cube reservations and customer product reservations (View-only UI).'
               : user.role === 'Customer'
               ? 'Manage your reserved shop products before their hold timer expires.'
               : 'Review and track customer product reservations and your cube rental reservations.'}
@@ -561,14 +563,6 @@ export default function ReservationsPage() {
         >
           <CalendarCheck size={16} /> All Reservations ({counts.all})
         </button>
-        <button
-          type="button"
-          className={typeFilter === 'products' ? 'btn' : 'btn-ghost'}
-          onClick={() => { setTypeFilter('products'); setPage(1) }}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.88rem' }}
-        >
-          <Package size={16} /> Product Reservations ({counts.products})
-        </button>
         {user.role !== 'Customer' && (
           <button
             type="button"
@@ -579,6 +573,14 @@ export default function ReservationsPage() {
             <Box size={16} /> Cube Reservations ({counts.cubes})
           </button>
         )}
+        <button
+          type="button"
+          className={typeFilter === 'products' ? 'btn' : 'btn-ghost'}
+          onClick={() => { setTypeFilter('products'); setPage(1) }}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.88rem' }}
+        >
+          <Package size={16} /> Product Reservations ({counts.products})
+        </button>
       </div>
 
       {/* ── Filter & Search Toolbar ── */}
@@ -875,7 +877,7 @@ export default function ReservationsPage() {
                     {/* ACTIONS */}
                     <td style={{ textAlign: 'right' }}>
                       <div className="row" style={{ justifyContent: 'flex-end', gap: '0.4rem' }}>
-                        {isStaffOrOwner ? (
+                        {user.role === 'Owner' ? (
                           isCube && isPending ? (
                             <>
                               <button
@@ -959,6 +961,21 @@ export default function ReservationsPage() {
                               {r.status === 'Confirmed' ? (isCube ? 'Approved' : 'Sold / Claimed') : '—'}
                             </span>
                           )
+                        ) : user.role === 'Staff' ? (
+                          <span
+                            className="badge"
+                            style={{
+                              background: '#f1f5f9',
+                              color: '#64748b',
+                              fontSize: '0.72rem',
+                              fontWeight: 600,
+                              padding: '0.25rem 0.55rem',
+                              border: '1px solid #e2e8f0',
+                            }}
+                            title="Staff account is in monitoring / view-only mode"
+                          >
+                            View Only
+                          </span>
                         ) : isCube ? (
                           isPending ? (
                             <button

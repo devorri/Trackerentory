@@ -195,7 +195,7 @@ function InnerApp() {
               onClick={() => setAdminSidebarOpen(false)}
             >
               <CalendarCheck size={18} />
-              <span style={{ flex: 1 }}>Reservations</span>
+              <span style={{ flex: 1 }}>Cube Reservations</span>
               {pendingReservationsCount > 0 && (
                 <span className="badge warn" style={{ fontSize: '0.7rem', padding: '0.1rem 0.45rem' }}>
                   {pendingReservationsCount}

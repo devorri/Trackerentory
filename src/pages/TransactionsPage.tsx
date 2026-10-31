@@ -1,13 +1,12 @@
 import { useEffect, useState, useMemo } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
-import { Zap, X, Clock } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { X, Clock } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import {
   peso,
   type Product,
   type Transaction,
-  type Cube,
   type UserRow,
   type Reservation,
   isReservationExpired,
@@ -19,36 +18,6 @@ import { BUCKET_DOCUMENTS } from '../lib/supabase'
 import { SkeletonTable } from '../components/Skeleton'
 import { addPullOutItem } from '../lib/pull-out'
 
-type FormState = {
-  renter_id: string
-  cube_id: string
-  product_id: string
-  product_name: string
-  buyer_name: string
-  authorized_pickup_name: string
-  payment_status: 'Pending' | 'Paid'
-  payment_method: 'Cash' | 'Online'
-  pickup_status: 'Waiting' | 'Picked-up'
-  quantity: string
-  notes: string
-  receipt_image_url: string
-}
-
-const emptyForm: FormState = {
-  renter_id: '',
-  cube_id: '',
-  product_id: '',
-  product_name: '',
-  buyer_name: '',
-  authorized_pickup_name: '',
-  payment_status: 'Paid',
-  payment_method: 'Cash',
-  pickup_status: 'Picked-up',
-  quantity: '1',
-  notes: '',
-  receipt_image_url: '',
-}
-
 type Props = {
   defaultFilter?: 'All' | 'Display' | 'Pick-up'
   pageTitle?: string
@@ -56,14 +25,10 @@ type Props = {
 
 export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: Props) {
   const { user } = useAuth()
-  const [searchParams] = useSearchParams()
   const [rows, setRows] = useState<Transaction[]>([])
   const [products, setProducts] = useState<Product[]>([])
-  const [cubes, setCubes] = useState<Cube[]>([])
   const [renters, setRenters] = useState<UserRow[]>([])
   const [reservations, setReservations] = useState<Reservation[]>([])
-  const [selectedReservationId, setSelectedReservationId] = useState<string>('')
-  const [form, setForm] = useState<FormState>(emptyForm)
   const [filter, setFilter] = useState<'All' | 'Display' | 'Pick-up'>(defaultFilter)
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -87,13 +52,12 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
   async function load() {
     setLoading(true)
     await cancelExpiredReservations()
-    const [tRes, pRes, cRes, rRes, resRes] = await Promise.all([
+    const [tRes, pRes, rRes, resRes] = await Promise.all([
       supabase
         .from('transactions')
         .select('*, products(*, cubes(cube_number, type)), cubes(cube_number, type), users!processed_by(full_name, role)')
         .order('updated_at', { ascending: false }),
       supabase.from('products').select('*, cubes(cube_number, type)').order('product_name'),
-      supabase.from('cubes').select('*').order('cube_number'),
       supabase.from('users').select('*').eq('role', 'Renter').order('full_name'),
       supabase
         .from('reservations')
@@ -104,43 +68,15 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
     setLoading(false)
     if (!tRes.error) setRows((tRes.data || []) as Transaction[])
     if (!pRes.error) setProducts((pRes.data || []) as Product[])
-    if (!cRes.error) setCubes((cRes.data || []) as Cube[])
     if (!rRes.error) setRenters((rRes.data || []) as UserRow[])
     if (!resRes.error) {
-      const resList = (resRes.data || []) as Reservation[]
-      setReservations(resList)
-
-      // Handle claimId from query parameter
-      const queryClaimId = searchParams.get('claimId')
-      if (queryClaimId) {
-        const found = resList.find((r) => String(r.reservation_id) === queryClaimId)
-        if (found) {
-          applyReservationToForm(found)
-        }
-      }
+      setReservations((resRes.data || []) as Reservation[])
     }
-  }
-
-  function applyReservationToForm(r: Reservation) {
-    setSelectedReservationId(String(r.reservation_id))
-    const p = r.products
-    const prodName = p ? `${p.product_name}${p.variant ? ` (${p.variant})` : ''}` : ''
-    setForm((prev) => ({
-      ...prev,
-      buyer_name: r.customer?.full_name || prev.buyer_name,
-      product_id: p?.product_id ? String(p.product_id) : prev.product_id,
-      product_name: prodName || prev.product_name,
-      cube_id: p?.cube_id ? String(p.cube_id) : r.cube_id ? String(r.cube_id) : prev.cube_id,
-      renter_id: p?.renter_id ? String(p.renter_id) : prev.renter_id,
-      quantity: '1',
-      pickup_status: 'Picked-up',
-      payment_status: 'Paid',
-    }))
   }
 
   useEffect(() => {
     void load()
-  }, [searchParams])
+  }, [])
 
   const renterMap = useMemo(() => {
     const map = new Map<number, string>()
@@ -174,98 +110,6 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
   }
 
   const me = user
-
-  // Filter products for the form based on selected renter or cube (exclude Pick-up cubes when on Display Tracking)
-  const availableFormProducts = products.filter((p) => {
-    if (p.deleted_at) return false
-    if (filter === 'Display' && p.cubes?.type === 'Pick-up') return false
-    if (form.renter_id && p.renter_id !== Number(form.renter_id)) return false
-    if (form.cube_id && p.cube_id !== Number(form.cube_id)) return false
-    return true
-  })
-
-  function handleProductNameChange(productName: string) {
-    const normalized = productName.trim().toLowerCase()
-    const prod = availableFormProducts.find(
-      (candidate) =>
-        `${candidate.product_name}${candidate.variant ? ` (${candidate.variant})` : ''}`.toLowerCase() === normalized ||
-        candidate.product_name.toLowerCase() === normalized,
-    )
-    setForm((prev) => ({
-      ...prev,
-      product_name: productName,
-      product_id: prod ? String(prod.product_id) : '',
-      renter_id: prod?.renter_id ? String(prod.renter_id) : prev.renter_id,
-      cube_id: prod?.cube_id ? String(prod.cube_id) : prev.cube_id,
-    }))
-  }
-
-  async function saveNew() {
-    if (!form.product_name.trim() || !form.buyer_name.trim()) {
-      return alert('Product and buyer name are required.')
-    }
-    setBusy(true)
-    const normalizedName = form.product_name.trim().toLowerCase()
-    const matchedProduct =
-      products.find((product) => product.product_id === Number(form.product_id)) ||
-      availableFormProducts.find(
-        (candidate) =>
-          `${candidate.product_name}${candidate.variant ? ` (${candidate.variant})` : ''}`.toLowerCase() === normalizedName ||
-          candidate.product_name.toLowerCase() === normalizedName,
-      )
-    const selectedCube = cubes.find((cube) => cube.cube_id === Number(form.cube_id || matchedProduct?.cube_id))
-    if (selectedCube?.type === 'Pick-up' && !selectedReservationId) {
-      setBusy(false)
-      return alert('Pickup details must be submitted by the renter from their Pick-up dashboard. Staff only verifies/confirms at the counter.')
-    }
-    const quantity = Math.max(1, Number(form.quantity) || 1)
-    if (matchedProduct && quantity > matchedProduct.stock_quantity) {
-      setBusy(false)
-      return alert(`Only ${matchedProduct.stock_quantity} unit(s) of "${matchedProduct.product_name}" are available.`)
-    }
-    const { error } = await supabase.from('transactions').insert([
-      {
-        product_id: matchedProduct?.product_id || null,
-        product_name: form.product_name.trim(),
-        cube_id: Number(form.cube_id) || matchedProduct?.cube_id || null,
-        renter_id: Number(form.renter_id) || matchedProduct?.renter_id || null,
-        buyer_name: form.buyer_name.trim(),
-        authorized_pickup_name: form.authorized_pickup_name.trim() || null,
-        payment_status: form.payment_status,
-        payment_method: form.payment_method,
-        pickup_status: form.pickup_status,
-        quantity,
-        listed_quantity: matchedProduct?.stock_quantity ?? null,
-        notes: form.notes.trim() || null,
-        receipt_image_url: form.receipt_image_url.trim() || null,
-        processed_by: me.user_id,
-        updated_at: new Date().toISOString(),
-      },
-    ])
-    setBusy(false)
-    if (error) return alert(error.message)
-
-    if (form.payment_status === 'Paid' && matchedProduct) {
-      if (matchedProduct.stock_quantity > 0) {
-        await supabase
-          .from('products')
-          .update({ stock_quantity: Math.max(0, matchedProduct.stock_quantity - quantity) })
-          .eq('product_id', matchedProduct.product_id)
-      }
-    }
-
-    // Automatically mark customer reservation as Confirmed / Claimed
-    if (selectedReservationId) {
-      await supabase
-        .from('reservations')
-        .update({ status: 'Confirmed' })
-        .eq('reservation_id', Number(selectedReservationId))
-      setSelectedReservationId('')
-    }
-
-    setForm(emptyForm)
-    void load()
-  }
 
   async function confirmCustomerReservationInline(r: Reservation) {
     if (!r.product_id) return
@@ -486,7 +330,9 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
         <div>
           <h1>{computedTitle}</h1>
           <p className="lede">
-            Track product handovers: product being left, renter, assigned cube, buyer name, authorized alternate, payments, and pickup verification.
+            {filter === 'Display'
+              ? 'Real-time monitoring table for cube display product sales, inventory claims, and customer reservations.'
+              : 'Track product handovers: product being left, renter, assigned cube, buyer name, authorized alternate, payments, and pickup verification.'}
           </p>
         </div>
       </div>
@@ -512,198 +358,6 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
           <p className="muted" style={{ margin: 0, fontSize: '0.85rem', lineHeight: 1.5 }}>
             Pick-up products and claimant names are submitted by Renters from their dashboard. Counter staff and owners review claimant identity below, collect or verify payments, and click <strong>Mark Picked-up</strong> to complete customer pickup.
           </p>
-        </div>
-      )}
-
-      {/* Entry Form & Reservation Quick-Claim on Display Tracking and All views */}
-      {(filter === 'Display' || filter === 'All') && (
-        <div className="panel no-print" style={{ marginBottom: '2rem' }}>
-          <h2 style={{ marginTop: 0 }}>
-            {filter === 'Display' ? 'Record Display Sale / Claim Reserved Product' : 'Record New Transaction / Hand-over'}
-          </h2>
-          <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
-            {/* RESERVATION QUICK SELECTOR */}
-            {pendingDisplayReservations.length > 0 && (
-              <div
-                className="field"
-                style={{
-                  gridColumn: '1 / -1',
-                  background: '#fef3c7',
-                  padding: '0.85rem 1rem',
-                  borderRadius: 8,
-                  border: '1px solid #f59e0b',
-                }}
-              >
-                <label style={{ fontWeight: 700, color: '#92400e', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                  <Zap size={16} color="#d97706" /> Active Customer Product Reservations ({pendingDisplayReservations.length}) — Select to Auto-Fill or Confirm in Table Below
-                </label>
-                <select
-                  value={selectedReservationId}
-                  onChange={(e) => {
-                    const rid = e.target.value
-                    setSelectedReservationId(rid)
-                    if (!rid) return
-                    const found = reservations.find((r) => String(r.reservation_id) === rid)
-                    if (found) applyReservationToForm(found)
-                  }}
-                >
-                  <option value="">Select customer product reservation (auto-fills Buyer Name, Product, Cube, Renter)…</option>
-                  {pendingDisplayReservations.map((r) => (
-                    <option key={r.reservation_id} value={r.reservation_id}>
-                      {r.customer?.full_name || 'Customer'} — {r.products?.product_name || 'Product'}{' '}
-                      {r.products?.variant ? `(${r.products.variant})` : ''} · Cube{' '}
-                      {r.products?.cubes?.cube_number || r.cubes?.cube_number || '—'} [{getReservationHoursLeft(r)}h left]
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {/* Renter selector */}
-            <div className="field">
-              <label>Renter Who Left It</label>
-              <select value={form.renter_id} onChange={(e) => setForm({ ...form, renter_id: e.target.value })}>
-                <option value="">Any / Filter by Renter…</option>
-                {renters.map((r) => (
-                  <option key={r.user_id} value={r.user_id}>
-                    {r.full_name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Cube number selector */}
-            <div className="field">
-              <label>Cube Number</label>
-              <select value={form.cube_id} onChange={(e) => setForm({ ...form, cube_id: e.target.value })}>
-                <option value="">Any / Filter by Cube…</option>
-                {cubes
-                  .filter((c) => (filter === 'Display' ? c.type === 'Display' : true))
-                  .map((c) => (
-                    <option key={c.cube_id} value={c.cube_id}>
-                      {c.cube_number} ({c.type})
-                    </option>
-                  ))}
-              </select>
-            </div>
-
-            <div className="field">
-              <label>Product Sold *</label>
-              <input
-                list="tracking-products"
-                value={form.product_name}
-                onChange={(e) => handleProductNameChange(e.target.value)}
-                placeholder="Select or type product name"
-              />
-              <datalist id="tracking-products">
-                {availableFormProducts.map((p) => {
-                  const rName = p.renter_id ? renterMap.get(p.renter_id) : null
-                  return (
-                    <option key={p.product_id} value={`${p.product_name}${p.variant ? ` (${p.variant})` : ''}`}>
-                      {peso(p.price)} · Stock: {p.stock_quantity} {rName ? `[${rName}]` : ''}
-                    </option>
-                  )
-                })}
-              </datalist>
-            </div>
-
-            <div className="field">
-              <label>Buyer Name *</label>
-              <input
-                placeholder="e.g. Maria Santos"
-                value={form.buyer_name}
-                onChange={(e) => setForm({ ...form, buyer_name: e.target.value })}
-              />
-            </div>
-
-            <div className="field">
-              <label>Authorized Alternate</label>
-              <input
-                placeholder="Person authorized to claim"
-                value={form.authorized_pickup_name}
-                onChange={(e) => setForm({ ...form, authorized_pickup_name: e.target.value })}
-              />
-            </div>
-
-            <div className="field">
-              <label>Payment Status</label>
-              <select
-                value={form.payment_status}
-                onChange={(e) => setForm({ ...form, payment_status: e.target.value as 'Pending' | 'Paid' })}
-              >
-                <option value="Paid">Paid</option>
-                <option value="Pending">Pending</option>
-              </select>
-            </div>
-
-            <div className="field">
-              <label>Payment Process</label>
-              <select
-                value={form.payment_method}
-                onChange={(e) => setForm({ ...form, payment_method: e.target.value as 'Cash' | 'Online' })}
-              >
-                <option value="Cash">Cash</option>
-                <option value="Online">Online</option>
-              </select>
-            </div>
-
-            <div className="field">
-              <label>Quantity Purchased</label>
-              <input
-                type="number"
-                min="1"
-                value={form.quantity}
-                onChange={(e) => setForm({ ...form, quantity: e.target.value })}
-              />
-            </div>
-
-            <div className="field">
-              <label>Pickup Status</label>
-              <select
-                value={form.pickup_status}
-                onChange={(e) => setForm({ ...form, pickup_status: e.target.value as 'Waiting' | 'Picked-up' })}
-              >
-                <option value="Picked-up">Picked-up</option>
-                <option value="Waiting">Waiting</option>
-              </select>
-            </div>
-
-            {/* Conditional receipt upload for Online payments only */}
-            {form.payment_method === 'Online' && (
-              <div className="field">
-                <label>Receipt Proof (Online Payment)</label>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) =>
-                    void onReceiptFile(e.target.files?.[0] || null, (url) =>
-                      setForm({ ...form, receipt_image_url: url }),
-                    )
-                  }
-                />
-              </div>
-            )}
-          </div>
-
-          {form.payment_method === 'Online' && form.receipt_image_url && (
-            <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <img
-                src={form.receipt_image_url}
-                alt="Receipt Preview"
-                style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 6, border: '1px solid #ddd' }}
-              />
-              <span style={{ fontSize: '0.8rem', color: '#666' }}>Receipt attached</span>
-            </div>
-          )}
-
-          <div className="field" style={{ marginTop: '1rem' }}>
-            <label>Notes (e.g. special handling, time left, condition)</label>
-            <textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
-          </div>
-
-          <button className="btn" type="button" disabled={busy} onClick={saveNew} style={{ marginTop: '0.5rem' }}>
-            {busy ? 'Saving…' : 'Save Sale Record'}
-          </button>
         </div>
       )}
 
