@@ -22,6 +22,7 @@ import { BarChart3, Package, Store, CalendarCheck, Tag, Box, FileText, Users, Us
 import { supabase } from './lib/supabase'
 import { daysUntil, type Contract } from './lib/types'
 import { extractExtensionsFromContracts } from './lib/contract-meta'
+import { buildPaymentSchedule } from './lib/cube-payments'
 import ConfirmModal from './components/ConfirmModal'
 import SystemNotice from './components/SystemNotice'
 import { cancelExpiredReservations, expireContracts } from './lib/maintenance'
@@ -47,6 +48,7 @@ function InnerApp() {
 
   const [pendingContractsCount, setPendingContractsCount] = useState(0)
   const [pendingReservationsCount, setPendingReservationsCount] = useState(0)
+  const [onlinePaymentsToVerify, setOnlinePaymentsToVerify] = useState(0)
 
   useEffect(() => {
     void cancelExpiredReservations()
@@ -56,10 +58,11 @@ function InnerApp() {
   useEffect(() => {
     if (!isAdmin) return
     async function loadPendingCounts() {
-      const [allConRes, resRes, extRes] = await Promise.all([
-        supabase.from('contracts').select('contract_id, cube_id, renter_id, status, contract_text'),
+      const [allConRes, resRes, extRes, payRes] = await Promise.all([
+        supabase.from('contracts').select('contract_id, cube_id, renter_id, status, contract_text, start_date, end_date'),
         supabase.from('reservations').select('reservation_id, cube_id, product_id, customer_id, expiry_time').eq('status', 'Pending'),
         supabase.from('contract_extensions').select('extension_id, contract_id, status').eq('status', 'Pending'),
+        supabase.from('contract_payments').select('*').neq('payment_status', 'Paid'),
       ])
       const allContracts = (allConRes.data || []) as Contract[]
       const pendingConList = allContracts.filter((c) => c.status === 'Pending')
@@ -86,6 +89,14 @@ function InnerApp() {
 
       setPendingReservationsCount(uniqueCubeKeys.size + pendingProdCount)
       setPendingContractsCount(uniqueCubeKeys.size + pendingExtCount)
+
+      // Online cube payments (reference no. + receipt) waiting for Owner / Staff verification
+      const dbPayments = payRes.error ? [] : ((payRes.data || []) as any[])
+      const toVerify = allContracts
+        .filter((c) => c.status !== 'Expired' && c.start_date && c.end_date)
+        .flatMap((c) => buildPaymentSchedule(c, dbPayments))
+        .filter((r) => r.status === 'For Verification').length
+      setOnlinePaymentsToVerify(toVerify)
     }
     void loadPendingCounts()
     const timer = window.setInterval(() => void loadPendingCounts(), 10000)
@@ -235,8 +246,17 @@ function InnerApp() {
                 <FileText size={18} />
                 <span style={{ flex: 1 }}>Contracts</span>
                 {pendingContractsCount > 0 && (
-                  <span className="badge warn" style={{ fontSize: '0.7rem', padding: '0.1rem 0.45rem' }}>
+                  <span className="badge warn" style={{ fontSize: '0.7rem', padding: '0.1rem 0.45rem' }} title="Pending contracts & extensions">
                     {pendingContractsCount}
+                  </span>
+                )}
+                {onlinePaymentsToVerify > 0 && (
+                  <span
+                    className="badge"
+                    style={{ fontSize: '0.7rem', padding: '0.1rem 0.45rem', background: '#2563eb', color: '#fff', marginLeft: 4 }}
+                    title="Online cube payments to verify"
+                  >
+                    {onlinePaymentsToVerify}
                   </span>
                 )}
               </NavLink>

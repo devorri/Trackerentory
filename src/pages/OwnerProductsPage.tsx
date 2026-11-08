@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { Trash2, RotateCcw, X, ArrowUpDown, Camera, Search } from 'lucide-react'
+import InventoryActivities from '../components/InventoryActivities'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import { peso, type Cube, type Product, DEFAULT_PRODUCT_CATEGORIES } from '../lib/types'
@@ -21,7 +22,7 @@ export default function OwnerProductsPage() {
   const [busy, setBusy] = useState(false)
   const [editId, setEditId] = useState<number | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
-  const [tab, setTab] = useState<'active' | 'trash'>('active')
+  const [tab, setTab] = useState<'active' | 'activities' | 'trash'>('active')
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('All')
   const [searchQuery, setSearchQuery] = useState('')
   const [confirmAction, setConfirmAction] = useState<{
@@ -69,11 +70,6 @@ export default function OwnerProductsPage() {
 
   const activeProducts = useMemo(() => products.filter((p) => !p.deleted_at), [products])
   const trashProducts = useMemo(() => products.filter((p) => Boolean(p.deleted_at)), [products])
-
-  function openAddModal() {
-    resetForm()
-    setIsModalOpen(true)
-  }
 
   function openEditModal(p: Product) {
     setEditId(p.product_id)
@@ -304,7 +300,7 @@ export default function OwnerProductsPage() {
   }
 
   const displayedList = useMemo(() => {
-    let list = [...(tab === 'active' ? activeProducts : trashProducts)]
+    let list = [...(tab === 'trash' ? trashProducts : activeProducts)]
     if (selectedCategoryFilter !== 'All') {
       if (selectedCategoryFilter === 'Uncategorized') {
         list = list.filter((p) => !p.category || !p.category.trim())
@@ -347,9 +343,6 @@ export default function OwnerProductsPage() {
           <h1>Product Management</h1>
           <p className="lede">Manage product inventory, pricing, stock levels, assigned cubes, and trash recovery.</p>
         </div>
-        <button className="btn" type="button" onClick={openAddModal}>
-          + Add New Product
-        </button>
       </div>
 
       {/* TABS */}
@@ -360,6 +353,13 @@ export default function OwnerProductsPage() {
           onClick={() => setTab('active')}
         >
           Active Products ({activeProducts.length})
+        </button>
+        <button
+          type="button"
+          className={tab === 'activities' ? 'btn' : 'btn-ghost'}
+          onClick={() => setTab('activities')}
+        >
+          Activities
         </button>
         <button
           type="button"
@@ -403,9 +403,9 @@ export default function OwnerProductsPage() {
             onChange={(e) => setSelectedCategoryFilter(e.target.value)}
             style={{ margin: 0, padding: '0.45rem 0.85rem', fontSize: '0.85rem', minWidth: 180 }}
           >
-            <option value="All">All Categories ({tab === 'active' ? activeProducts.length : trashProducts.length})</option>
+            <option value="All">All Categories ({tab === 'trash' ? trashProducts.length : activeProducts.length})</option>
             {existingCategories.map((cat) => {
-              const currentList = tab === 'active' ? activeProducts : trashProducts
+              const currentList = tab === 'trash' ? trashProducts : activeProducts
               const count = currentList.filter((p) => p.category?.trim() === cat).length
               return (
                 <option key={cat} value={cat}>
@@ -414,14 +414,16 @@ export default function OwnerProductsPage() {
               )
             })}
             <option value="Uncategorized">
-              Uncategorized ({(tab === 'active' ? activeProducts : trashProducts).filter((p) => !p.category?.trim()).length})
+              Uncategorized ({(tab === 'trash' ? trashProducts : activeProducts).filter((p) => !p.category?.trim()).length})
             </option>
           </select>
         </div>
       </div>
 
       {/* Table */}
-      {loading ? (
+      {tab === 'activities' ? (
+        <InventoryActivities totalProducts={activeProducts.length} search={searchQuery} category={selectedCategoryFilter} />
+      ) : loading ? (
         <SkeletonTable rows={6} cols={7} />
       ) : (
         <div className="table-wrap">

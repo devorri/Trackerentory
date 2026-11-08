@@ -33,6 +33,7 @@ import {
   type Transaction,
   type Reservation,
   type ContractExtension,
+  type ContractPayment,
   type PullOutItem,
   DEFAULT_PRODUCT_CATEGORIES,
   DEFAULT_CONTRACT_TERMS,
@@ -47,6 +48,9 @@ import { fetchPullOutItems } from '../lib/pull-out'
 import { uploadPublicImage } from '../lib/storage'
 import { BUCKET_DOCUMENTS, BUCKET_PRODUCT_IMAGES } from '../lib/supabase'
 import { SkeletonTable } from '../components/Skeleton'
+import { CubePaymentTable, PayOnlineModal, ReceiptPreviewModal, ViewPaymentModal } from '../components/CubePaymentModals'
+import InventoryActivities from '../components/InventoryActivities'
+import { buildPaymentSchedule, loadContractPayments, paymentStatusBadge, type CubePaymentRow } from '../lib/cube-payments'
 
 type RenterSection =
   | 'add-product'
@@ -112,7 +116,12 @@ export default function RenterDashboard() {
     authorized_alternate: '',
     notes: '',
   })
-  const [contractTab, setContractTab] = useState<'active' | 'pending' | 'extension' | 'expired'>('active')
+  const [contractTab, setContractTab] = useState<'active' | 'pending' | 'extension' | 'expired' | 'payments'>('active')
+  // Cube rental payments (online payment with reference number + receipt)
+  const [contractPayments, setContractPayments] = useState<ContractPayment[]>([])
+  const [payingRow, setPayingRow] = useState<CubePaymentRow | null>(null)
+  const [viewPaymentContract, setViewPaymentContract] = useState<Contract | null>(null)
+  const [receiptView, setReceiptView] = useState<string | null>(null)
 
   // ════════════ ADD PRODUCT DUAL FORM (Image 2) ════════════
   const [addProductType, setAddProductType] = useState<'display' | 'pickup'>('display')
@@ -162,7 +171,7 @@ export default function RenterDashboard() {
   const [pickupSearch, setPickupSearch] = useState('')
   const [pickupStatusFilter, setPickupStatusFilter] = useState<'All' | 'Waiting' | 'Picked-up' | 'Pulled-out'>('All')
 
-  const [pmTab, setPmTab] = useState<'active' | 'trash'>('active')
+  const [pmTab, setPmTab] = useState<'active' | 'activities' | 'trash'>('active')
   const [pmSearch, setPmSearch] = useState('')
   const [pmCategory, setPmCategory] = useState('All')
 
@@ -174,6 +183,8 @@ export default function RenterDashboard() {
       await expireContracts()
       await cancelExpiredReservations()
     }
+
+    loadContractPayments(user.user_id).then(setContractPayments)
 
     const [cRes, conRes, pRes, tRes, rRes, extRes, poRes] = await Promise.all([
       supabase.from('cubes').select('*').order('cube_number'),
@@ -1599,6 +1610,13 @@ export default function RenterDashboard() {
               >
                 Expired & Released ({categorizedContracts.expiredList.length})
               </button>
+              <button
+                type="button"
+                className={contractTab === 'payments' ? 'btn' : 'btn-ghost'}
+                onClick={() => setContractTab('payments')}
+              >
+                Cube Payment
+              </button>
             </div>
 
             {contracts.length === 0 ? (
@@ -1635,7 +1653,25 @@ export default function RenterDashboard() {
                   </div>
                 )}
 
-                {(() => {
+                {contractTab === 'payments' && (
+                  <div style={{ marginBottom: '2rem' }}>
+                    <div className="panel" style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, padding: '0.85rem 1.25rem', marginBottom: '1.25rem' }}>
+                      <strong style={{ color: '#075985', fontSize: '0.9rem' }}>Cube Rental Payments</strong>
+                      <p style={{ margin: '0.25rem 0 0', fontSize: '0.82rem', color: '#0c4a6e' }}>
+                        Default mode of payment is Cash at the store. To pay online, click <strong>Pay Online</strong>, enter the reference number and attach your receipt. The Owner or Staff will confirm it before it is marked as Paid.
+                      </p>
+                    </div>
+                    <CubePaymentTable
+                      contracts={[...categorizedContracts.activeList, ...categorizedContracts.pendingList, ...categorizedContracts.extensionList]}
+                      payments={contractPayments}
+                      renterName={user?.full_name || 'Renter'}
+                      onPayOnline={setPayingRow}
+                      onViewReceipt={setReceiptView}
+                    />
+                  </div>
+                )}
+
+                {contractTab !== 'payments' && (() => {
                   const list = contractTab === 'active'
                     ? categorizedContracts.activeList
                     : contractTab === 'pending'
@@ -1712,16 +1748,54 @@ export default function RenterDashboard() {
                               </div>
                             </div>
 
+                            {(contractTab === 'pending' || contractTab === 'active') && c.contract_id > 0 && (() => {
+                              const schedule = buildPaymentSchedule(c, contractPayments)
+                              const first = schedule[0]
+                              const paidCount = schedule.filter((r) => r.status === 'Paid').length
+                              return (
+                                <div style={{ fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                  {contractTab === 'pending' ? (
+                                    <>
+                                      <span className="muted">1st month payment:</span>
+                                      <span className={`badge ${paymentStatusBadge(first.status)}`}>{first.status}</span>
+                                      {first.status === 'For Verification' && first.referenceNumber && (
+                                        <span className="muted">Ref: {first.referenceNumber}</span>
+                                      )}
+                                    </>
+                                  ) : (
+                                    <>
+                                      <span className="muted">Payments:</span>
+                                      <strong>
+                                        {paidCount} of {schedule.length} month(s) paid
+                                      </strong>
+                                    </>
+                                  )}
+                                </div>
+                              )
+                            })()}
+
                             {/* Action buttons */}
-                            <div style={{ display: 'flex', gap: '0.65rem', marginTop: 'auto', paddingTop: '0.75rem', borderTop: '1px solid #f0f0f0', alignItems: 'center', justifyContent: 'space-between' }}>
-                              <button
-                                type="button"
-                                className="btn-ghost"
-                                style={{ fontSize: '0.8rem', padding: '0.35rem 0.65rem' }}
-                                onClick={() => setViewingContract(c)}
-                              >
-                                <FileText size={14} /> View Agreement
-                              </button>
+                            <div style={{ display: 'flex', gap: '0.65rem', marginTop: 'auto', paddingTop: '0.75rem', borderTop: '1px solid #f0f0f0', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+                              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+                                <button
+                                  type="button"
+                                  className="btn-ghost"
+                                  style={{ fontSize: '0.8rem', padding: '0.35rem 0.65rem' }}
+                                  onClick={() => setViewingContract(c)}
+                                >
+                                  <FileText size={14} /> View Agreement
+                                </button>
+                                {contractTab === 'active' && (
+                                  <button
+                                    type="button"
+                                    className="btn-ghost"
+                                    style={{ fontSize: '0.8rem', padding: '0.35rem 0.65rem' }}
+                                    onClick={() => setViewPaymentContract(c)}
+                                  >
+                                    <FileText size={14} /> View Payment
+                                  </button>
+                                )}
+                              </div>
 
                               {contractTab === 'extension' ? (
                                 hasPendingExtension ? (
@@ -1743,15 +1817,31 @@ export default function RenterDashboard() {
                                   </button>
                                 )
                               ) : contractTab === 'pending' ? (
-                                <button
-                                  type="button"
-                                  className="btn-ghost"
-                                  disabled={busy}
-                                  style={{ fontSize: '0.78rem', padding: '0.35rem 0.65rem', color: '#dc2626' }}
-                                  onClick={() => void cancelPendingCubeRequest(c)}
-                                >
-                                  Cancel Request
-                                </button>
+                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                                  {c.contract_id > 0 && (() => {
+                                    const first = buildPaymentSchedule(c, contractPayments)[0]
+                                    if (first.status === 'Paid') return null
+                                    return (
+                                      <button
+                                        type="button"
+                                        className="btn"
+                                        style={{ fontSize: '0.78rem', padding: '0.35rem 0.75rem' }}
+                                        onClick={() => setPayingRow(first)}
+                                      >
+                                        {first.status === 'For Verification' ? 'Resubmit Payment' : 'Pay Online'}
+                                      </button>
+                                    )
+                                  })()}
+                                  <button
+                                    type="button"
+                                    className="btn-ghost"
+                                    disabled={busy}
+                                    style={{ fontSize: '0.78rem', padding: '0.35rem 0.65rem', color: '#dc2626' }}
+                                    onClick={() => void cancelPendingCubeRequest(c)}
+                                  >
+                                    Cancel Request
+                                  </button>
+                                </div>
                               ) : contractTab === 'expired' ? (
                                 <span className="badge bad" style={{ fontSize: '0.75rem' }}>
                                   Expired & Released
@@ -1801,6 +1891,13 @@ export default function RenterDashboard() {
               </button>
               <button
                 type="button"
+                className={pmTab === 'activities' ? 'btn' : 'btn-ghost'}
+                onClick={() => setPmTab('activities')}
+              >
+                Activities
+              </button>
+              <button
+                type="button"
                 className={pmTab === 'trash' ? 'btn' : 'btn-ghost'}
                 onClick={() => setPmTab('trash')}
                 style={{ color: pmTab === 'trash' ? '#fff' : '#b00020' }}
@@ -1838,7 +1935,14 @@ export default function RenterDashboard() {
             </div>
 
             {/* Products Table */}
-            {loading ? (
+            {pmTab === 'activities' ? (
+              <InventoryActivities
+                renterId={user?.user_id}
+                totalProducts={activeProducts.length}
+                search={pmSearch}
+                category={pmCategory}
+              />
+            ) : loading ? (
               <SkeletonTable rows={5} cols={7} />
             ) : (
               <div className="table-wrap">
@@ -1856,7 +1960,7 @@ export default function RenterDashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(pmTab === 'active' ? activeProducts : trashProducts)
+                    {(pmTab === 'trash' ? trashProducts : activeProducts)
                       .filter((p) => {
                         if (pmCategory !== 'All' && (p.category?.trim() || '') !== pmCategory) return false
                         if (pmSearch.trim()) {
@@ -2460,6 +2564,31 @@ export default function RenterDashboard() {
       {galleryProduct && (
         <ProductGalleryModal isOpen={Boolean(galleryProduct)} product={galleryProduct} onClose={() => setGalleryProduct(null)} />
       )}
+
+      {/* ════════════ CUBE PAYMENT MODALS ════════════ */}
+      {viewPaymentContract && (
+        <ViewPaymentModal
+          contract={viewPaymentContract}
+          payments={contractPayments}
+          renterName={user?.full_name || 'Renter'}
+          onClose={() => setViewPaymentContract(null)}
+          onPayOnline={setPayingRow}
+          onViewReceipt={setReceiptView}
+        />
+      )}
+      {payingRow && (
+        <PayOnlineModal
+          row={payingRow}
+          onClose={() => setPayingRow(null)}
+          onSubmitted={() => {
+            setPayingRow(null)
+            if (user) void loadContractPayments(user.user_id).then(setContractPayments)
+            void load(true)
+            alert('Payment submitted! The Owner or Staff will verify your reference number and receipt.')
+          }}
+        />
+      )}
+      {receiptView && <ReceiptPreviewModal url={receiptView} onClose={() => setReceiptView(null)} />}
 
       {/* ════════════ SIGN OUT CONFIRM MODAL ════════════ */}
       <ConfirmModal

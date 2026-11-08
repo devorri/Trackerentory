@@ -65,6 +65,7 @@ export type Contract = {
   end_date: string
   status: 'Active' | 'Expired' | 'Pending'
   contract_text: string | null
+  renter_agreed_at?: string | null
   created_at?: string
   cubes?: Cube | null
   users?: { full_name: string; email?: string; phone_number?: string } | null
@@ -93,9 +94,11 @@ export type ContractPayment = {
   month_number: number
   due_date: string
   amount: number
-  payment_status: 'Pending' | 'Paid'
+  payment_status: 'Pending' | 'For Verification' | 'Paid'
   payment_method: 'Cash' | 'Online' | null
+  reference_number?: string | null
   receipt_image_url: string | null
+  submitted_at?: string | null
   paid_at: string | null
   processed_by: number | null
   notes: string | null
@@ -149,6 +152,25 @@ export type PullOutItem = {
   created_at?: string
   cubes?: { cube_number: string; type: string } | null
   renter?: { full_name: string; phone_number?: string | null; social_link?: string | null; username?: string | null } | null
+}
+
+export type StockMovement = {
+  movement_id: number
+  product_id: number | null
+  renter_id: number | null
+  cube_id: number | null
+  movement_type: 'Stock In' | 'Stock Out'
+  quantity: number
+  previous_quantity: number
+  new_quantity: number
+  product_name: string
+  variant: string | null
+  unit_price: number
+  image_url: string | null
+  created_at: string
+  products?: Pick<Product, 'product_name' | 'variant' | 'image_url' | 'image_urls' | 'stock_quantity' | 'deleted_at'> | null
+  cubes?: Pick<Cube, 'cube_number' | 'type'> | null
+  renter?: Pick<UserRow, 'user_id' | 'full_name' | 'username'> | null
 }
 
 export type OtpCode = {

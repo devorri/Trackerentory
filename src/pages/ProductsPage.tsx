@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { X, ArrowRight, Search, ChevronLeft, ChevronRight, Camera, CheckCircle2, Box, MapPin, Clock } from 'lucide-react'
+import { X, ArrowRight, Search, ChevronLeft, ChevronRight, Camera, CheckCircle2, Box, MapPin, Clock, FileText } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/Auth'
 import {
@@ -16,6 +16,7 @@ import {
   todayISO,
   addMonths,
   daysUntil,
+  DEFAULT_CONTRACT_TERMS,
 } from '../lib/types'
 import { cancelExpiredReservations, expireContracts } from '../lib/maintenance'
 import { SkeletonCard } from '../components/Skeleton'
@@ -43,6 +44,9 @@ export default function ProductsPage() {
   const [galleryCube, setGalleryCube] = useState<Cube | null>(null)
   const [activeCubeImageIndex, setActiveCubeImageIndex] = useState(0)
   const [reservedModalOpen, setReservedModalOpen] = useState(false)
+  // Contract agreement must be viewed and accepted before a cube can be reserved
+  const [agreementCube, setAgreementCube] = useState<Cube | null>(null)
+  const [agreedCubeId, setAgreedCubeId] = useState<number | null>(null)
   const [reservedModalMessage, setReservedModalMessage] = useState(
     'Your product has been reserved! Claim it before the reservation period expires.',
   )
@@ -152,6 +156,11 @@ export default function ProductsPage() {
         return
       }
 
+      if (agreedCubeId !== cube_id) {
+        setLoading(false)
+        return alert('Please read and agree to the Contract Agreement before reserving this cube.')
+      }
+
       await Promise.all([expireContracts(), cancelExpiredReservations()])
 
       const { data: existing, error: existingError } = await supabase
@@ -184,9 +193,24 @@ export default function ProductsPage() {
           start_date: start,
           end_date: end,
           status: 'Pending',
-          contract_text: null,
+          contract_text: DEFAULT_CONTRACT_TERMS,
+          renter_agreed_at: new Date().toISOString(),
         },
       ])
+      if (contractError && contractError.message.includes('renter_agreed_at')) {
+        // Migration 018 not run yet — save without the agreement timestamp
+        const retry = await supabase.from('contracts').insert([
+          {
+            renter_id: user.user_id,
+            cube_id,
+            start_date: start,
+            end_date: end,
+            status: 'Pending',
+            contract_text: DEFAULT_CONTRACT_TERMS,
+          },
+        ])
+        contractError = retry.error
+      }
       if (contractError && contractError.message.includes('contract_text')) {
         const retry = await supabase.from('contracts').insert([
           {
@@ -227,8 +251,9 @@ export default function ProductsPage() {
 
       setLoading(false)
       setReservingCube(null)
+      setAgreedCubeId(null)
       setReservedModalMessage(
-        `Cube reserved successfully for ${cubeMonths} month(s)! Please settle your payment within ${activeCubeHours} hour(s) before the reservation hold expires.`,
+        `Cube reserved successfully for ${cubeMonths} month(s)! Please settle your payment within ${activeCubeHours} hour(s) before the reservation hold expires — pay in cash at the store, or online via My Cube & Contract → Pending → Pay Online (reference number + receipt).`,
       )
       setReservedModalOpen(true)
       await loadProducts()
@@ -394,6 +419,7 @@ export default function ProductsPage() {
       return
     }
     if (user.role === 'Renter') {
+      if (reservingCube !== cubeId) setAgreedCubeId(null)
       setReservingCube(cubeId)
       return
     }
@@ -927,7 +953,7 @@ export default function ProductsPage() {
                             style={{ width: '100%', justifyContent: 'space-between' }}
                             onClick={(e) => {
                               e.stopPropagation()
-                              setReservingCube(cube.cube_id)
+                              handleCubeClick(cube.cube_id)
                             }}
                           >
                             <span>Reserve Cube</span>
@@ -962,6 +988,37 @@ export default function ProductsPage() {
                           }}
                           onClick={(e) => e.stopPropagation()}
                         >
+                          <div style={{ width: '100%', background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, padding: '0.65rem 0.75rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                              <strong style={{ fontSize: '0.82rem', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                                <FileText size={14} /> Contract Agreement
+                              </strong>
+                              <button
+                                type="button"
+                                className="btn-ghost"
+                                style={{ fontSize: '0.74rem', padding: '0.2rem 0.55rem' }}
+                                onClick={() => setAgreementCube(cube)}
+                              >
+                                View
+                              </button>
+                            </div>
+                            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: '0.76rem', marginTop: 6, cursor: 'pointer' }}>
+                              <input
+                                type="checkbox"
+                                checked={agreedCubeId === cube.cube_id}
+                                onChange={(e) => {
+                                  if (e.target.checked && agreedCubeId !== cube.cube_id) {
+                                    // Make sure the renter actually sees the agreement first
+                                    setAgreementCube(cube)
+                                  } else {
+                                    setAgreedCubeId(null)
+                                  }
+                                }}
+                                style={{ width: 'auto', marginTop: 2 }}
+                              />
+                              <span>I have read and agree to the cube rental contract agreement.</span>
+                            </label>
+                          </div>
                           <div className="field no-gap" style={{ width: '100%' }}>
                             <label className="muted" style={{ fontSize: '0.8rem', fontWeight: 700 }}>
                               Rental contract duration:
@@ -986,10 +1043,23 @@ export default function ProductsPage() {
                             </select>
                           </div>
                           <div className="row" style={{ width: '100%' }}>
-                            <button className="btn" style={{ flex: 1 }} onClick={() => void createCubeReservation(cube.cube_id)}>
+                            <button
+                              className="btn"
+                              style={{ flex: 1 }}
+                              disabled={agreedCubeId !== cube.cube_id || loading}
+                              title={agreedCubeId !== cube.cube_id ? 'Agree to the contract agreement first' : undefined}
+                              onClick={() => void createCubeReservation(cube.cube_id)}
+                            >
                               Confirm
                             </button>
-                            <button className="btn-ghost" style={{ flex: 1 }} onClick={() => setReservingCube(null)}>
+                            <button
+                              className="btn-ghost"
+                              style={{ flex: 1 }}
+                              onClick={() => {
+                                setReservingCube(null)
+                                setAgreedCubeId(null)
+                              }}
+                            >
                               Cancel
                             </button>
                           </div>
@@ -1378,6 +1448,83 @@ export default function ProductsPage() {
           </div>
         </div>,
         document.body,
+      )}
+      {/* ════════════ CONTRACT AGREEMENT (viewed before reserving a cube) ════════════ */}
+      {agreementCube && (
+        <div className="modal-overlay" onClick={() => setAgreementCube(null)}>
+          <div
+            className="modal-card"
+            style={{ maxWidth: 680, width: '100%', maxHeight: '90vh', overflowY: 'auto' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header" style={{ marginBottom: '1rem' }}>
+              <div>
+                <h3 style={{ margin: 0 }}>Cube Rental Contract Agreement</h3>
+                <span className="muted" style={{ fontSize: '0.85rem' }}>
+                  Please read the agreement before reserving Cube #{agreementCube.cube_number}
+                </span>
+              </div>
+              <button className="modal-close" onClick={() => setAgreementCube(null)}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: 12, padding: '1.25rem', color: '#1e293b' }}>
+              <div style={{ textAlign: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '0.75rem', marginBottom: '1rem' }}>
+                <h2 style={{ margin: 0, fontSize: '1.15rem' }}>Arce Concept Boutique Rental Agreement</h2>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.75rem', marginBottom: '1rem', fontSize: '0.88rem' }}>
+                <div>
+                  <span className="muted" style={{ fontSize: '0.75rem' }}>Lessee / Renter</span>
+                  <div style={{ fontWeight: 700 }}>{user?.full_name || '—'}</div>
+                </div>
+                <div>
+                  <span className="muted" style={{ fontSize: '0.75rem' }}>Cube</span>
+                  <div style={{ fontWeight: 700 }}>Cube #{agreementCube.cube_number} ({agreementCube.type})</div>
+                </div>
+                <div>
+                  <span className="muted" style={{ fontSize: '0.75rem' }}>Monthly Rate</span>
+                  <div style={{ fontWeight: 700, color: '#16a34a' }}>{peso(agreementCube.price_per_month)}</div>
+                </div>
+                <div>
+                  <span className="muted" style={{ fontSize: '0.75rem' }}>Lease Period</span>
+                  <div style={{ fontWeight: 700 }}>
+                    {cubeMonths} month(s) · {todayISO()} → {addMonths(todayISO(), cubeMonths)}
+                  </div>
+                </div>
+                <div>
+                  <span className="muted" style={{ fontSize: '0.75rem' }}>Total Rental Fee</span>
+                  <div style={{ fontWeight: 700 }}>{peso(agreementCube.price_per_month * cubeMonths)}</div>
+                </div>
+              </div>
+              <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: 6 }}>Terms and Conditions</div>
+              <div style={{ whiteSpace: 'pre-wrap', fontSize: '0.86rem', lineHeight: 1.6, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: '0.85rem' }}>
+                {DEFAULT_CONTRACT_TERMS}
+                {'\n'}6. Payment for the first month may be paid in cash at the store or online. For online payment, the renter must submit the reference number and the receipt (proof of payment); the Owner or Staff will verify it before marking the payment as Paid.
+              </div>
+              <p className="muted" style={{ fontSize: '0.78rem', marginTop: '0.75rem', marginBottom: 0 }}>
+                The reservation stays Pending until the store owner approves it. The cube becomes active for your products once approved.
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
+              <button type="button" className="btn-ghost" onClick={() => setAgreementCube(null)}>
+                Close
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  setAgreedCubeId(agreementCube.cube_id)
+                  setReservingCube(agreementCube.cube_id)
+                  setAgreementCube(null)
+                }}
+              >
+                I Agree
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   )

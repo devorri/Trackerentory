@@ -66,6 +66,7 @@ create table if not exists contracts (
   end_date date not null,
   status text not null check (status in ('Active', 'Expired', 'Pending')) default 'Pending',
   contract_text text,
+  renter_agreed_at timestamptz,
   created_at timestamptz default now()
 );
 
@@ -190,9 +191,11 @@ create table if not exists public.contract_payments (
   month_number integer not null default 1,
   due_date date not null,
   amount numeric not null default 0.00,
-  payment_status text not null default 'Pending' check (payment_status in ('Pending', 'Paid')),
-  payment_method text check (payment_method in ('Cash', 'Online')),
+  payment_status text not null default 'Pending' check (payment_status in ('Pending', 'For Verification', 'Paid')),
+  payment_method text default 'Cash' check (payment_method in ('Cash', 'Online')),
+  reference_number text,
   receipt_image_url text,
+  submitted_at timestamptz,
   paid_at timestamptz,
   processed_by integer references public.users(user_id) on delete set null,
   notes text,
@@ -232,3 +235,23 @@ grant all on public.pull_out_items to anon, authenticated;
 grant usage, select on sequence pull_out_items_pull_out_id_seq to anon, authenticated;
 
 
+
+-- Inventory stock in / stock out ledger (populated by trigger, see migration 017)
+create table if not exists public.stock_movements (
+  movement_id serial primary key,
+  product_id integer references public.products(product_id) on delete set null,
+  renter_id integer references public.users(user_id) on delete set null,
+  cube_id integer references public.cubes(cube_id) on delete set null,
+  movement_type text not null check (movement_type in ('Stock In', 'Stock Out')),
+  quantity integer not null check (quantity > 0),
+  previous_quantity integer not null default 0,
+  new_quantity integer not null default 0,
+  product_name text not null,
+  variant text,
+  unit_price numeric(12,2) not null default 0,
+  image_url text,
+  created_at timestamptz not null default now()
+);
+
+grant all on public.stock_movements to anon, authenticated;
+grant usage, select on sequence public.stock_movements_movement_id_seq to anon, authenticated;

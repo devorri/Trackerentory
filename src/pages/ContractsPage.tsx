@@ -10,11 +10,17 @@ import {
   AlertTriangle,
   CheckCircle2,
   ArrowUpDown,
-  Upload,
   Clock,
+  BellRing,
 } from 'lucide-react'
-import { supabase, BUCKET_DOCUMENTS } from '../lib/supabase'
-import { uploadPublicImage } from '../lib/storage'
+import { supabase } from '../lib/supabase'
+import {
+  buildPaymentSchedule,
+  confirmPayment,
+  paymentStatusBadge,
+  rejectPayment,
+  type CubePaymentRow,
+} from '../lib/cube-payments'
 import { useAuth } from '../context/Auth'
 import {
   addMonths,
@@ -34,7 +40,6 @@ import {
   buildContractTextWithMeta,
   extractPaymentsFromContracts,
   extractExtensionsFromContracts,
-  saveContractPaymentInDb,
   updateContractExtensionStatusInDb,
 } from '../lib/contract-meta'
 import { expireContracts, cancelExpiredReservations } from '../lib/maintenance'
@@ -73,9 +78,8 @@ export default function ContractsPage() {
 
   // Contract Payments state (for Cube Payment multi-month tracking)
   const [contractPayments, setContractPayments] = useState<any[]>([])
-  const [paymentMopMap, setPaymentMopMap] = useState<Record<string, 'Cash' | 'Online'>>({})
-  const [paymentReceiptMap, setPaymentReceiptMap] = useState<Record<string, string>>({})
-  const [uploadingReceiptKey, setUploadingReceiptKey] = useState<string | null>(null)
+  const [paymentFilter, setPaymentFilter] = useState<'All' | 'For Verification' | 'Pending' | 'Paid'>('All')
+  const [processingPaymentKey, setProcessingPaymentKey] = useState<string | null>(null)
   const [previewReceipt, setPreviewReceipt] = useState<string | null>(null)
 
   // Form states
@@ -220,18 +224,6 @@ export default function ContractsPage() {
     }
     const mergedPayments = extractPaymentsFromContracts(loadedContracts, dbPayData)
     setContractPayments(mergedPayments)
-    const initialReceipts: Record<string, string> = {}
-    const initialMops: Record<string, 'Cash' | 'Online'> = {}
-    for (const p of mergedPayments) {
-      const mNum = p.month_number ?? p.month_index
-      if (mNum) {
-        const k = `${p.contract_id}-${mNum}`
-        if (p.receipt_image_url) initialReceipts[k] = p.receipt_image_url
-        if (p.payment_method) initialMops[k] = p.payment_method as 'Cash' | 'Online'
-      }
-    }
-    setPaymentReceiptMap((prev) => ({ ...prev, ...initialReceipts }))
-    setPaymentMopMap((prev) => ({ ...prev, ...initialMops }))
   }
 
   useEffect(() => {
@@ -240,6 +232,20 @@ export default function ContractsPage() {
 
   const isAdmin = user?.role === 'Owner' || user?.role === 'Staff'
   const isRenter = user?.role === 'Renter'
+
+  // Auto-refresh so new online cube payments show up for Owner / Staff
+  useEffect(() => {
+    if (!isAdmin) return
+    const timer = window.setInterval(() => void load(), 30000)
+    return () => window.clearInterval(timer)
+  }, [isAdmin])
+
+  // All monthly payment rows for every contract (Cube Payment tab)
+  const paymentRows = useMemo(
+    () => contracts.filter((c) => c.contract_id > 0).flatMap((c) => buildPaymentSchedule(c, contractPayments)),
+    [contracts, contractPayments],
+  )
+  const forVerificationRows = useMemo(() => paymentRows.filter((r) => r.status === 'For Verification'), [paymentRows])
 
   if (!user || (!isAdmin && !isRenter)) {
     return (
@@ -505,67 +511,28 @@ export default function ContractsPage() {
     void load()
   }
 
-  async function handleUploadCubePaymentReceipt(c: Contract, monthIndex: number, file: File | null) {
-    if (!file) return
-    const key = `${c.contract_id}-${monthIndex}`
-    setUploadingReceiptKey(key)
-
-    const upload = await uploadPublicImage(BUCKET_DOCUMENTS, file, 'cube-payments')
-    setUploadingReceiptKey(null)
-
-    if (upload.error || !upload.url) {
-      alert('Failed to upload receipt: ' + (upload.error || 'unknown error'))
-      return
-    }
-
-    const receiptUrl = upload.url
-    setPaymentReceiptMap((prev) => ({ ...prev, [key]: receiptUrl }))
-    setPaymentMopMap((prev) => ({ ...prev, [key]: 'Online' }))
-
-    const existing = contractPayments.find(
-      (p) => p.contract_id === c.contract_id && (p.month_number === monthIndex || p.month_index === monthIndex)
-    )
-    const isAlreadyPaid = (existing?.payment_status === 'Paid' || existing?.status === 'Paid') || (monthIndex === 1 && !existing)
-
-    await saveContractPaymentInDb(
-      c,
-      monthIndex,
-      isAlreadyPaid ? 'Paid' : 'Pending',
-      Number(c.cubes?.price_per_month || 0),
-      'Online',
-      receiptUrl,
-      user?.user_id,
-    )
+  async function handleConfirmPayment(row: CubePaymentRow) {
+    const label = row.status === 'For Verification'
+      ? `Confirm the online payment of ${peso(row.amount)} (Ref: ${row.referenceNumber || '—'}) for Agreement #${row.contract.contract_id}, Month ${row.monthIndex}?`
+      : `Mark Month ${row.monthIndex} of Agreement #${row.contract.contract_id} as PAID in cash (${peso(row.amount)})?`
+    if (!window.confirm(label)) return
+    setProcessingPaymentKey(row.key)
+    const err = await confirmPayment(row, user?.user_id)
+    setProcessingPaymentKey(null)
+    if (err) return alert('Failed to update payment: ' + err)
     void load()
   }
 
-  async function markMonthPaid(c: Contract, monthIndex: number) {
-    const key = `${c.contract_id}-${monthIndex}`
-    const mop = paymentMopMap[key] || 'Cash'
-    const receiptUrl = paymentReceiptMap[key] || null
-
-    if (mop === 'Online' && !receiptUrl) {
-      const proceed = window.confirm(
-        'You selected Online payment but have not attached a receipt proof yet.\n\nDo you want to proceed and mark as Paid anyway, or cancel to attach the receipt image first?'
-      )
-      if (!proceed) return
-    }
-
-    setSaving(true)
-    try {
-      await saveContractPaymentInDb(
-        c,
-        monthIndex,
-        'Paid',
-        Number(c.cubes?.price_per_month || 0),
-        mop,
-        receiptUrl,
-        user?.user_id,
-      )
-    } catch (err) {
-      console.error(err)
-    }
-    setSaving(false)
+  async function handleRejectPayment(row: CubePaymentRow) {
+    const reason = window.prompt(
+      `Reject the online payment (Ref: ${row.referenceNumber || '—'}) for Agreement #${row.contract.contract_id}, Month ${row.monthIndex}?\n\nReason (shown to the renter):`,
+      'Reference number / receipt could not be verified',
+    )
+    if (reason === null) return
+    setProcessingPaymentKey(row.key)
+    const err = await rejectPayment(row, reason, user?.user_id)
+    setProcessingPaymentKey(null)
+    if (err) return alert('Failed to update payment: ' + err)
     void load()
   }
 
@@ -590,6 +557,13 @@ export default function ContractsPage() {
   }, [contracts, renters])
 
   async function handleApprovePending(c: Contract) {
+    const firstPayment = buildPaymentSchedule(c, contractPayments)[0]
+    if (firstPayment?.status === 'For Verification') {
+      const ok = window.confirm(
+        `Renter paid the 1st month online.\nReference No.: ${firstPayment.referenceNumber || '—'}\nAmount: ${peso(firstPayment.amount)}\n\nApprove this contract and confirm the online payment as PAID?`,
+      )
+      if (!ok) return
+    }
     setSaving(true)
     const { data: updatedCon, error } = await supabase
       .from('contracts')
@@ -604,15 +578,12 @@ export default function ContractsPage() {
     }
 
     const activeCon = (updatedCon as Contract) || { ...c, status: 'Active' }
-    await saveContractPaymentInDb(
-      activeCon,
-      1,
-      'Paid',
-      Number(c.cubes?.price_per_month || 0),
-      'Cash',
-      null,
-      user?.user_id,
-    )
+    // Month 1 is collected upon approval: confirm the renter's online payment, or record it as cash
+    const firstRow = buildPaymentSchedule({ ...c, ...activeCon, cubes: activeCon.cubes || c.cubes } as Contract, contractPayments)[0]
+    if (firstRow && firstRow.status !== 'Paid') {
+      const payErr = await confirmPayment(firstRow, user?.user_id)
+      if (payErr) console.warn('First month payment update failed:', payErr)
+    }
 
     if (c.cube_id) {
       await supabase.from('cubes').update({ status: 'Occupied' }).eq('cube_id', c.cube_id)
@@ -983,6 +954,37 @@ export default function ContractsPage() {
         </div>
       </div>
 
+      {/* ── Online payment notification (Owner / Staff) ── */}
+      {isAdmin && forVerificationRows.length > 0 && (
+        <div
+          className="panel no-print"
+          style={{ background: '#eff6ff', border: '1px solid #93c5fd', borderRadius: 10, padding: '0.85rem 1.1rem', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}
+        >
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+            <BellRing size={20} color="#1d4ed8" style={{ marginTop: 2 }} />
+            <div>
+              <strong style={{ color: '#1e3a8a' }}>
+                {forVerificationRows.length} online cube payment{forVerificationRows.length > 1 ? 's' : ''} waiting for verification
+              </strong>
+              <div style={{ fontSize: '0.82rem', color: '#1e40af', marginTop: 2 }}>
+                {Array.from(new Set(forVerificationRows.map((r) => (r.contract.users as any)?.full_name || 'Renter'))).join(', ')} paid online. Check the reference number and receipt, then confirm.
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="btn"
+            style={{ fontSize: '0.82rem', padding: '0.4rem 0.9rem' }}
+            onClick={() => {
+              setFilterStatus('Cube Payment')
+              setPaymentFilter('For Verification')
+            }}
+          >
+            Review Payments
+          </button>
+        </div>
+      )}
+
       {/* ── Filter & Search Toolbar ── */}
       <div className="row no-print" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', gap: '1rem' }}>
         <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
@@ -1010,10 +1012,18 @@ export default function ContractsPage() {
               <button
                 type="button"
                 className={filterStatus === 'Cube Payment' ? 'btn' : 'btn-ghost'}
-                style={{ fontSize: '0.85rem', padding: '0.45rem 0.9rem' }}
+                style={{ fontSize: '0.85rem', padding: '0.45rem 0.9rem', display: 'inline-flex', alignItems: 'center', gap: 6 }}
                 onClick={() => setFilterStatus('Cube Payment')}
               >
                 Cube Payment
+                {forVerificationRows.length > 0 && (
+                  <span
+                    title={`${forVerificationRows.length} online payment(s) to verify`}
+                    style={{ background: '#dc2626', color: '#fff', borderRadius: 999, fontSize: '0.7rem', fontWeight: 800, padding: '0.05rem 0.45rem', lineHeight: 1.4 }}
+                  >
+                    {forVerificationRows.length}
+                  </span>
+                )}
               </button>
             </>
           )}
@@ -1115,234 +1125,162 @@ export default function ContractsPage() {
           {extensionRequests.length === 0 && <div className="empty" style={{ padding: '2rem' }}>No extension requests submitted yet.</div>}
         </div>
       ) : filterStatus === 'Cube Payment' ? (
-        <div className="table-wrap">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Contract #</th>
-                <th>Renter</th>
-                <th>Assigned Cube</th>
-                <th>Monthly Rate</th>
-                <th>Lease Period</th>
-                <th>Installment / Month</th>
-                <th>Payment Status</th>
-                <th>Mode of Payment</th>
-                <th style={{ textAlign: 'right' }}>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[...contracts]
-                .sort((a, b) => {
-                  const aActive = a.status === 'Active' ? 0 : 1
-                  const bActive = b.status === 'Active' ? 0 : 1
-                  if (aActive !== bActive) return aActive - bActive
-                  return b.contract_id - a.contract_id
-                })
-                .filter((c) => {
-                  if (!search.trim()) return true
-                  const q = search.toLowerCase()
-                  const rName = ((c.users as any)?.full_name || '').toLowerCase()
-                  const cubeNum = (c.cubes?.cube_number || '').toLowerCase()
-                  return rName.includes(q) || cubeNum.includes(q) || String(c.contract_id).includes(q)
-                })
-                .flatMap((c) => {
-                  const startD = new Date(c.start_date)
-                  const endD = new Date(c.end_date)
-                  const diffMonths = Math.max(1, Math.round((endD.getTime() - startD.getTime()) / (1000 * 60 * 60 * 24 * 30)))
-                  const renterName = (c.users as any)?.full_name || 'Renter'
-                  const cubeNum = c.cubes?.cube_number || `#${c.cube_id}`
-                  const cubeType = c.cubes?.type || '—'
-                  const rate = c.cubes?.price_per_month || 0
-
-                  return Array.from({ length: diffMonths }, (_, i) => {
-                    const monthIndex = i + 1
-                    const isMonth1 = monthIndex === 1
-                    const record = contractPayments.find(
-                      (p) => p.contract_id === c.contract_id && (p.month_number === monthIndex || p.month_index === monthIndex)
-                    )
-                    const isPaid = (record?.payment_status === 'Paid' || record?.status === 'Paid') || (isMonth1 && !record && c.status !== 'Pending')
-                    const key = `${c.contract_id}-${monthIndex}`
-                    const mop = record?.payment_method || paymentMopMap[key] || 'Cash'
-                    const receiptUrl = record?.receipt_image_url || paymentReceiptMap[key] || null
-                    const isUploading = uploadingReceiptKey === key
-
+        <div>
+          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.85rem' }}>
+            {(['All', 'For Verification', 'Pending', 'Paid'] as const).map((f) => {
+              const count = f === 'All' ? paymentRows.length : paymentRows.filter((r) => r.status === f).length
+              return (
+                <button
+                  key={f}
+                  type="button"
+                  className={paymentFilter === f ? 'btn' : 'btn-ghost'}
+                  style={{ fontSize: '0.78rem', padding: '0.35rem 0.8rem' }}
+                  onClick={() => setPaymentFilter(f)}
+                >
+                  {f === 'For Verification' ? 'Paid Online – To Verify' : f} ({count})
+                </button>
+              )
+            })}
+          </div>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Contract #</th>
+                  <th>Renter</th>
+                  <th>Assigned Cube</th>
+                  <th>Monthly Rate</th>
+                  <th>Lease Period</th>
+                  <th>Installment / Month</th>
+                  <th>Payment Status</th>
+                  <th>Mode of Payment</th>
+                  <th style={{ textAlign: 'right', minWidth: 150 }}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paymentRows
+                  .filter((row) => {
+                    if (paymentFilter !== 'All' && row.status !== paymentFilter) return false
+                    if (!search.trim()) return true
+                    const q = search.toLowerCase()
+                    const c = row.contract
+                    const rName = ((c.users as any)?.full_name || '').toLowerCase()
+                    const cubeNum = (c.cubes?.cube_number || '').toLowerCase()
                     return (
-                      <tr key={`${c.contract_id}-m${monthIndex}`}>
+                      rName.includes(q) ||
+                      cubeNum.includes(q) ||
+                      String(c.contract_id).includes(q) ||
+                      (row.referenceNumber || '').toLowerCase().includes(q)
+                    )
+                  })
+                  // Online payments waiting for verification are listed first
+                  .sort((x, y) => Number(y.status === 'For Verification') - Number(x.status === 'For Verification'))
+                  .map((row) => {
+                    const c = row.contract
+                    const renterName = (c.users as any)?.full_name || 'Renter'
+                    const isBusy = processingPaymentKey === row.key
+                    const toVerify = row.status === 'For Verification'
+                    return (
+                      <tr key={row.key} style={toVerify ? { background: '#eff6ff' } : undefined}>
                         <td><strong>#{c.contract_id}</strong></td>
-                        <td><strong>{renterName}</strong></td>
                         <td>
-                          <span className="badge info">Cube #{cubeNum} ({cubeType})</span>
+                          <strong>{renterName}</strong>
+                          {toVerify && (
+                            <div style={{ fontSize: '0.72rem', color: '#1d4ed8', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                              <BellRing size={12} /> Paid online
+                            </div>
+                          )}
                         </td>
-                        <td>{peso(rate)}</td>
+                        <td>
+                          <span className="badge info">Cube #{c.cubes?.cube_number || c.cube_id} ({c.cubes?.type || '—'})</span>
+                        </td>
+                        <td>{peso(c.cubes?.price_per_month)}</td>
                         <td>
                           <span style={{ fontSize: '0.82rem' }}>{c.start_date} → {c.end_date}</span>
+                          {c.status === 'Pending' && <div className="muted" style={{ fontSize: '0.72rem' }}>Contract pending approval</div>}
                         </td>
                         <td>
-                          <strong>Month {monthIndex} of {diffMonths}</strong>
-                          {isMonth1 && <span className="muted" style={{ fontSize: '0.72rem', display: 'block' }}>Initial Advance</span>}
-                        </td>
-                        <td>
-                          <span className={`status-pill ${isPaid ? 'confirmed' : 'pending'}`}>
-                            {isPaid ? 'Paid' : 'Pending'}
+                          <strong>Month {row.monthIndex} of {row.totalMonths}</strong>
+                          <span className="muted" style={{ fontSize: '0.72rem', display: 'block' }}>
+                            {row.monthIndex === 1 ? 'Initial Advance · ' : ''}Due {row.dueDate}
                           </span>
                         </td>
                         <td>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 140 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                              {isPaid ? (
-                                <span className={`badge ${mop === 'Online' ? 'info' : 'ok'}`} style={{ fontWeight: 700 }}>
-                                  {mop}
-                                </span>
-                              ) : (
-                                <select
-                                  value={mop}
-                                  onChange={(e) => {
-                                    const nextMop = e.target.value as 'Cash' | 'Online'
-                                    setPaymentMopMap((prev) => ({ ...prev, [key]: nextMop }))
-                                  }}
-                                  style={{ padding: '0.22rem 0.5rem', fontSize: '0.78rem', borderRadius: 6, fontWeight: 600 }}
-                                >
-                                  <option value="Cash">Cash</option>
-                                  <option value="Online">Online</option>
-                                </select>
+                          <span className={`badge ${paymentStatusBadge(row.status)}`}>{row.status}</span>
+                          {row.status === 'Pending' && row.notes && (
+                            <div style={{ fontSize: '0.7rem', color: '#b91c1c', marginTop: 3, maxWidth: 170 }}>{row.notes}</div>
+                          )}
+                        </td>
+                        <td>
+                          <span className={`badge ${row.method === 'Online' ? 'pickup' : 'ok'}`} style={{ fontWeight: 700 }}>
+                            {row.method}
+                          </span>
+                          {row.method === 'Online' && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5 }}>
+                              {row.receiptUrl && (
+                                <img
+                                  src={row.receiptUrl}
+                                  alt="Proof of payment"
+                                  title="Click to view proof of payment"
+                                  onClick={() => setPreviewReceipt(row.receiptUrl)}
+                                  style={{ width: 36, height: 36, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid #cbd5e1' }}
+                                />
                               )}
-
-                              {isPaid && isAdmin && (
-                                <button
-                                  type="button"
-                                  className="btn-ghost"
-                                  style={{ fontSize: '0.68rem', padding: '1px 5px', color: '#64748b' }}
-                                  onClick={() => {
-                                    const nextMop = mop === 'Cash' ? 'Online' : 'Cash'
-                                    setPaymentMopMap((prev) => ({ ...prev, [key]: nextMop }))
-                                    void saveContractPaymentInDb(
-                                      c,
-                                      monthIndex,
-                                      'Paid',
-                                      Number(rate),
-                                      nextMop,
-                                      receiptUrl,
-                                      user?.user_id,
-                                    ).then(() => void load())
-                                  }}
-                                  title="Change mode of payment"
-                                >
-                                  Edit
-                                </button>
-                              )}
-                            </div>
-
-                            {/* Online Receipt Attachment / Preview */}
-                            {mop === 'Online' && (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
-                                {receiptUrl ? (
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                    <img
-                                      src={receiptUrl}
-                                      alt="Payment Receipt"
-                                      style={{
-                                        width: 34,
-                                        height: 34,
-                                        objectFit: 'cover',
-                                        borderRadius: 4,
-                                        cursor: 'pointer',
-                                        border: '1px solid #cbd5e1',
-                                        boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-                                      }}
-                                      onClick={() => setPreviewReceipt(receiptUrl)}
-                                      title="Click to view full receipt"
-                                    />
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                                      <label
-                                        style={{
-                                          fontSize: '0.7rem',
-                                          cursor: isUploading ? 'not-allowed' : 'pointer',
-                                          color: '#2563eb',
-                                          textDecoration: 'underline',
-                                          fontWeight: 600,
-                                        }}
-                                      >
-                                        {isUploading ? 'Uploading…' : 'Change image'}
-                                        <input
-                                          type="file"
-                                          accept="image/*"
-                                          style={{ display: 'none' }}
-                                          disabled={isUploading}
-                                          onChange={(e) => {
-                                            const f = e.target.files?.[0] || null
-                                            void handleUploadCubePaymentReceipt(c, monthIndex, f)
-                                            e.target.value = ''
-                                          }}
-                                        />
-                                      </label>
-                                      <button
-                                        type="button"
-                                        className="btn-ghost"
-                                        style={{ fontSize: '0.68rem', padding: 0, color: '#0284c7', textAlign: 'left', fontWeight: 600 }}
-                                        onClick={() => setPreviewReceipt(receiptUrl)}
-                                      >
-                                        View
-                                      </button>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <label
-                                    style={{
-                                      fontSize: '0.72rem',
-                                      cursor: isUploading ? 'not-allowed' : 'pointer',
-                                      color: '#2563eb',
-                                      textDecoration: 'underline',
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: 4,
-                                      fontWeight: 600,
-                                      background: '#eff6ff',
-                                      padding: '3px 8px',
-                                      borderRadius: 6,
-                                      border: '1px dashed #93c5fd',
-                                    }}
-                                  >
-                                    <Upload size={12} />
-                                    {isUploading ? 'Uploading…' : 'Attach image'}
-                                    <input
-                                      type="file"
-                                      accept="image/*"
-                                      style={{ display: 'none' }}
-                                      disabled={isUploading}
-                                      onChange={(e) => {
-                                        const f = e.target.files?.[0] || null
-                                        void handleUploadCubePaymentReceipt(c, monthIndex, f)
-                                        e.target.value = ''
-                                      }}
-                                    />
-                                  </label>
+                              <div style={{ fontSize: '0.74rem', lineHeight: 1.35 }}>
+                                <div>
+                                  Ref No.: <strong>{row.referenceNumber || '—'}</strong>
+                                </div>
+                                {row.submittedAt && (
+                                  <div className="muted">Sent {new Date(row.submittedAt).toLocaleString('en-PH')}</div>
                                 )}
                               </div>
-                            )}
-                          </div>
+                            </div>
+                          )}
                         </td>
                         <td style={{ textAlign: 'right' }}>
-                          {isPaid ? (
+                          {row.status === 'Paid' ? (
                             <span className="badge ok" style={{ fontSize: '0.74rem' }}>Paid</span>
+                          ) : toVerify ? (
+                            <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                              <button
+                                className="btn"
+                                type="button"
+                                disabled={isBusy}
+                                style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem', background: '#16a34a', color: '#fff', border: 'none' }}
+                                onClick={() => void handleConfirmPayment(row)}
+                              >
+                                Confirm
+                              </button>
+                              <button
+                                className="btn-ghost"
+                                type="button"
+                                disabled={isBusy}
+                                style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem', color: '#dc2626' }}
+                                onClick={() => void handleRejectPayment(row)}
+                              >
+                                Reject
+                              </button>
+                            </div>
                           ) : (
                             <button
                               className="btn"
                               type="button"
-                              disabled={saving}
+                              disabled={isBusy}
                               style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem', background: '#16a34a', color: '#fff', border: 'none' }}
-                              onClick={() => void markMonthPaid(c, monthIndex)}
+                              onClick={() => void handleConfirmPayment(row)}
+                              title="Record a cash payment"
                             >
-                              Mark as Paid
+                              Mark as Paid (Cash)
                             </button>
                           )}
                         </td>
                       </tr>
                     )
-                  })
-                })}
-            </tbody>
-          </table>
-          {contracts.length === 0 && <div className="empty" style={{ padding: '2rem' }}>No contracts registered for cube payment tracking.</div>}
+                  })}
+              </tbody>
+            </table>
+            {paymentRows.length === 0 && <div className="empty" style={{ padding: '2rem' }}>No contracts registered for cube payment tracking.</div>}
+          </div>
         </div>
       ) : (
         <div className="table-wrap">
@@ -1367,6 +1305,7 @@ export default function ContractsPage() {
                 <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('status')}>
                   Status & Validity {renderSortIndicator('status')}
                 </th>
+                {filterStatus === 'Pending' && <th style={{ minWidth: 190 }}>Online Payment</th>}
                 <th style={{ textAlign: 'right', minWidth: 160 }}>Actions</th>
               </tr>
             </thead>
@@ -1431,6 +1370,53 @@ export default function ContractsPage() {
                         <span className="badge info">{c.status}</span>
                       )}
                     </td>
+                    {filterStatus === 'Pending' && (
+                      <td>
+                        {(() => {
+                          const first = buildPaymentSchedule(c, contractPayments)[0]
+                          if (!first || first.method !== 'Online' || first.status === 'Pending') {
+                            return (
+                              <div style={{ fontSize: '0.78rem' }}>
+                                <span className="badge ok">Cash</span>
+                                <div className="muted" style={{ marginTop: 3 }}>
+                                  {first?.notes || 'No online payment yet'}
+                                </div>
+                              </div>
+                            )
+                          }
+                          return (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              {first.receiptUrl && (
+                                <img
+                                  src={first.receiptUrl}
+                                  alt="Receipt"
+                                  title="Click to view receipt"
+                                  onClick={() => setPreviewReceipt(first.receiptUrl)}
+                                  style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid #cbd5e1' }}
+                                />
+                              )}
+                              <div style={{ fontSize: '0.76rem', lineHeight: 1.4 }}>
+                                <span className={`badge ${paymentStatusBadge(first.status)}`}>{first.status === 'Paid' ? 'Paid Online' : 'Paid Online – Verify'}</span>
+                                <div style={{ marginTop: 3 }}>
+                                  Ref No.: <strong>{first.referenceNumber || '—'}</strong>
+                                </div>
+                                <div className="muted">Amount: {peso(first.amount)}</div>
+                                {first.receiptUrl && (
+                                  <button
+                                    type="button"
+                                    className="btn-ghost"
+                                    style={{ fontSize: '0.7rem', padding: '1px 6px', marginTop: 2 }}
+                                    onClick={() => setPreviewReceipt(first.receiptUrl)}
+                                  >
+                                    View receipt
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })()}
+                      </td>
+                    )}
                     <td style={{ textAlign: 'right' }}>
                       <div className="row" style={{ justifyContent: 'flex-end', gap: '0.4rem' }}>
                         {isAdmin && c.status === 'Pending' && (
@@ -1591,6 +1577,11 @@ export default function ContractsPage() {
                 >
                   {stripContractMeta(viewingContract.contract_text) || DEFAULT_TERMS}
                 </div>
+                {viewingContract.renter_agreed_at && (
+                  <div style={{ marginTop: 8, fontSize: '0.8rem', color: '#15803d', fontWeight: 600 }}>
+                    ✓ Renter read and agreed to this contract agreement on {new Date(viewingContract.renter_agreed_at).toLocaleString('en-PH')}
+                  </div>
+                )}
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', marginTop: '2.5rem', textAlign: 'center' }}>
