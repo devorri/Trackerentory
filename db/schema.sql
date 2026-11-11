@@ -82,7 +82,7 @@ create table if not exists transactions (
   payment_method text not null check (payment_method in ('Cash', 'Online')) default 'Cash',
   quantity integer not null default 1,
   listed_quantity integer,
-  pickup_status text not null check (pickup_status in ('Waiting', 'Picked-up')) default 'Waiting',
+  pickup_status text not null check (pickup_status in ('Waiting', 'Picked-up', 'Pulled Out')) default 'Waiting',
   receipt_image_url text,
   notes text,
   transaction_date timestamptz default now(),
