@@ -136,6 +136,11 @@ export default function RenterDashboard() {
   })
   const [displayImages, setDisplayImages] = useState<File[]>([])
   const [displayImagePreviews, setDisplayImagePreviews] = useState<string[]>([])
+  // Display product: "Add Product" (new item) vs "Stock In Product" (add qty to existing item)
+  const [displayMode, setDisplayMode] = useState<'add' | 'stockin'>('add')
+  const [stockInSearch, setStockInSearch] = useState('')
+  const [stockInProduct, setStockInProduct] = useState<Product | null>(null)
+  const [stockInQty, setStockInQty] = useState('1')
 
   const [pickupForm, setPickupForm] = useState({
     product: '',
@@ -347,6 +352,25 @@ export default function RenterDashboard() {
   const activeProducts = useMemo(() => products.filter((p) => !p.deleted_at), [products])
   const trashProducts = useMemo(() => products.filter((p) => Boolean(p.deleted_at)), [products])
 
+  // Renter's display products (not pick-up), lowest stock first — used by "Stock In Product"
+  const LOW_STOCK_LIMIT = 5
+  const stockInList = useMemo(() => {
+    const q = stockInSearch.trim().toLowerCase()
+    return activeProducts
+      .filter((p) => {
+        const type = p.cubes?.type || cubes.find((c) => c.cube_id === p.cube_id)?.type
+        return type === 'Display'
+      })
+      .filter((p) =>
+        !q
+          ? true
+          : [p.product_name, p.variant, p.category, p.cubes?.cube_number]
+              .filter(Boolean)
+              .some((v) => String(v).toLowerCase().includes(q)),
+      )
+      .sort((a, b) => (a.stock_quantity || 0) - (b.stock_quantity || 0))
+  }, [activeProducts, cubes, stockInSearch])
+
   const existingCategories = useMemo(() => {
     return Array.from(new Set(products.map((p) => p.category?.trim()).filter(Boolean) as string[])).sort()
   }, [products])
@@ -462,6 +486,40 @@ export default function RenterDashboard() {
     }
     setEditProductNewImages((prev) => prev.filter((_, i) => i !== index))
     setEditProductNewPreviews((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  async function handleStockIn(e: React.FormEvent) {
+    e.preventDefault()
+    if (!stockInProduct) return
+    const qty = Math.floor(Number(stockInQty))
+    if (!qty || qty < 1) return alert('Enter a quantity of at least 1.')
+    setBusy(true)
+
+    // Read the latest stock first so the new total is always current stock + qty in.
+    const { data: fresh, error: readErr } = await supabase
+      .from('products')
+      .select('stock_quantity')
+      .eq('product_id', stockInProduct.product_id)
+      .single()
+    if (readErr || !fresh) {
+      setBusy(false)
+      return alert('Failed reading current stock: ' + (readErr?.message || 'product not found'))
+    }
+    const current = Number(fresh.stock_quantity) || 0
+    const newTotal = current + qty
+
+    // The products trigger logs this as a "Stock In" activity (remaining → +qty → total).
+    const { error } = await supabase
+      .from('products')
+      .update({ stock_quantity: newTotal })
+      .eq('product_id', stockInProduct.product_id)
+    setBusy(false)
+    if (error) return alert('Failed adding stock: ' + error.message)
+
+    alert(`Stock added: ${stockInProduct.product_name}\nRemaining: ${current}  |  Qty In: +${qty}  |  Total: ${newTotal}`)
+    setStockInProduct(null)
+    setStockInQty('1')
+    void load(true)
   }
 
   async function handleAddDisplayProduct(e: React.FormEvent) {
@@ -940,8 +998,188 @@ export default function RenterDashboard() {
               </button>
             </div>
 
-            {/* FORM A: ADD PRODUCT FOR DISPLAY (Image 2) */}
+            {/* Display only: Add Product (default) vs Stock In Product */}
             {addProductType === 'display' && (
+              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+                <button
+                  type="button"
+                  className={displayMode === 'add' ? 'btn' : 'btn-ghost'}
+                  style={{ fontSize: '0.85rem', padding: '0.45rem 1.1rem', borderRadius: 999 }}
+                  onClick={() => setDisplayMode('add')}
+                >
+                  <Plus size={14} /> Add Product
+                </button>
+                <button
+                  type="button"
+                  className={displayMode === 'stockin' ? 'btn' : 'btn-ghost'}
+                  style={{ fontSize: '0.85rem', padding: '0.45rem 1.1rem', borderRadius: 999 }}
+                  onClick={() => setDisplayMode('stockin')}
+                >
+                  <Package size={14} /> Stock In Product
+                </button>
+              </div>
+            )}
+
+            {/* STOCK IN PRODUCT: add quantity to an existing display product */}
+            {addProductType === 'display' && displayMode === 'stockin' && (
+              <div className="panel" style={{ maxWidth: 960 }}>
+                <h3 style={{ margin: '0 0 0.35rem' }}>Stock In Product</h3>
+                <p className="muted" style={{ margin: '0 0 1rem', fontSize: '0.85rem' }}>
+                  Pick one of your display products and add quantity. Each stock in is recorded under{' '}
+                  <strong>Product Management → Activities</strong>.
+                </p>
+
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '1rem', maxWidth: 380 }}>
+                  <Search size={16} className="muted" />
+                  <input
+                    type="text"
+                    placeholder="Search product, variant, category, or cube…"
+                    value={stockInSearch}
+                    onChange={(e) => setStockInSearch(e.target.value)}
+                    style={{ margin: 0, padding: '0.5rem 0.85rem', fontSize: '0.85rem' }}
+                  />
+                </div>
+
+                {stockInList.length === 0 ? (
+                  <div className="empty" style={{ padding: '2rem' }}>
+                    No display products yet. Use <strong>Add Product</strong> to create one first.
+                  </div>
+                ) : (
+                  <div className="table-wrap">
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: 64 }}>Image</th>
+                          <th>Product Name</th>
+                          <th>Variant</th>
+                          <th>Cube</th>
+                          <th>Price</th>
+                          <th>Current Stock</th>
+                          <th>Status</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {stockInList.map((p) => {
+                          const img = p.image_url || p.image_urls?.[0] || null
+                          const stock = p.stock_quantity || 0
+                          const selected = stockInProduct?.product_id === p.product_id
+                          return (
+                            <tr
+                              key={p.product_id}
+                              onClick={() => {
+                                setStockInProduct(p)
+                                setStockInQty('1')
+                              }}
+                              style={{ cursor: 'pointer', background: selected ? '#f1f5f9' : undefined }}
+                            >
+                              <td>
+                                {img ? (
+                                  <img src={img} alt={p.product_name} style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 6, border: '1px solid #e2e8f0' }} />
+                                ) : (
+                                  <div style={{ width: 44, height: 44, borderRadius: 6, background: '#f1f5f9' }} />
+                                )}
+                              </td>
+                              <td><strong>{p.product_name}</strong></td>
+                              <td style={{ fontSize: '0.84rem' }}>{p.variant || '—'}</td>
+                              <td>{p.cubes?.cube_number || "—"}</td>
+                              <td>{peso(p.price)}</td>
+                              <td><strong>{stock}</strong></td>
+                              <td>
+                                {stock === 0 ? (
+                                  <span className="badge bad">Out of Stock</span>
+                                ) : stock <= LOW_STOCK_LIMIT ? (
+                                  <span className="badge warn">Low Stock</span>
+                                ) : (
+                                  <span className="badge ok">In Stock</span>
+                                )}
+                              </td>
+                              <td>
+                                <button
+                                  type="button"
+                                  className={selected ? 'btn' : 'btn-ghost'}
+                                  style={{ fontSize: '0.8rem', padding: '0.35rem 0.85rem' }}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setStockInProduct(p)
+                                    setStockInQty('1')
+                                  }}
+                                >
+                                  <Plus size={13} /> Add Stock
+                                </button>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Stock In quantity modal */}
+            {stockInProduct && (
+              <div className="modal-overlay" onClick={() => !busy && setStockInProduct(null)}>
+                <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                    <h3 style={{ margin: 0 }}>Add Stock</h3>
+                    <button type="button" className="btn-ghost" onClick={() => setStockInProduct(null)} disabled={busy}>
+                      <X size={16} />
+                    </button>
+                  </div>
+                  <p style={{ margin: '0 0 0.25rem' }}>
+                    <strong>{stockInProduct.product_name}</strong>
+                    {stockInProduct.variant ? <span className="muted"> — {stockInProduct.variant}</span> : null}
+                  </p>
+                  <form onSubmit={handleStockIn}>
+                    <div className="field">
+                      <label>Quantity to add *</label>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        autoFocus
+                        value={stockInQty}
+                        onChange={(e) => setStockInQty(e.target.value)}
+                        required
+                      />
+                    </div>
+                    {(() => {
+                      const cur = stockInProduct.stock_quantity || 0
+                      const add = Math.max(0, Math.floor(Number(stockInQty)) || 0)
+                      return (
+                        <div className="panel" style={{ padding: '0.75rem 1rem', margin: '0.75rem 0', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', textAlign: 'center', gap: 8 }}>
+                          <div>
+                            <div className="muted" style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase' }}>Remaining</div>
+                            <div style={{ fontSize: '1.2rem', fontWeight: 800 }}>{cur}</div>
+                          </div>
+                          <div>
+                            <div className="muted" style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase' }}>Qty In</div>
+                            <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#16a34a' }}>+{add}</div>
+                          </div>
+                          <div>
+                            <div className="muted" style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase' }}>Total</div>
+                            <div style={{ fontSize: '1.2rem', fontWeight: 800 }}>{cur + add}</div>
+                          </div>
+                        </div>
+                      )
+                    })()}
+                    <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                      <button type="button" className="btn-ghost" onClick={() => setStockInProduct(null)} disabled={busy}>
+                        Cancel
+                      </button>
+                      <button type="submit" className="btn" disabled={busy}>
+                        {busy ? 'Saving…' : 'Confirm Stock In'}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* FORM A: ADD PRODUCT FOR DISPLAY (Image 2) */}
+            {addProductType === 'display' && displayMode === 'add' && (
               <div className="panel" style={{ maxWidth: 720 }}>
                 <h3 style={{ margin: '0 0 1rem' }}>Display Product Details</h3>
                 {myDisplayCubes.length === 0 ? (
