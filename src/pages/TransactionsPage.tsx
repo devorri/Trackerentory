@@ -115,8 +115,12 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
     if (!r.product_id) return
     const prod = products.find((p) => p.product_id === r.product_id) || r.products
     const currentStock = Number(prod?.stock_quantity ?? 0)
+    const qty = Math.max(1, Number(r.quantity) || 1)
     if (prod && currentStock <= 0) {
       return alert(`"${prod.product_name}" is already out of stock (Sold Out).`)
+    }
+    if (prod && qty > currentStock) {
+      return alert(`Only ${currentStock} piece(s) of "${prod.product_name}" left, but this reservation is for ${qty}.`)
     }
     const mode = resPaymentMode[r.reservation_id] || 'Cash'
     const receipt = resReceiptUrl[r.reservation_id] || null
@@ -143,7 +147,7 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
           payment_status: 'Paid',
           payment_method: mode,
           pickup_status: 'Picked-up',
-          quantity: 1,
+          quantity: qty,
           listed_quantity: currentStock || 1,
           receipt_image_url: receipt,
           notes: `Claimed from Customer Reservation #${r.reservation_id}`,
@@ -157,7 +161,7 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
       if (prod && currentStock > 0) {
         await supabase
           .from('products')
-          .update({ stock_quantity: Math.max(0, currentStock - 1) })
+          .update({ stock_quantity: Math.max(0, currentStock - qty) })
           .eq('product_id', r.product_id)
       }
 
@@ -376,7 +380,7 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
 
       {/* TRANSACTIONS TABLE */}
       {loading ? (
-        <SkeletonTable rows={5} cols={filter === 'Display' ? 9 : filter === 'Pick-up' ? 9 : 8} />
+        <SkeletonTable rows={5} cols={filter === 'Display' ? 10 : filter === 'Pick-up' ? 9 : 8} />
       ) : filter === 'Display' ? (
         /* ══════════ DISPLAY TRACKING TABLE ══════════ */
         <div className="table-wrap">
@@ -387,6 +391,7 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                 <th>Product</th>
                 <th>Price</th>
                 <th>Quantity</th>
+                <th>Total</th>
                 <th>Renter Name</th>
                 <th>Cube Number</th>
                 <th>Payment Status</th>
@@ -432,7 +437,10 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                       )}
                     </td>
                     <td>{peso(prod?.price)}</td>
-                    <td>1</td>
+                    <td>{Math.max(1, Number(r.quantity) || 1)}</td>
+                    <td>
+                      <strong>{peso(Number(prod?.price || 0) * Math.max(1, Number(r.quantity) || 1))}</strong>
+                    </td>
                     <td>
                       <strong>{rName}</strong>
                     </td>
@@ -553,6 +561,9 @@ export default function TransactionsPage({ defaultFilter = 'All', pageTitle }: P
                     </td>
                     <td>{peso(prod?.price)}</td>
                     <td>{t.quantity || 1}</td>
+                    <td>
+                      <strong>{peso(Number(prod?.price || 0) * Number(t.quantity || 1))}</strong>
+                    </td>
                     <td>
                       <strong>{rName}</strong>
                     </td>

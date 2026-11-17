@@ -54,6 +54,7 @@ create table if not exists reservations (
   customer_id integer references users(user_id) on delete set null,
   expiry_time timestamptz not null,
   hours_valid integer not null default 1,
+  quantity integer not null default 1 check (quantity >= 1),
   status text not null check (status in ('Pending', 'Confirmed', 'Cancelled')) default 'Pending',
   created_at timestamptz default now()
 );

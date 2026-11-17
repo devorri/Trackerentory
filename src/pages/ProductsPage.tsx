@@ -34,6 +34,7 @@ export default function ProductsPage() {
   const [reservingFor, setReservingFor] = useState<number | null>(null)
   const [reservingCube, setReservingCube] = useState<number | null>(null)
   const [hours, setHours] = useState<number>(1)
+  const [reserveQty, setReserveQty] = useState<number>(1)
   const [cubeMonths, setCubeMonths] = useState<number>(1)
   const [cubeHours, setCubeHours] = useState<number>(1)
   const [tab, setTab] = useState<'products' | 'cubes'>('products')
@@ -67,7 +68,7 @@ export default function ProductsPage() {
     }
   }, [searchParams, user])
 
-  async function createReservation(product_id: number, reservationHours?: number) {
+  async function createReservation(product_id: number, reservationHours?: number, reservationQty?: number) {
     try {
       setLoading(true)
       if (!user) {
@@ -92,7 +93,7 @@ export default function ProductsPage() {
           .maybeSingle(),
         supabase
           .from('reservations')
-          .select('reservation_id, expiry_time, status')
+          .select('*')
           .eq('product_id', product_id)
           .eq('status', 'Pending'),
       ])
@@ -106,11 +107,19 @@ export default function ProductsPage() {
         return alert('This product is no longer available.')
       }
 
-      const activePendingCount = (resCheck.data || []).filter((r: any) => !isReservationExpired(r)).length
-      if (activePendingCount >= (prodCheck.data.stock_quantity || 0)) {
+      const activePendingQty = (resCheck.data || [])
+        .filter((r: any) => !isReservationExpired(r))
+        .reduce((sum: number, r: any) => sum + Math.max(1, Number(r.quantity) || 1), 0)
+      const availableNow = Math.max((prodCheck.data.stock_quantity || 0) - activePendingQty, 0)
+      if (availableNow <= 0) {
         setLoading(false)
         await loadProducts()
         return alert('This product or variant is already fully reserved or sold out.')
+      }
+      const qty = Math.max(1, Math.floor(reservationQty ?? reserveQty) || 1)
+      if (qty > availableNow) {
+        setLoading(false)
+        return alert(`Only ${availableNow} piece(s) left for this product. Please lower the quantity.`)
       }
 
       const expiry = new Date(Date.now() + activeHours * 60 * 60 * 1000).toISOString()
@@ -121,14 +130,16 @@ export default function ProductsPage() {
           customer_id: user.user_id,
           expiry_time: expiry,
           hours_valid: activeHours,
+          quantity: qty,
           status: 'Pending',
         },
       ])
       setLoading(false)
       if (error) return alert('Reservation failed: ' + error.message)
       setReservingFor(null)
+      setReserveQty(1)
       setReservedModalMessage(
-        `Your product has been reserved for ${activeHours} hour(s)! Claim it in-store before the reservation period expires.`,
+        `${qty} item(s) reserved for ${activeHours} hour(s)! Claim it in-store before the reservation period expires.`,
       )
       setReservedModalOpen(true)
       await loadProducts()
@@ -335,6 +346,10 @@ export default function ProductsPage() {
     return map
   }, [reservations])
 
+  // Total reserved pieces (sum of quantities) for a product
+  const reservedQtyOf = (pid: number) =>
+    (reservationMap.get(pid) || []).reduce((sum, r) => sum + Math.max(1, Number(r.quantity) || 1), 0)
+
   const categories = useMemo(() => {
     const set = new Set<string>()
     products.forEach((p) => {
@@ -515,7 +530,7 @@ export default function ProductsPage() {
           ) : (
             <div className="grid products-grid">
               {filteredProducts.map((p) => {
-                const reservedCount = reservationMap.get(p.product_id)?.length || 0
+                const reservedCount = reservedQtyOf(p.product_id)
                 const availableCount = Math.max((p.stock_quantity || 0) - reservedCount, 0)
                 const isSoldOut = (p.stock_quantity || 0) <= 0
                 const isFullyReserved = !isSoldOut && availableCount <= 0
@@ -697,6 +712,7 @@ export default function ProductsPage() {
                             onClick={(e) => {
                               e.stopPropagation()
                               setReservingFor(p.product_id)
+                              setReserveQty(1)
                             }}
                           >
                             <span>Reserve</span>
@@ -733,6 +749,24 @@ export default function ProductsPage() {
                               <option value={3}>3 hours</option>
                               <option value={4}>4 hours</option>
                             </select>
+                          </div>
+                          <div className="field no-gap" style={{ width: '100%' }}>
+                            <label className="muted" style={{ fontSize: '0.8rem', fontWeight: 700 }}>
+                              Quantity (max {availableCount}):
+                            </label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={availableCount}
+                              value={reserveQty}
+                              onChange={(e) => {
+                                const v = Math.floor(Number(e.target.value)) || 1
+                                setReserveQty(Math.min(Math.max(1, v), Math.max(1, availableCount)))
+                              }}
+                            />
+                            <span className="muted" style={{ fontSize: '0.78rem' }}>
+                              Total: <strong>{peso(Number(p.price || 0) * reserveQty)}</strong>
+                            </span>
                           </div>
                           <div className="row" style={{ width: '100%' }}>
                             <button className="btn" style={{ flex: 1 }} onClick={() => void createReservation(p.product_id)}>
@@ -1082,12 +1116,12 @@ export default function ProductsPage() {
         userRole={user?.role}
         availableCount={
           galleryProduct
-            ? Math.max((galleryProduct.stock_quantity || 0) - (reservationMap.get(galleryProduct.product_id)?.length || 0), 0)
+            ? Math.max((galleryProduct.stock_quantity || 0) - reservedQtyOf(galleryProduct.product_id), 0)
             : 0
         }
         isReserved={
           galleryProduct
-            ? Math.max((galleryProduct.stock_quantity || 0) - (reservationMap.get(galleryProduct.product_id)?.length || 0), 0) <= 0
+            ? Math.max((galleryProduct.stock_quantity || 0) - reservedQtyOf(galleryProduct.product_id), 0) <= 0
             : false
         }
         onReserve={(pid, h) => {

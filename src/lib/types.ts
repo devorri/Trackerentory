@@ -51,6 +51,7 @@ export type Reservation = {
   customer_id: number | null
   expiry_time: string
   hours_valid: number | null
+  quantity?: number | null
   status: 'Pending' | 'Confirmed' | 'Cancelled'
   products?: Product | null
   cubes?: Cube | null

@@ -222,9 +222,14 @@ export default function ReservationsPage() {
     try {
       const prod = r.products
       const currentStock = Number(prod?.stock_quantity ?? 0)
+      const qty = Math.max(1, Number(r.quantity) || 1)
       if (prod && currentStock <= 0) {
         setBusyId(null)
         return alert(`"${prod.product_name}" is already out of stock (Sold Out).`)
+      }
+      if (prod && qty > currentStock) {
+        setBusyId(null)
+        return alert(`Only ${currentStock} piece(s) of "${prod.product_name}" left, but this reservation is for ${qty}.`)
       }
 
       // 1. Mark reservation as Confirmed
@@ -248,7 +253,7 @@ export default function ReservationsPage() {
           payment_status: 'Paid',
           payment_method: 'Cash',
           pickup_status: 'Picked-up',
-          quantity: 1,
+          quantity: qty,
           listed_quantity: prod?.stock_quantity ?? 1,
           notes: `Confirmed from Customer Reservation #${r.reservation_id}`,
           processed_by: user?.user_id || null,
@@ -261,7 +266,7 @@ export default function ReservationsPage() {
       if (prod && currentStock > 0) {
         await supabase
           .from('products')
-          .update({ stock_quantity: Math.max(0, currentStock - 1) })
+          .update({ stock_quantity: Math.max(0, currentStock - qty) })
           .eq('product_id', r.product_id)
       }
 
@@ -448,8 +453,8 @@ export default function ReservationsPage() {
       .sort((a, b) => {
         const aExp = parseReservationExpiry(a.expiry_time).getTime()
         const bExp = parseReservationExpiry(b.expiry_time).getTime()
-        const aPrice = a.products?.price || a.cubes?.price_per_month || 0
-        const bPrice = b.products?.price || b.cubes?.price_per_month || 0
+        const aPrice = a.products ? Number(a.products.price || 0) * Math.max(1, Number(a.quantity) || 1) : a.cubes?.price_per_month || 0
+        const bPrice = b.products ? Number(b.products.price || 0) * Math.max(1, Number(b.quantity) || 1) : b.cubes?.price_per_month || 0
         const aName = a.products?.product_name || a.cubes?.cube_number || ''
         const bName = b.products?.product_name || b.cubes?.cube_number || ''
         const aCust = a.customer?.full_name || ''
@@ -653,8 +658,8 @@ export default function ReservationsPage() {
             >
               <option value="expiry_asc">Expiry: Soonest First</option>
               <option value="expiry_desc">Expiry: Latest First</option>
-              <option value="price_desc">Price / Rate: High to Low</option>
-              <option value="price_asc">Price / Rate: Low to High</option>
+              <option value="price_desc">Total / Rate: High to Low</option>
+              <option value="price_asc">Total / Rate: Low to High</option>
               <option value="name_asc">Name: A to Z</option>
               <option value="name_desc">Name: Z to A</option>
               <option value="customer_asc">Customer: A to Z</option>
@@ -696,7 +701,7 @@ export default function ReservationsPage() {
                   Assigned Cube {renderSortIndicator('cube_asc', 'cube_desc')}
                 </th>
                 <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSortCol('price_asc', 'price_desc')}>
-                  Price / Rate {renderSortIndicator('price_asc', 'price_desc')}
+                  Total / Qty {renderSortIndicator('price_asc', 'price_desc')}
                 </th>
                 <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSortCol('expiry_asc', 'expiry_desc')}>
                   Validity / Expiry {renderSortIndicator('expiry_asc', 'expiry_desc')}
@@ -828,7 +833,11 @@ export default function ReservationsPage() {
                         </div>
                       ) : (
                         <div>
-                          <strong>{r.products ? peso(r.products.price) : '—'}</strong>
+                          <strong>{r.products ? peso(Number(r.products.price || 0) * Math.max(1, Number(r.quantity) || 1)) : '—'}</strong>
+                          <div className="muted" style={{ fontSize: '0.72rem' }}>
+                            Qty: {Math.max(1, Number(r.quantity) || 1)}
+                            {r.products ? ` × ${peso(r.products.price)}` : ''}
+                          </div>
                         </div>
                       )}
                     </td>
